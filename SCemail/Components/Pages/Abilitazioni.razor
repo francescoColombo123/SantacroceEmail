@@ -1,0 +1,211 @@
+﻿@page "/abilitazioni"
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using SCemail.Components.Data
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+
+<div class="container my-5">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4>🔑 Abilitazioni Utenti alle Caselle</h4>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Home"
+                   OnClick="@(()=> Nav.NavigateTo("/"))">
+            Torna alla Home
+        </MudButton>
+    </div>
+
+    <MudExpansionPanels Multiple="true" Elevation="2">
+        @foreach (var c in _caselle)
+        {
+            <MudExpansionPanel>
+                <TitleContent>
+                    <span>@c.Email</span>
+                    <small class="text-muted">(@c.Provider)</small>
+                </TitleContent>
+
+                <ChildContent>
+                    <div class="mb-3">
+                        <small class="text-muted">IMAP: @c.ImapHost:@c.ImapPort</small>
+                    </div>
+
+                    <h6 class="text-secondary d-flex justify-content-between align-items-center">
+                        Firma
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="@(()=> ModificaFirma(c))">
+                            ✏️ Modifica
+                        </MudButton>
+                    </h6>
+                    <pre class="bg-light p-3 rounded" style="font-family:'Courier New', monospace">
+    Cordiali saluti.
+    <b>@c.Nome</b>
+    @c.Titolo
+    <small>@c.Recapito</small>
+    GRUPPO SANTACROCE
+                    </pre>
+
+                    <h6 class="mt-4">➕ Aggiungi utente</h6>
+                    <div class="input-group mb-3">
+                        <select class="form-select" @bind="_selezioneUtente[c.Id]">
+                            <option value="">-- Seleziona utente --</option>
+                            @foreach (var u in GetUtentiDisponibili(c.Id))
+                            {
+                                <option value="@u">@u</option>
+                            }
+                        </select>
+                        <button class="btn btn-success"
+                                disabled="@string.IsNullOrWhiteSpace(GetSelected(c.Id))"
+                                @onclick="() => AssociaUtente(c.Id)">
+                            Aggiungi
+                        </button>
+                    </div>
+
+                    <h6 class="text-secondary">👥 Utenti abilitati</h6>
+                    <table class="table table-sm table-striped">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Azioni</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var a in _abilitazioni.Where(a => a.CasellaId == c.Id))
+                            {
+                                <tr>
+                                    <td>@a.Username</td>
+                                    <td>
+                                        <button class="btn btn-outline-danger btn-sm"
+                                                @onclick="() => Rimuovi(a)">
+                                            ❌ Rimuovi
+                                        </button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </ChildContent>
+            </MudExpansionPanel>
+        }
+    </MudExpansionPanels>
+
+</div>
+
+@code {
+    private List<CasellaPosta> _caselle = new();
+    private List<CasellaAbilitazione> _abilitazioni = new();
+    private List<string> _utenti = new();
+    private Dictionary<int, string?> _selezioneUtente = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        _caselle = await db.CasellePosta.AsNoTracking().OrderBy(c => c.Email).ToListAsync();
+        _abilitazioni = await db.CasellaAbilitazioni.AsNoTracking().OrderBy(a => a.CasellaId).ThenBy(a => a.Username).ToListAsync();
+        _utenti = await db.InfoUsers.AsNoTracking().Select(i => i.Utente).OrderBy(x => x).ToListAsync();
+
+        foreach (var c in _caselle)
+            _selezioneUtente[c.Id] = null;
+    }
+
+    private IEnumerable<string> GetUtentiDisponibili(int casellaId)
+    {
+        var gia = _abilitazioni.Where(a => a.CasellaId == casellaId).Select(a => a.Username).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return _utenti.Where(u => !gia.Contains(u));
+    }
+
+    private string? GetSelected(int casellaId) => _selezioneUtente.TryGetValue(casellaId, out var v) ? v : null;
+
+    private async Task AssociaUtente(int casellaId)
+    {
+        var user = GetSelected(casellaId);
+        if (string.IsNullOrWhiteSpace(user)) return;
+
+        try
+        {
+            await using var db = DbFactory.CreateDbContext();
+            var exists = await db.CasellaAbilitazioni.AsNoTracking()
+                .AnyAsync(a => a.CasellaId == casellaId && a.Username == user);
+
+            if (exists)
+            {
+                Snackbar.Add($"'{user}' è già abilitato.", Severity.Info);
+                return;
+            }
+
+            var a = new CasellaAbilitazione { CasellaId = casellaId, Username = user, CreatedAt = DateTime.Now };
+            db.CasellaAbilitazioni.Add(a);
+            await db.SaveChangesAsync();
+
+            _abilitazioni.Add(a);
+            _selezioneUtente[casellaId] = null;
+            Snackbar.Add($"Utente '{user}' abilitato ✅", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore abilitazione: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task Rimuovi(CasellaAbilitazione a)
+    {
+        try
+        {
+            await using var db = DbFactory.CreateDbContext();
+            var found = await db.CasellaAbilitazioni.FirstOrDefaultAsync(x => x.Id == a.Id);
+            if (found != null)
+            {
+                db.CasellaAbilitazioni.Remove(found);
+                await db.SaveChangesAsync();
+                _abilitazioni.RemoveAll(x => x.Id == a.Id);
+                Snackbar.Add("Abilitazione rimossa ✅", Severity.Success);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore rimozione: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task ModificaFirma(CasellaPosta c)
+    {
+        var parameters = new DialogParameters
+        {
+            ["Nome"] = c.Nome,
+            ["Titolo"] = c.Titolo,
+            ["Recapito"] = c.Recapito
+        };
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
+
+        var dialog = DialogService.Show<FirmaDialog>("Modifica Firma", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled && result.Data is FirmaDialog.FirmaResult fr)
+        {
+            try
+            {
+                await using var db = DbFactory.CreateDbContext();
+                var cas = await db.CasellePosta.FirstOrDefaultAsync(x => x.Id == c.Id);
+                if (cas != null)
+                {
+                    cas.Nome = fr.Nome;
+                    cas.Titolo = fr.Titolo;
+                    cas.Recapito = fr.Recapito;
+                    await db.SaveChangesAsync();
+
+                    c.Nome = fr.Nome;
+                    c.Titolo = fr.Titolo;
+                    c.Recapito = fr.Recapito;
+
+                    Snackbar.Add("Firma aggiornata ✅", Severity.Success);
+                }
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Errore modifica firma: {ex.Message}", Severity.Error);
+            }
+        }
+    }
+}

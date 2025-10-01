@@ -1,0 +1,56 @@
+.app-bg {
+    background: #f6f8fc;
+    min-height: 100vh;
+}
+
+/* LISTA */
+.mail-row {
+    padding: 12px 14px;
+    border-bottom: 1px solid #eef0f5;
+    cursor: pointer;
+}
+
+    .mail-row:hover {
+        background: #f4f7ff;
+    }
+
+    .mail-row.unread .mittente, .mail-row.unread .oggetto {
+        font-weight: 600;
+    }
+
+    .mail-row.selected {
+        background: #eef4ff;
+    }
+
+    .mail-row .row-1 {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+    }
+
+    .mail-row .mittente {
+        max-width: 68%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #111827;
+    }
+
+    .mail-row .data {
+        color: #6b7280;
+        font-size: 12px;
+    }
+
+    .mail-row .row-2 {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #1f2937;
+    }
+
+/* tronca titoli/pulsanti */
+.truncate {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}

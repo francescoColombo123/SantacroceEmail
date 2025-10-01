@@ -1,0 +1,710 @@
+﻿@page "/mail"
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+@using SCemail.Components.Data
+@inject NavigationManager Nav
+@inject MailService MailSvc
+@inject IJSRuntime Js
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+
+<div class="mail-container">
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <button @onclick="ToggleCompose" class="compose-btn">
+            <i class="bi bi-pencil-square"></i>
+            <span>Nuovo</span>
+        </button>
+
+        <ul class="folder-list">
+            @foreach (var f in _folders)
+            {
+                <li @onclick='() => ChangeFolder(f.UiName)' class="@IsActive(f.UiName)">
+                    <span class="icon"><i class="bi @f.IconClass"></i></span>
+                    <span class="label">@f.Label</span>
+                    <span class="bubble">@f.Count</span>
+                </li>
+            }
+        </ul>
+    </aside>
+
+    <!-- MAIN -->
+    <section class="mail-grid @( _thread?.Any() == true ? "" : "full-list" )">
+        <!-- LISTA -->
+        <div class="mail-list">
+            <div class="list-header">
+                <h4>@Title</h4>
+                <div class="header-actions">
+                    <button class="ghost" @onclick="Reload"><i class="bi bi-arrow-clockwise"></i></button>
+                </div>
+            </div>
+
+            <div class="list-scroll">
+                <div @key="_folder">
+                    <ul class="mail-ul">
+                        <Virtualize TItem="EmailListItem" ItemsProvider="LoadEmails" Context="item">
+                            <li @onclick="() => SelectEmail(item.Id)"
+                                class="mail-item @( _selectedId == item.Id ? "selected" : "" )">
+                                <div class="list-row">
+                                    <div class="avatar">@item.Mittente?.FirstOrDefault()</div>
+                                    <div class="list-main">
+                                        <div class="row-top">
+                                            <span class="subject">@item.Oggetto</span>
+                                            <span class="date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</span>
+                                        </div>
+                                        <div class="row-bottom">
+                                            <span class="from">@item.Mittente</span>
+                                            @if (item.HasAttachments)
+                                            {
+                                                <i class="bi bi-paperclip"></i>
+                                            }
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(item.Preview))
+                                        {
+                                            <div class="snippet">@item.Preview</div>
+                                        }
+                                    </div>
+                                </div>
+                            </li>
+                        </Virtualize>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- COMPOSER INLINE -->
+            @if (_showCompose)
+            {
+                <div class="compose-inline">
+                    <div class="row">
+                        <label>A:</label>
+                        <input @bind="_composeTo" />
+                    </div>
+                    <div class="row">
+                        <label>Oggetto:</label>
+                        <input @bind="_composeSubject" />
+                    </div>
+                    <div class="row">
+                        <label>Messaggio:</label>
+                        <textarea @bind="_composeBody" rows="10"
+                                  style="font-family:'Courier New', monospace"></textarea>
+                    </div>
+                    <div class="row">
+                        <label>Allegati:</label>
+                        <div class="attachments-box">
+                            <InputFile OnChange="HandleFileSelected" multiple />
+                            <ul class="att-list">
+                                @foreach (var f in _attachments)
+                                {
+                                    <li>
+                                        @f.Name (@(f.Size / 1024) KB)
+                                        <button type="button" @onclick="() => RemoveAttachment(f)">x</button>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button class="send-btn" @onclick="SendEmail">Invia</button>
+                        <button class="ghost" @onclick="SaveDraft">Salva bozza</button>
+                        <button class="ghost danger" @onclick="() => _showCompose = false">Annulla</button>
+                    </div>
+                    @if (!string.IsNullOrEmpty(_composeMsg))
+                    {
+                        <p class="info">@_composeMsg</p>
+                    }
+                </div>
+            }
+        </div>
+
+        <!-- DETTAGLIO -->
+        @if (_thread?.Any() == true)
+        {
+            <div class="mail-detail">
+                @foreach (var msg in _thread)
+                {
+                    <div class="conv-item">
+                        <div class="conv-meta">
+                            <b>@msg.Mittente</b> → @msg.Destinatari
+                            <span class="date">@msg.Data?.ToString("dd/MM/yyyy HH:mm")</span>
+                        </div>
+                        <div class="conv-body">@((MarkupString)(msg.CorpoHtml ?? msg.CorpoTesto ?? ""))</div>
+                        @if (msg.Allegati?.Any() == true)
+                        {
+                            <div class="attachments">
+                                @foreach (var a in msg.Allegati)
+                                {
+                                    <a href="@GetDownloadUrl(a.Id)" target="_blank">@a.NomeFile</a>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+    </section>
+</div>
+
+<style>
+    :root {
+        --bg: #f4f7ff;
+        --panel: #ffffff;
+        --muted: #6a82b7;
+        --primary: #1a73e8;
+        --primary-2: #155ec0;
+        --line: #e6eefc;
+        --chip: #eef4ff;
+        --ink: #0b3a82;
+        --ink-2: #2d3a55;
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: "Segoe UI", Roboto, Arial, sans-serif;
+        color: var(--ink-2);
+    }
+
+    .mail-container {
+        display: grid;
+        grid-template-columns: 260px 1fr;
+        height: 100vh;
+        background: var(--bg);
+    }
+
+    /* SIDEBAR */
+    .sidebar {
+        background: #eef4ff;
+        border-right: 1px solid #d9e6ff;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+    }
+
+    .compose-btn {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px 14px;
+        border: 0;
+        border-radius: 14px;
+        cursor: pointer;
+        color: #fff;
+        background: linear-gradient(135deg, var(--primary), var(--primary-2));
+        font-weight: 700;
+        box-shadow: 0 10px 20px rgba(26,115,232,.25);
+        transition: transform .2s, box-shadow .2s;
+    }
+
+        .compose-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 12px 24px rgba(26,115,232,.35);
+        }
+
+    .folder-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+    }
+
+        .folder-list li {
+            display: grid;
+            grid-template-columns: 28px 1fr auto;
+            align-items: center;
+            gap: 10px;
+            background: #fff;
+            border: 1px solid #d6e6ff;
+            border-radius: 12px;
+            padding: 10px 12px;
+            cursor: pointer;
+            color: #003482;
+            font-weight: 600;
+            transition: background .2s;
+        }
+
+            .folder-list li:hover {
+                background: #eaf2ff;
+            }
+
+            .folder-list li.active {
+                background: #e0ebff;
+                border-color: #c7dafd;
+            }
+
+    .icon i {
+        font-size: 18px;
+    }
+
+    .bubble {
+        background: var(--chip);
+        border: 1px solid #d6e6ff;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 12px;
+        color: var(--muted);
+    }
+
+    /* LISTA */
+    .mail-grid {
+        display: grid;
+        grid-template-columns: 520px 1fr;
+        height: 100vh;
+    }
+
+        .mail-grid.full-list {
+            grid-template-columns: 1fr;
+        }
+
+    .mail-list {
+        background: #f9fbff;
+        border-right: 1px solid #dbe7ff;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .list-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+    }
+
+        .list-header h4 {
+            margin: 0;
+            font-size: 16px;
+            color: var(--ink);
+        }
+
+    .header-actions .ghost {
+        border: 0;
+        background: transparent;
+        padding: 6px;
+        border-radius: 8px;
+        cursor: pointer;
+        color: var(--muted);
+    }
+
+        .header-actions .ghost:hover {
+            background: #eef4ff;
+            color: var(--ink);
+        }
+
+    .list-scroll {
+        flex: 1;
+        overflow: auto;
+    }
+
+    .mail-ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .mail-item {
+        padding: 10px 14px;
+        border-bottom: 1px solid #eef3ff;
+        transition: background .2s;
+    }
+
+        .mail-item:hover {
+            background: #f4f8ff;
+        }
+
+        .mail-item.selected {
+            background: #eaf2ff;
+        }
+
+    .list-row {
+        display: grid;
+        grid-template-columns: 40px 1fr;
+        gap: 12px;
+    }
+
+    .avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: #dbe7ff;
+        color: #003482;
+        font-weight: 800;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .subject {
+        font-weight: 800;
+        color: var(--ink);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .date {
+        margin-left: auto;
+        color: var(--muted);
+        font-size: 12px;
+    }
+
+    .row-top {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+
+    .row-bottom {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+    }
+
+    .attachments-preview {
+        display: flex;
+        gap: 8px;
+        margin-left: auto;
+    }
+
+    .att-ico i {
+        font-size: 16px;
+    }
+
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--primary);
+        color: #fff;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+    }
+
+    .snippet {
+        font-size: 12px;
+        color: #607090;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* DETTAGLIO */
+    .mail-detail {
+        background: var(--panel);
+        padding: 18px;
+        overflow: auto;
+    }
+
+    .conv-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+    }
+
+    .conv-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 18px;
+        font-weight: 900;
+        color: var(--ink);
+    }
+
+    .conv-actions .action {
+        border: 0;
+        background: #eef4ff;
+        color: #214a87;
+        border-radius: 10px;
+        padding: 6px 10px;
+        margin-left: 8px;
+        cursor: pointer;
+    }
+
+        .conv-actions .action:hover {
+            background: #e0ebff;
+        }
+
+    .conv-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 12px;
+    }
+
+    .conv-item {
+        border: 1px solid var(--line);
+        background: #f9fbff;
+        border-radius: 12px;
+        transition: background .2s;
+    }
+
+        .conv-item.closed {
+            background: #f3f6fc;
+        }
+
+    .conv-line {
+        padding: 12px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        border: 1px solid #b7c8ec;
+    }
+
+        .dot.unread {
+            background: #2b6fff;
+            border-color: #2b6fff;
+        }
+
+    .conv-meta {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .top {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        color: var(--muted);
+        font-size: 12px;
+    }
+
+        .top .date {
+            margin-left: auto;
+        }
+
+    .subject.bold {
+        font-weight: 900;
+    }
+
+    .subject .pill {
+        margin-left: 8px;
+        font-size: 11px;
+        color: var(--muted);
+    }
+
+    .msg-actions {
+        padding: 0 14px 10px;
+        display: flex;
+        gap: 14px;
+    }
+
+    .linklike {
+        border: 0;
+        background: transparent;
+        color: var(--primary);
+        cursor: pointer;
+        font-weight: 700;
+    }
+
+        .linklike.danger {
+            color: #c62828;
+        }
+
+    .conv-body {
+        border-top: 1px solid var(--line);
+        background: #fff;
+        padding: 14px;
+        border-bottom-left-radius: 12px;
+        border-bottom-right-radius: 12px;
+    }
+
+    .attachments {
+        margin-top: 12px;
+    }
+
+    .att-title {
+        font-weight: 900;
+        color: var(--ink);
+        margin-bottom: 8px;
+    }
+
+    .att-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .att-item {
+        background: #eef4ff;
+        border: 1px solid #d6e6ff;
+        border-radius: 10px;
+    }
+
+    .att-link {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        color: #0b3a82;
+        text-decoration: none;
+    }
+
+    /* COMPOSER INLINE */
+    .compose-inline {
+        background: #fff;
+        border: 1px solid #d6e6ff;
+        border-radius: 12px;
+        padding: 16px;
+        margin: 10px;
+        box-shadow: 0 4px 12px rgba(0,0,0,.05);
+    }
+
+        .compose-inline .row {
+            display: grid;
+            grid-template-columns: 100px 1fr;
+            gap: 10px;
+            margin: 8px 0;
+            align-items: center;
+        }
+
+        .compose-inline input, .compose-inline textarea {
+            border: 1px solid #cfe0ff;
+            border-radius: 8px;
+            padding: 8px;
+            width: 100%;
+        }
+
+    .attachments-box {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .info {
+        color: #0b3a82;
+        font-weight: 600;
+    }
+</style>
+
+@code {
+    private string? _cp;
+    private string? _utente;
+    private string _folder = "inbox";
+    private int? _selectedId;
+    private List<FolderItem> _folders = new();
+    private List<EmailDetail> _thread = new();
+
+    // compose
+    private bool _showCompose;
+    private string? _composeTo;
+    private string? _composeSubject;
+    private string? _composeBody;
+    private List<IBrowserFile> _attachments = new();
+    private string? _composeMsg;
+
+    private string Title => _folder switch
+    {
+        "inbox" => "📥 Posta in arrivo",
+        "sent" => "📤 Inviati",
+        "drafts" => "📝 Bozze",
+        "trash" => "🗑️ Cestino",
+        "spam" => "🚫 Spam",
+        "all" => "📚 Tutti",
+        _ => "📂 Posta"
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = QueryHelpers.ParseQuery(uri.Query);
+        _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
+
+        if (!string.IsNullOrWhiteSpace(_cp))
+            _utente = AccessiSrv.GetUtenteFromCp(_cp);
+
+        _folder = q.TryGetValue("folder", out var f) ? f.ToString() : "inbox";
+
+        if (!string.IsNullOrWhiteSpace(_utente))
+        {
+            var id = await MailSvc.GetCasellaIdAsync(_utente);
+           // _folders = await MailSvc.GetFoldersAsync(id);
+        }
+    }
+
+    private async ValueTask<ItemsProviderResult<EmailListItem>> LoadEmails(ItemsProviderRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(_utente))
+            return new ItemsProviderResult<EmailListItem>(Array.Empty<EmailListItem>(), 0);
+
+        var casellaId = await MailSvc.GetCasellaIdAsync(_utente, request.CancellationToken);
+        var (list, total) = await MailSvc.GetEmailPageAsync(
+            casellaId, request.StartIndex, request.Count,
+            null, false, false, false, _folder, request.CancellationToken);
+
+        return new ItemsProviderResult<EmailListItem>(list, total);
+    }
+
+    private async Task SelectEmail(int id)
+    {
+        _selectedId = id;
+        var conv = await MailSvc.GetConversationAsync(id);
+        _thread = conv ?? new();
+    }
+
+    private void ChangeFolder(string folder) => Nav.NavigateTo($"/mail?cp={_cp}&folder={folder}", true);
+    private string IsActive(string f) => _folder == f ? "active" : "";
+
+    private void ToggleCompose() => _showCompose = !_showCompose;
+
+    private async Task HandleFileSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles()) _attachments.Add(file);
+    }
+
+    private void RemoveAttachment(IBrowserFile f) => _attachments.Remove(f);
+
+    private async Task SendEmail()
+    {
+        if (string.IsNullOrWhiteSpace(_utente) || string.IsNullOrWhiteSpace(_composeTo))
+        {
+            _composeMsg = "Dati mancanti.";
+            return;
+        }
+
+        var outs = new List<MailService.OutgoingAttachment>();
+        foreach (var f in _attachments)
+        {
+            using var ms = new MemoryStream();
+            await f.OpenReadStream(10 * 1024 * 1024).CopyToAsync(ms);
+            outs.Add(new MailService.OutgoingAttachment(f.Name, f.ContentType, ms.ToArray()));
+        }
+
+        await MailSvc.SendEmailAsync(_utente, _composeTo!, _composeSubject ?? "(nessun oggetto)", _composeBody ?? "", outs);
+
+        _composeMsg = "Email inviata.";
+        _composeTo = _composeSubject = _composeBody = null;
+        _attachments.Clear();
+        _showCompose = false;
+        ChangeFolder("sent");
+    }
+
+    private async Task SaveDraft()
+    {
+        await MailSvc.SaveDraftAsync(_composeTo, _composeSubject, _composeBody);
+        _composeMsg = "Bozza salvata.";
+    }
+
+    private string GetDownloadUrl(int attachmentId) => $"/api/attachments/{attachmentId}";
+    private void Reload() => Nav.NavigateTo(Nav.Uri, true);
+}

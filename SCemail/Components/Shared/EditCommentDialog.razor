@@ -1,0 +1,24 @@
+﻿@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6">@Title</MudText>
+        <MudTextField @bind-Value="_text" Lines="6" Variant="Variant.Outlined" Class="mt-2" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Annulla</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Save">Salva</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Title { get; set; } = "Modifica commento";
+    [Parameter] public string? Initial { get; set; }
+
+    private string? _text;
+    protected override void OnInitialized() => _text = Initial;
+
+    void Save() => MudDialog.Close(DialogResult.Ok(_text));
+    void Cancel() => MudDialog.Cancel();
+}

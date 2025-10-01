@@ -1,0 +1,245 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@using MudBlazor
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.AspNetCore.Components.Routing
+@inject NavigationManager Nav
+
+<MudThemeProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+<MudPopoverProvider />
+
+<div class="shell @( _railOpen ? "rail-open" : "" )">
+    <!-- LEFT RAIL -->
+    <aside class="left-rail" @onmouseover="(() => _railOpen = true)" @onmouseout="(() => _railOpen = false)">
+        <div class="rail-inner @( _railOpen ? "open" : "" )">
+
+            <!-- SCRIVI -->
+            <button class="rail-btn" @onclick="GoCompose">
+                <span class="ico">✏️</span><span class="lbl">Scrivi</span>
+            </button>
+
+
+            <!-- CARTELLE -->
+            <div class="rail-group">
+                <button class="rail-btn" @onclick='() => GoMail("inbox")'>
+                    <span class="ico">📥</span><span class="lbl">Posta in arrivo</span>
+                </button>
+
+                <button class="rail-btn" @onclick='() => GoMail("drafts")'>
+                    <span class="ico">📝</span><span class="lbl">Bozze</span>
+                </button>
+
+                <button class="rail-btn" @onclick='() => GoMail("all")'>
+                    <span class="ico">📂</span><span class="lbl">Tutti</span>
+                </button>
+
+
+                <button class="rail-btn" @onclick='() => GoMail("sent")'>
+                    <span class="ico">📤</span><span class="lbl">Inviati</span>
+                </button>
+            </div>
+
+            <div class="rail-sep"></div>
+            <button class="rail-btn" @onclick="GoTasks">
+                <span class="ico">✅</span><span class="lbl">Task</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- CONTENT -->
+    <div class="content">
+        <header class="appbar">
+            <div class="appbar-left">GS – WORKSPACE</div>
+            <div class="appbar-right">@_today</div>
+        </header>
+
+        <main class="content-frame">
+            @Body
+        </main>
+    </div>
+</div>
+
+<style>
+    :root {
+        --bg-page: #F0F4FF;
+        --rail: #E3EEFB;
+        --brand: #003482;
+        --border: #CCCCCC;
+    }
+
+    .shell {
+        min-height: 100dvh;
+        background: var(--bg-page);
+    }
+
+    /* rail */
+    .left-rail {
+        position: fixed;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 64px;
+        background: var(--rail);
+        border-right: 1px solid var(--border);
+        z-index: 1000;
+    }
+
+    .rail-inner {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 10px;
+        width: 64px;
+        height: 100%;
+        transition: width .18s ease, box-shadow .18s ease;
+    }
+
+        .rail-inner.open {
+            width: 220px;
+            box-shadow: 6px 8px 18px rgba(0,0,0,.10);
+        }
+
+    .rail-compose {
+        background: #dbeafe;
+        border: 1px solid #93c5fd;
+        font: 600 15px system-ui,sans-serif;
+        color: var(--brand);
+        padding: 12px;
+        border-radius: 10px;
+        cursor: pointer;
+    }
+
+        .rail-compose:hover {
+            background: #bfdbfe;
+        }
+
+    .rail-btn {
+        display: grid;
+        grid-template-columns: 36px 1fr;
+        align-items: center;
+        gap: 12px;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid #D6E2FF;
+        background: #fff;
+        font: 600 15px system-ui,sans-serif;
+        color: var(--brand);
+        cursor: pointer;
+    }
+
+        .rail-btn:hover {
+            background: #F8FBFF;
+        }
+
+    .ico {
+        text-align: center;
+        font-size: 18px;
+    }
+
+    .lbl {
+        opacity: 0;
+        white-space: nowrap;
+        transition: opacity .14s ease;
+    }
+
+    .rail-inner.open .lbl {
+        opacity: 1;
+    }
+
+    /* content spostato in base allo stato rail */
+    .content {
+        padding-left: 80px;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100dvh;
+        transition: padding-left .18s ease;
+    }
+
+    .shell.rail-open .content {
+        padding-left: 240px;
+    }
+
+    .appbar {
+        background: #E3EEFB;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 16px;
+    }
+
+    .appbar-left {
+        font: 700 18px system-ui,sans-serif;
+        color: var(--brand);
+    }
+
+    .appbar-right {
+        font: 400 12px system-ui,sans-serif;
+        color: var(--brand);
+    }
+
+    .content-frame {
+        padding: 16px;
+        block-size: calc(100dvh - 52px);
+        overflow: auto;
+    }
+
+    .rail-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .rail-sep {
+        border-bottom: 1px solid #ccc;
+        margin: 8px 0;
+    }
+</style>
+
+@code {
+    private bool _railOpen;
+    private string? _username;
+    private string _today = DateTime.Now.ToString("dddd dd MMMM yyyy HH:mm");
+
+    protected override void OnInitialized()
+    {
+        ReadUsername(Nav.Uri);
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? s, LocationChangedEventArgs e)
+    {
+        ReadUsername(e.Location);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void GoCompose() =>
+    Nav.NavigateTo(string.IsNullOrWhiteSpace(_username)
+        ? "/compose"
+        : $"/compose?username={Uri.EscapeDataString(_username)}");
+
+
+    private void ReadUsername(string uriStr)
+    {
+        var q = QueryHelpers.ParseQuery(new Uri(uriStr).Query);
+        _username = q.TryGetValue("username", out var v) && !string.IsNullOrWhiteSpace(v) ? v.ToString() : null;
+    }
+
+    private void GoMail(string folder)
+    {
+        var baseUrl = string.IsNullOrWhiteSpace(_username) ? "/mail" : $"/mail?username={Uri.EscapeDataString(_username)}";
+        Nav.NavigateTo($"{baseUrl}&folder={folder}");
+    }
+
+    private void OpenCompose()
+    {
+        Nav.NavigateTo($"/compose?username={Uri.EscapeDataString(_username ?? "")}");
+    }
+
+    private void GoTasks() =>
+        Nav.NavigateTo(string.IsNullOrWhiteSpace(_username) ? "/tasks" : $"/tasks?username={Uri.EscapeDataString(_username)}");
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
+}

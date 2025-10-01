@@ -1,0 +1,42 @@
+﻿@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6">Inoltra a utente</MudText>
+
+        <MudSelect T="string" Label="Inoltra email" @bind-Value="_user" Dense="true" Required="true" Class="mt-2">
+            @foreach (var u in Users)
+            {
+                <MudSelectItem Value="@u">@u</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudTextField @bind-Value="_comment"
+                      Label="Commento (opzionale)" Lines="3" Variant="Variant.Outlined" Class="mt-2" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Annulla</MudButton>
+        <MudButton Color="Color.Primary" OnClick="Ok">Inoltra</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public List<string> Users { get; set; } = new();
+
+    private string? _user;
+    private string? _comment;
+
+    public sealed class ForwardResult
+    {
+        public string User { get; init; } = default!;
+        public string? Comment { get; init; }
+    }
+
+    void Cancel() => MudDialog.Cancel();
+    void Ok()
+    {
+        if (string.IsNullOrWhiteSpace(_user)) return;
+        MudDialog.Close(DialogResult.Ok(new ForwardResult { User = _user!, Comment = _comment }));
+    }
+}

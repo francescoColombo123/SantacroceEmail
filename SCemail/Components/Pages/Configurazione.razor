@@ -1,0 +1,201 @@
+﻿@page "/configurazione"
+@using Microsoft.EntityFrameworkCore
+@using SCemail.Components.Data
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<div class="container my-5">
+    <!-- Card Configurazione -->
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">⚙️ Configurazione Caselle Email</h5>
+            <button type="button" class="btn btn-light btn-sm"
+                    @onclick="@(() => Nav.NavigateTo("/"))">
+                ⬅️ Torna alla Home
+            </button>
+    
+        </div>
+        <div class="card-body">
+            <EditForm Model="@form" OnValidSubmit="@SalvaCasella">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <div class="row g-3">
+                    <!-- Email -->
+                    <div class="col-md-6">
+                        <label class="form-label">Email</label>
+                        <InputText class="form-control" @bind-Value="form.Email" required />
+                    </div>
+
+                    <!-- Password -->
+                    <div class="col-md-6">
+                        <label class="form-label">Password</label>
+                        <div class="input-group">
+                            <InputText class="form-control"
+                                       @bind-Value="form.Password"
+                                       type="@(showPwd ? "text" : "password")"
+                                       required />
+                            <button type="button" class="btn btn-outline-secondary"
+                                    @onclick="TogglePwd">
+                                @(showPwd ? "🙈 Nascondi" : "👁 Mostra")
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Provider -->
+                    <div class="col-md-6">
+                        <label class="form-label">Provider</label>
+                        <select class="form-select" @onchange="OnProviderChanged">
+                            <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
+                            <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
+                        </select>
+                    </div>
+
+                    <!-- Firma -->
+                    <div class="col-12">
+                        <h6 class="mt-4">Firma</h6>
+                    </div>
+
+                    <div class="col-md-4">
+                        <label class="form-label">Nome (in grassetto)</label>
+                        <InputText class="form-control" @bind-Value="form.Nome" required />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Titolo</label>
+                        <InputText class="form-control" @bind-Value="form.Titolo" />
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Recapito</label>
+                        <InputText class="form-control" @bind-Value="form.Recapito" />
+                    </div>
+
+                    <!-- Anteprima Firma -->
+                    <div class="col-12">
+                        <div class="alert alert-info">
+                            <strong>Anteprima firma:</strong>
+                            <pre class="mb-0" style="font-family:'Courier New', monospace">
+Cordiali saluti.
+<b>@form.Nome</b>
+@form.Titolo
+<small>@form.Recapito</small>
+GRUPPO SANTACROCE
+                            </pre>
+                        </div>
+                    </div>
+
+                    <!-- Submit -->
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-success">
+                            💾 Salva casella
+                        </button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+
+    <!-- Tabella Caselle -->
+    <div class="card shadow-sm mt-4">
+        <div class="card-header bg-secondary text-white">
+            <h6 class="mb-0">📧 Caselle configurate</h6>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-hover table-striped mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Email</th>
+                        <th>Provider</th>
+                        <th>IMAP</th>
+                        <th>Firma</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in _caselle)
+                    {
+                        <tr>
+                            <td>@c.Email</td>
+                            <td>@c.Provider</td>
+                            <td>@c.ImapHost:@c.ImapPort (SSL: @c.UseSsl)</td>
+                            <td>
+                                <b>@c.Nome</b><br />
+                                @c.Titolo<br />
+                                <small>@c.Recapito</small>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private bool showPwd = false;
+    private void TogglePwd() => showPwd = !showPwd;
+
+    // ViewModel
+    private class ConfigForm
+    {
+        public string Email { get; set; } = "";
+        public string Password { get; set; } = "";
+        public string Provider { get; set; } = "Gmail";
+        public string Nome { get; set; } = "";
+        public string Titolo { get; set; } = "";
+        public string Recapito { get; set; } = "";
+    }
+
+    private ConfigForm form = new();
+    private List<CasellaPosta> _caselle = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        _caselle = await db.CasellePosta.AsNoTracking().OrderBy(c => c.Email).ToListAsync();
+    }
+
+    private void OnProviderChanged(ChangeEventArgs e)
+    {
+        form.Provider = e.Value?.ToString() ?? "Gmail";
+        // SSL gestito in automatico dal provider scelto, non serve più all’utente
+    }
+
+    private async Task SalvaCasella()
+    {
+        try
+        {
+            await using var db = DbFactory.CreateDbContext();
+
+            var exists = await db.CasellePosta.AsNoTracking()
+                                              .AnyAsync(c => c.Email == form.Email);
+            if (exists)
+            {
+                Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
+                return;
+            }
+
+            var entity = new CasellaPosta
+            {
+                Email = form.Email,
+                Password = form.Password,
+                Provider = form.Provider,
+                UseSsl = "Y", // sempre attivo, gestito in automatico
+                CreatedAt = DateTime.Now,
+                Nome = form.Nome,
+                Titolo = form.Titolo,
+                Recapito = form.Recapito
+            };
+
+            db.CasellePosta.Add(entity);
+            await db.SaveChangesAsync();
+
+            _caselle.Add(entity);
+            form = new ConfigForm();        // reset form
+            Snackbar.Add("Casella salvata ✅", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore salvataggio: {ex.Message}", Severity.Error);
+        }
+    }
+}

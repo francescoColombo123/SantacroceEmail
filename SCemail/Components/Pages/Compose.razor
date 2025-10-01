@@ -1,0 +1,130 @@
+﻿@page "/compose"
+@using Microsoft.AspNetCore.WebUtilities
+@using SCemail.Components.Data
+@inject NavigationManager Nav
+@inject MailService MailSvc
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+
+<h3>Scrivi email</h3>
+
+<div class="compose">
+    <div class="row">
+        <label>A:</label>
+        <input @bind="_to" />
+    </div>
+    <div class="row">
+        <label>Oggetto:</label>
+        <input @bind="_subject" />
+    </div>
+    <div class="row">
+        <label>Messaggio (HTML ammesso):</label>
+        <textarea @bind="_body" rows="12"></textarea>
+    </div>
+    <div class="actions">
+        <button @onclick="Send">Invia</button>
+        <button @onclick="SaveDraft">Salva bozza</button>
+        <button @onclick="Back">Indietro</button>
+    </div>
+    @if (!string.IsNullOrEmpty(_msg))
+    {
+        <p class="info">@_msg</p>
+    }
+</div>
+
+<style>
+    .compose {
+        background: #fff;
+        border: 1px solid #e6eefc;
+        border-radius: 10px;
+        padding: 16px;
+        max-width: 900px
+    }
+
+        .compose .row {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 10px;
+            align-items: center;
+            margin: 8px 0
+        }
+
+        .compose input, .compose textarea {
+            border: 1px solid #cfe0ff;
+            border-radius: 8px;
+            padding: 8px;
+            font: inherit
+        }
+
+        .compose .actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px
+        }
+
+        .compose button {
+            background: #1a73e8;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            cursor: pointer
+        }
+
+        .compose .info {
+            color: #0b3a82;
+            font-weight: 600
+        }
+</style>
+
+@code {
+    private string? _utente;
+    private string? _to;
+    private string? _subject;
+    private string? _body;
+    private string? _msg;
+
+    protected override void OnParametersSet()
+    {
+        var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+
+        // ⚠️ ora gestiamo cp come nel resto del progetto
+        var cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
+        if (!string.IsNullOrWhiteSpace(cp))
+            _utente = AccessiSrv.GetUtenteFromCp(cp);
+    }
+
+    private async Task Send()
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(_utente)) { _msg = "Manca l'utente (cp)."; return; }
+            if (string.IsNullOrWhiteSpace(_to)) { _msg = "Inserisci il destinatario."; return; }
+
+            await MailSvc.SendEmailAsync(_utente, _to!, _subject ?? "(nessun oggetto)", _body ?? "");
+            _msg = "Email inviata.";
+        }
+        catch (Exception ex)
+        {
+            _msg = "Errore invio: " + ex.Message;
+        }
+    }
+
+    private async Task SaveDraft()
+    {
+        try
+        {
+            await MailSvc.SaveDraftAsync(_to, _subject, _body);
+            _msg = "Bozza salvata.";
+        }
+        catch (Exception ex)
+        {
+            _msg = "Errore salvataggio bozza: " + ex.Message;
+        }
+    }
+
+    private void Back()
+    {
+        var back = string.IsNullOrWhiteSpace(_utente) ? "/mail" : $"/mail?cp=" + Uri.EscapeDataString(_utente);
+        Nav.NavigateTo(back);
+    }
+}

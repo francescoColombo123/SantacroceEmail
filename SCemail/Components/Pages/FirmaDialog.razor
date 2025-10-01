@@ -1,0 +1,26 @@
+﻿@using MudBlazor
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public string Nome { get; set; } = "";
+    [Parameter] public string Titolo { get; set; } = "";
+    [Parameter] public string Recapito { get; set; } = "";
+
+    private void Cancel() => MudDialog.Cancel();
+    private void Save() => MudDialog.Close(DialogResult.Ok(new FirmaResult(Nome, Titolo, Recapito)));
+
+    public record FirmaResult(string Nome, string Titolo, string Recapito);
+}
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField Label="Nome" @bind-Value="Nome" FullWidth="true" />
+        <MudTextField Label="Titolo" @bind-Value="Titolo" FullWidth="true" />
+        <MudTextField Label="Recapito" @bind-Value="Recapito" FullWidth="true" />
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel">Annulla</MudButton>
+        <MudButton OnClick="Save" Color="Color.Primary">Salva</MudButton>
+    </DialogActions>
+</MudDialog>

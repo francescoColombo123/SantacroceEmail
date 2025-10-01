@@ -1,0 +1,92 @@
+﻿@page "/"
+@using MudBlazor
+@inject NavigationManager Nav
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+@using Microsoft.AspNetCore.WebUtilities
+
+@code {
+    private string? _cp;
+    private string? _utente;
+
+    protected override void OnInitialized()
+    {
+        var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        _cp = q.TryGetValue("cp", out var v) && !string.IsNullOrWhiteSpace(v) ? v.ToString() : null;
+
+        _utente = AccessiSrv.GetUtenteFromCp(_cp);
+    }
+
+    private string MailHref => string.IsNullOrWhiteSpace(_cp) ? "/mail" : $"/mail-new?cp={Uri.EscapeDataString(_cp)}";
+    private string TaskHref => string.IsNullOrWhiteSpace(_cp) ? "/tasks" : $"/tasks-new?cp={Uri.EscapeDataString(_cp)}";
+    private string AbilitazioniHref => string.IsNullOrWhiteSpace(_cp) ? "/abilitazioni" : $"/abilitazioni?cp={Uri.EscapeDataString(_cp)}";
+    private string ConfigurazioneHref => "/configurazione";
+    private string RegoleHref => "/regole";
+
+    private bool IsAdmin => string.Equals(_utente, "admin", StringComparison.OrdinalIgnoreCase);
+}
+
+<PageTitle>GS – Workspace</PageTitle>
+
+<div class="page">
+    <div class="welcome">
+        <div class="hero">
+            <h1>Benvenuto in <span>GS – WORKSPACE</span></h1>
+            <p>Gestisci <b>Mail</b> e <b>Task</b> nella stessa interfaccia, con i colori di sempre.</p>
+            <div class="cta">
+                <MudButton Color="Color.Primary" Variant="Variant.Filled" Href="@MailHref" StartIcon="@Icons.Material.Filled.Mail">
+                    Apri Mail
+                </MudButton>
+                <MudButton Color="Color.Secondary" Variant="Variant.Outlined" Href="@TaskHref" StartIcon="@Icons.Material.Filled.TaskAlt">
+                    Vai ai Task
+                </MudButton>
+
+                @if (IsAdmin)
+                {
+                    <MudButton Color="Color.Info" Variant="Variant.Outlined" Href="@AbilitazioniHref" StartIcon="@Icons.Material.Filled.PersonAdd">
+                        Abilitazioni
+                    </MudButton>
+                    <MudButton Color="Color.Warning" Variant="Variant.Outlined" Href="@ConfigurazioneHref" StartIcon="@Icons.Material.Filled.Settings">
+                        Configurazione
+                    </MudButton>
+                    <MudButton Color="Color.Success" Variant="Variant.Outlined" Href="@RegoleHref" StartIcon="@Icons.Material.Filled.Rule">
+                        Regole
+                    </MudButton>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .welcome {
+        padding: 8px;
+    }
+
+    .hero {
+        background: #E3EEFB;
+        border: 2px ridge #166AEE;
+        border-radius: 10px;
+        padding: 22px;
+    }
+
+        .hero h1 {
+            margin: 0 0 6px;
+            font: 700 24px system-ui, sans-serif;
+            color: #003482;
+        }
+
+            .hero h1 span {
+                color: #166AEE;
+            }
+
+        .hero p {
+            margin: 0 0 12px;
+            color: #405069;
+        }
+
+    .cta {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+</style>

@@ -1,0 +1,17 @@
+@using Microsoft.AspNetCore.WebUtilities
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.JSInterop
+@using Microsoft.AspNetCore.WebUtilities
+
+<MudText Typo="Typo.body2"><strong>@t.Titolo</strong></MudText>
+
+@code {
+    [Parameter]
+    public Articolo t { get; set; }
+
+    public class Articolo
+    {
+        public string Titolo { get; set; }
+    }
+}

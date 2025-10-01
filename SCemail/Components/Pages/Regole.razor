@@ -1,0 +1,43 @@
+﻿@page "/regole"
+@inject NavigationManager Navigation
+
+<PageTitle>GS MAIL</PageTitle>
+
+<div style="font-family:Verdana; font-size:10pt; background-color: #F0F4FF; margin: 0;">
+    <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+            <td valign="top">
+                <div style="border-style: none none solid none; border-width: 1px; border-color: #CCCCCC; background-color: #E3EEFB;">
+                    <table cellpadding="5" cellspacing="0">
+                        <tr>
+                            <td style="padding-left:10px; padding-right:3px;">
+                                <img src="immagini/titolo.png" />
+                            </td>
+                            <td style="font-weight:bold; color: #003482; width: 100%;">
+                                GS - MAIL - Regole di Gestione
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+
+                <div style="padding:10px; border-right: 1px solid #CCCCCC; height:100vh;">
+                    <table style="width:100%; border: 2px ridge #166AEE; background-color: #ECE9D8;">
+                        <tr>
+                            <td style="height:300px; vertical-align:top; text-align:left;">
+                                <button @onclick="GoBack">Indietro</button>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </td>
+        </tr>
+    </table>
+</div>
+
+@code {
+    private void GoBack()
+    {
+        // Se usi NavigationManager per navigare indietro o altrove
+        Navigation.NavigateTo("/");
+    }
+}

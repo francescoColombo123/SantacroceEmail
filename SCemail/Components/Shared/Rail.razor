@@ -1,0 +1,153 @@
+﻿@using Microsoft.AspNetCore.Components
+@inject NavigationManager Nav
+
+<div class="rail" @onmouseover="(() => _open = true)" @onmouseout="(() => _open = false)">
+    <div class="rail-inner @( _open ? "open" : "" )">
+        <button class="rail-btn @(IsActive("/mail") ? "active" : "")" title="Mail" @onclick="GoMail">
+            <span class="ico">📧</span>
+            <span class="lbl">Mail</span>
+            @if (MailGlow)
+            {
+                <span class="dot"></span>
+            }
+        </button>
+
+        <button class="rail-btn @(IsActive("/tasks") ? "active" : "")" title="Task" @onclick="GoTasks">
+            <span class="ico">📝</span>
+            <span class="lbl">Task</span>
+            @if (TaskGlow)
+            {
+                <span class="dot"></span>
+            }
+        </button>
+    </div>
+    <div class="rail-edge"></div>
+</div>
+
+<style>
+    /* overlay a destra */
+    .rail {
+        position: fixed;
+        right: 0;
+        top: 64px;
+        bottom: 24px;
+        width: 56px;
+        z-index: 1000;
+        pointer-events: none;
+    }
+
+    .rail-inner {
+        position: absolute;
+        inset: 0;
+        width: 56px;
+        pointer-events: auto;
+        background: #E3EEFBcc;
+        backdrop-filter: blur(6px);
+        border-left: 1px solid #D6E2FF;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: stretch;
+        padding: 8px;
+        border-top-left-radius: 12px;
+        border-bottom-left-radius: 12px;
+        box-shadow: -6px 8px 20px rgba(0,0,0,.10);
+        transition: width .18s, box-shadow .18s, background .18s;
+    }
+
+        .rail-inner.open {
+            width: 240px;
+        }
+
+    .rail-edge {
+        position: absolute;
+        left: -24px;
+        top: 0;
+        bottom: 0;
+        width: 24px;
+        pointer-events: none;
+        background: linear-gradient(90deg, rgba(230,238,255,0) 0%, rgba(230,238,255,0.8) 100%);
+        opacity: .7;
+    }
+
+    .rail-btn {
+        position: relative;
+        display: grid;
+        grid-template-columns: 28px 1fr;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid #D6E2FF;
+        background: #fff;
+        cursor: pointer;
+        font: 600 14px system-ui,sans-serif;
+        color: #003482;
+        transition: transform .08s, background .12s, box-shadow .12s, border-color .12s;
+    }
+
+        .rail-btn:hover {
+            transform: translateY(-1px);
+            background: #F8FBFF;
+        }
+
+        .rail-btn.active {
+            border-color: #7aa6ff;
+            box-shadow: 0 0 0 2px rgba(122,166,255,.20);
+        }
+
+    .rail .lbl {
+        opacity: 0;
+        white-space: nowrap;
+        transition: opacity .12s;
+    }
+
+    .rail-inner.open .lbl {
+        opacity: 1;
+    }
+
+    .rail .ico {
+        font-size: 18px;
+        text-align: center;
+    }
+
+    /* puntino glow */
+    .dot {
+        position: absolute;
+        right: 8px;
+        top: 8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: #2f80ff;
+        box-shadow: 0 0 0 6px rgba(47,128,255,.15);
+        animation: pulse 1.8s infinite ease-in-out;
+    }
+    /* ATTENZIONE: in Razor usare @@keyframes */
+    @@keyframes pulse {
+        0% {
+            box-shadow: 0 0 0 0 rgba(47,128,255,.25);
+        }
+
+        70% {
+            box-shadow: 0 0 0 10px rgba(47,128,255,0);
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 rgba(47,128,255,0);
+        }
+    }
+</style>
+
+@code {
+    private bool _open;
+    [Parameter] public string? Username { get; set; }
+    [Parameter] public bool MailGlow { get; set; }
+    [Parameter] public bool TaskGlow { get; set; }
+
+    private void GoMail()
+        => Nav.NavigateTo(string.IsNullOrWhiteSpace(Username) ? "/mail" : $"/mail?username={Uri.EscapeDataString(Username)}");
+    private void GoTasks()
+        => Nav.NavigateTo(string.IsNullOrWhiteSpace(Username) ? "/tasks" : $"/tasks?username={Uri.EscapeDataString(Username)}");
+    private bool IsActive(string path) => new Uri(Nav.Uri).AbsolutePath.Equals(path, StringComparison.OrdinalIgnoreCase);
+}
