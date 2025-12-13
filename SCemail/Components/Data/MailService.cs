@@ -5,6 +5,7 @@ using MailKit.Security;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
 using MimeKit;
+using Oracle.ManagedDataAccess.Client;
 using SCemail.Components.Shared;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
@@ -67,15 +68,22 @@ namespace SCemail.Components.Data
         private readonly HttpClient _http;
         private readonly IDbContextFactory<MailDbContext> _dbFactory;
         private readonly ILogger<MailService> _logger;
+        private readonly string _connectionString;
 
-        public MailService(IDbContextFactory<MailDbContext> dbFactory,
-                           ILogger<MailService> logger,
-                           HttpClient http)
+        public MailService(
+    IDbContextFactory<MailDbContext> dbFactory,
+    ILogger<MailService> logger,
+    HttpClient http,
+    IConfiguration config)
         {
             _dbFactory = dbFactory;
             _logger = logger;
             _http = http;
+
+            _connectionString = config.GetConnectionString("OracleDb")
+                ?? throw new InvalidOperationException("Missing OracleDb connection string!");
         }
+
 
         // ================== LISTA CON ORACLE-SAFE PROJECTION ==================
         public async Task<(List<EmailListItem>, int)> GetEmailPageAsync(
@@ -164,14 +172,101 @@ namespace SCemail.Components.Data
             return (items, total);
         }
 
-        public async Task<List<string>> GetUserListAsync(CancellationToken ct = default)
+        public async Task<List<string>> GetProprietariEmailAsync(int emailId)
+        {
+            await using var db = await _dbFactory.CreateDbContextAsync();
+
+            return await db.EmailAssegnazione
+                .AsNoTracking()
+                .Where(a => a.EmailId == emailId)
+                .Select(a => a.Utente)
+                .Distinct()
+                .ToListAsync();
+        }
+
+
+
+        public async Task<List<string>> GetPartecipantiEmailAsync(int emailId)
+        {
+            using var db = await _dbFactory.CreateDbContextAsync();
+
+            var assegnati = db.EmailAssegnazione
+                .Where(a => a.EmailId == emailId)
+                .Select(a => a.Utente);
+
+            var commentatori = db.CommentiEmail
+                .Where(c => c.EmailId == emailId)
+                .Select(c => c.Autore);
+
+            var menzionati = db.emailMenzionis
+                .Where(m => m.EmailId == emailId)
+                .Select(m => m.Utente);
+
+            return await assegnati
+                .Union(commentatori)
+                .Union(menzionati)
+                .Distinct()
+                .ToListAsync();
+        }
+
+        public async Task<List<string>> GetFollowersAsync(int emailId)
         {
             await using var db = _dbFactory.CreateDbContext();
-            return await db.InfoUsers
-                .AsNoTracking()
-                .Select(u => u.Utente)
-                .OrderBy(u => u)
-                .ToListAsync(ct);
+
+            return await db.emailMenzionis
+                .Where(m => m.EmailId == emailId)
+                .Select(m => m.Utente)
+                .ToListAsync();
+        }
+        public async Task RegistraEventoChatAsync(
+    int emailId,
+    string utente,
+    bool isMention,
+    int commentoId,
+    string autore)
+        {
+            if (utente.Equals(autore, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await using var db = _dbFactory.CreateDbContext();
+
+            var row = await db.emailMenzionis
+                .FirstOrDefaultAsync(m =>
+                    m.EmailId == emailId &&
+                    m.Utente == utente);
+
+            if (row == null)
+            {
+                row = new EmailMenzione
+                {
+                    EmailId = emailId,
+                    Utente = utente
+                };
+                db.emailMenzionis.Add(row);
+            }
+
+            row.TipoEvento = isMention ? "MENTION" : "UPDATE";
+            row.Visto = "N";
+            row.CommentoId = commentoId;
+            row.DataMenzione = DateTime.Now;
+
+            await db.SaveChangesAsync();
+        }
+
+        public async Task SegnaChatVistaAsync(int emailId, string utente)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var row = await db.emailMenzionis
+                .FirstOrDefaultAsync(m =>
+                    m.EmailId == emailId &&
+                    m.Utente == utente);
+
+            if (row != null)
+            {
+                row.Visto = "Y";
+                await db.SaveChangesAsync();
+            }
         }
 
         public async Task<(byte[] data, string mime, string filename)> GetAttachmentAsync(
@@ -335,43 +430,8 @@ namespace SCemail.Components.Data
             }
         }
 
-        public async Task SendEmailAsync1(string username, string to, string subject, string htmlBody, CancellationToken ct = default)
-        {
-            await using var db = _dbFactory.CreateDbContext();
-
-            var casella = await db.CasellePosta.AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Username == username || c.Email == username, ct);
-
-            if (casella is null)
-                throw new InvalidOperationException($"Nessuna casella per {username}");
-
-            var message = new MimeMessage();
-            message.From.Add(new MailboxAddress(casella.NomeCompleto ?? casella.Email, casella.Email));
-            message.To.AddRange(InternetAddressList.Parse(to));
-            message.Subject = subject ?? "(nessun oggetto)";
-
-            var firmaHtml = $@"
-            <br><br>
-            <div style=""font-family:'Courier New',Courier,monospace;"">
-            Cordiali saluti.<br/>
-            <b>{(string.IsNullOrWhiteSpace(casella.Nome) ? casella.NomeCompleto : casella.Nome)}</b><br/>
-            {casella.Titolo}<br/>
-            <small>{casella.Recapito}</small><br/>
-            GRUPPO SANTACROCE
-            </div>";
-
-            var builder = new BodyBuilder { HtmlBody = (htmlBody ?? "") + firmaHtml };
-            message.Body = builder.ToMessageBody();
-
-            using var smtp = new MailKit.Net.Smtp.SmtpClient();
-            await smtp.ConnectAsync("smtp.gmail.com", 587, SecureSocketOptions.StartTls, ct);
-            await smtp.AuthenticateAsync(casella.Email, casella.Password, ct);
-            await smtp.SendAsync(message, ct);
-            await smtp.DisconnectAsync(true, ct);
-        }
-
         public async Task SendEmailAsync(
-    string username,
+    string usernameOrEmail,
     string to,
     string subject,
     string htmlBody,
@@ -380,29 +440,63 @@ namespace SCemail.Components.Data
         {
             await using var db = _dbFactory.CreateDbContext();
 
-            var casella = await db.CasellePosta.AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Username == username || c.Email == username, ct);
+            // 1️⃣ Trova la casella a partire da username o indirizzo email
+            CasellaPosta? casella = null;
+            CasellaAbilitazione? abilitazione = null;
+
+            // Se è una mail diretta (contiene "@"), cerca per EMAIL
+            if (usernameOrEmail.Contains("@"))
+            {
+                casella = await db.CasellePosta
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(c => c.Email.ToUpper() == usernameOrEmail.ToUpper(), ct);
+            }
+            else
+            {
+                // Altrimenti cerca l’utente nella tabella delle abilitazioni
+                abilitazione = await db.CasellaAbilitazioni
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(a => a.Username.ToUpper() == usernameOrEmail.ToUpper(), ct);
+
+                if (abilitazione != null)
+                {
+                    casella = await db.CasellePosta
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(c => c.Id == abilitazione.CasellaId, ct);
+                }
+            }
 
             if (casella is null)
-                throw new InvalidOperationException($"Nessuna casella per {username}");
+                throw new InvalidOperationException($"Nessuna casella associata a '{usernameOrEmail}'.");
 
-            // --- Costruzione messaggio
+            // 2️⃣ Nome e firma: presi dalla tabella CASELLA_ABILITAZIONI se disponibile
+            var nomeMittente = abilitazione?.Nome ?? casella.Email;
+            var titoloMittente = abilitazione?.Titolo ?? "";
+            var recapitoMittente = abilitazione?.Recapito ?? "";
+
+            // 3️⃣ Costruisci il messaggio
             var message = new MimeMessage();
-            message.From.Add(new MailboxAddress(casella.NomeCompleto ?? casella.Email, casella.Email));
+            message.From.Add(new MailboxAddress(nomeMittente, casella.Email));
             message.To.AddRange(InternetAddressList.Parse(to));
             message.Subject = subject ?? "(nessun oggetto)";
 
+            // 4️⃣ Firma HTML
             var firmaHtml = $@"
 <br><br>
-<div style=""font-family:'Courier New',Courier,monospace;"">
+<div style=""font-family:'Courier New', Courier, monospace; font-size:13px;"">
 Cordiali saluti.<br/>
-<b>{(string.IsNullOrWhiteSpace(casella.Nome) ? casella.NomeCompleto : casella.Nome)}</b><br/>
-{casella.Titolo}<br/>
-<small>{casella.Recapito}</small><br/>
-GRUPPO SANTACROCE
+<b>{nomeMittente}</b><br/>
+{(string.IsNullOrWhiteSpace(titoloMittente) ? "" : titoloMittente + "<br/>")}
+<small>{recapitoMittente}</small><br/>
+<span style='color:#0044cc; font-style:italic; font-weight:bold;'>
+{GetSocietaByEmail(casella.Email)}
+</span>
 </div>";
 
-            var builder = new BodyBuilder { HtmlBody = (htmlBody ?? "") + firmaHtml };
+            var builder = new BodyBuilder
+            {
+                HtmlBody = (htmlBody ?? "") + firmaHtml
+            };
 
             if (attachments != null)
             {
@@ -415,55 +509,48 @@ GRUPPO SANTACROCE
 
             message.Body = builder.ToMessageBody();
 
-            // --- Invio SMTP
-            using (var smtp = new MailKit.Net.Smtp.SmtpClient())
+            // 5️⃣ SMTP dinamico
+            using var smtp = new MailKit.Net.Smtp.SmtpClient();
+            SecureSocketOptions socketOptions;
+            string smtpHost;
+            int smtpPort;
+
+            if (casella.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
             {
-                await smtp.ConnectAsync("smtp.gmail.com", 587, SecureSocketOptions.StartTls, ct);
-                await smtp.AuthenticateAsync(casella.Email, casella.Password, ct);
-                await smtp.SendAsync(message, ct);
-                await smtp.DisconnectAsync(true, ct);
+                smtpHost = "smtp.gmail.com";
+                smtpPort = 587;
+                socketOptions = SecureSocketOptions.StartTls;
+            }
+            else if (casella.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase))
+            {
+                smtpHost = "smtps.aruba.it";
+                smtpPort = 465;
+                socketOptions = SecureSocketOptions.SslOnConnect;
+            }
+            else
+            {
+                throw new InvalidOperationException($"Provider {casella.Provider} non gestito.");
             }
 
-            // --- Append in "Posta inviata" via IMAP (così compare subito tra gli inviati)
-            try
-            {
-                using var imap = new MailKit.Net.Imap.ImapClient();
-                var sock = casella.UseSsl == "Y" ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable;
+            await smtp.ConnectAsync(smtpHost, smtpPort, socketOptions, ct);
+            await smtp.AuthenticateAsync(casella.Email, casella.Password, ct);
+            await smtp.SendAsync(message, ct);
+            await smtp.DisconnectAsync(true, ct);
 
-                await imap.ConnectAsync(casella.ImapHost, casella.ImapPort, sock, ct);
-                imap.AuthenticationMechanisms.Remove("XOAUTH2");
-                await imap.AuthenticateAsync(casella.Email, casella.Password, ct);
-
-                IMailFolder? sent = null;
-                try { sent = imap.GetFolder(SpecialFolder.Sent); } catch { /* server senza special folder */ }
-
-                if (sent == null)
-                {
-                    // fallback: cerca cartelle che contengono "POSTA INVIATA" o "SENT"
-                    var all = await GetAllFoldersAsync(imap, ct); // usa il tuo helper già presente
-                    sent = all.FirstOrDefault(f =>
-                        NormalizeFolder(f.FullName).Contains("POSTA INVIATA") ||
-                        NormalizeFolder(f.FullName).EndsWith("/SENT") ||
-                        NormalizeFolder(f.Name) == "SENT");
-                }
-
-                if (sent != null)
-                {
-                    await EnsureOpenAsync(sent, FolderAccess.ReadWrite, ct);
-                    await sent.AppendAsync(FormatOptions.Default, message, MessageFlags.Seen, ct);
-                    await sent.CloseAsync(false, ct);
-                }
-
-                await imap.DisconnectAsync(true, ct);
-            }
-            catch
-            {
-                // Non bloccare l'invio se l'append fallisce: lo sync importerà comunque
-            }
+            _logger.LogInformation($"✉️ Email inviata da {casella.Email} ({nomeMittente}) a {to}");
         }
 
-
-
+        private static string GetSocietaByEmail(string email)
+        {
+            if (email.EndsWith("@grupposantacroce.com", StringComparison.OrdinalIgnoreCase))
+                return "GRUPPO SANTACROCE";
+            else if (email.EndsWith("@rayaitaly.com", StringComparison.OrdinalIgnoreCase))
+                return "RAYA S.p.A. - Grains Commodities & Investment";
+            else if (email.EndsWith("@eurocereali.com", StringComparison.OrdinalIgnoreCase))
+                return "EUROCEREALI S.R.L. - Grains Commodities & Investment";
+            else
+                return "GRUPPO SANTACROCE";
+        }
         public async Task<EmailDetail?> GetEmailDetailAsync(int emailId, CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
@@ -529,37 +616,39 @@ GRUPPO SANTACROCE
         public async Task<int> GetCasellaIdAsync(string usernameOrEmail, CancellationToken ct = default)
         {
             if (string.IsNullOrWhiteSpace(usernameOrEmail))
-                throw new ArgumentException("Username/Email mancante.", nameof(usernameOrEmail));
+                throw new ArgumentException("Username o email mancante.", nameof(usernameOrEmail));
 
             var key = usernameOrEmail.Trim().ToUpperInvariant();
 
             await using var db = _dbFactory.CreateDbContext();
 
-            // 1. Cerca nella tabella CASELLEPOSTA (username o email diretta)
-            var id = await db.CasellePosta
-                .AsNoTracking()
-                .Where(c =>
-                    ((c.Username ?? "").Trim().ToUpper() == key) ||
-                    ((c.Email ?? "").Trim().ToUpper() == key))
-                .Select(c => c.Id)
-                .FirstOrDefaultAsync(ct);
+            // 1️⃣ Se è un indirizzo email (contiene "@"), cerca direttamente nella tabella CASELLEPOSTA
+            if (key.Contains("@"))
+            {
+                var id = await db.CasellePosta
+                    .AsNoTracking()
+                    .Where(c => (c.Email ?? "").Trim().ToUpper() == key)
+                    .Select(c => c.Id)
+                    .FirstOrDefaultAsync(ct);
 
-            if (id != 0)
-                return id;
+                if (id != 0)
+                    return id;
+            }
 
-            // 2. Se non trovato, cerca nelle abilitazioni
-            id = await db.CasellaAbilitazioni
+            // 2️⃣ Se è un nome utente, cerca nella tabella CASELLA_ABILITAZIONI
+            var idAbilitazione = await db.CasellaAbilitazioni
                 .AsNoTracking()
-                .Where(a => ((a.Username ?? "").Trim().ToUpper() == key))
+                .Where(a => (a.Username ?? "").Trim().ToUpper() == key)
                 .Select(a => a.CasellaId)
                 .FirstOrDefaultAsync(ct);
 
-            if (id != 0)
-                return id;
+            if (idAbilitazione != 0)
+                return idAbilitazione;
 
-            // 3. Nessuna corrispondenza trovata
+            // 3️⃣ Nessuna corrispondenza trovata
             throw new InvalidOperationException($"Nessuna casella associata a '{usernameOrEmail}'.");
         }
+
 
 
         public async Task MarkOpenedAsync(int emailId, CancellationToken ct = default)
@@ -846,7 +935,7 @@ GRUPPO SANTACROCE
             catch { }
         }
 
-        
+
 
         public async Task MoveToTrashAsync(int emailId, CancellationToken ct = default)
         {
@@ -1110,6 +1199,60 @@ GRUPPO SANTACROCE
                 e.Aperto ?? "N"
             )).FirstOrDefaultAsync(ct);
         }
+
+        // Legge commenti
+        public async Task<List<CommentoEmail>> GetCommentsByEmailAsync(int emailId, CancellationToken ct = default)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+            return await db.CommentiEmail
+                .AsNoTracking()
+                .Where(c => c.EmailId == emailId)
+                .OrderBy(c => c.DataCreazione)
+                .ToListAsync(ct);
+        }
+
+        // Inserisce commento (+ opzionale allegato)
+        public async Task<int> AddCommentAsync(
+            int emailId,
+            string autore,
+            string testo,
+            byte[]? fileBytes = null,
+            string? fileName = null,
+            CancellationToken ct = default)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var c = new CommentoEmail
+            {
+                EmailId = emailId,
+                Autore = autore,
+                Testo = testo,
+                DataCreazione = DateTime.Now,
+                Allegato = fileBytes,
+                AllegatoNome = fileName
+            };
+
+            db.CommentiEmail.Add(c);
+            await db.SaveChangesAsync(ct);
+
+            return c.Id; // ⬅️ IMPORTANTISSIMO: ritorna l’ID del commento
+        }
+
+
+        // Ritorna l'allegato di un commento
+        public async Task<(byte[] data, string filename)?> GetCommentAttachmentAsync(int commentId, CancellationToken ct = default)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+            var c = await db.CommentiEmail
+                .AsNoTracking()
+                .Where(x => x.Id == commentId)
+                .Select(x => new { x.Allegato, x.AllegatoNome })
+                .FirstOrDefaultAsync(ct);
+
+            if (c?.Allegato == null) return null;
+            return (c.Allegato, string.IsNullOrWhiteSpace(c.AllegatoNome) ? "allegato.dat" : c.AllegatoNome);
+        }
+
 
 
     }

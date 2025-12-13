@@ -1,4 +1,5 @@
 ﻿@page "/configurazione"
+@using MailKit.Net.Imap
 @using Microsoft.EntityFrameworkCore
 @using SCemail.Components.Data
 @inject IDbContextFactory<MailDbContext> DbFactory
@@ -11,7 +12,7 @@
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0">⚙️ Configurazione Caselle Email</h5>
             <button type="button" class="btn btn-light btn-sm"
-                    @onclick="@(() => Nav.NavigateTo("/"))">
+                    @onclick="TornaHome">
                 ⬅️ Torna alla Home
             </button>
     
@@ -21,15 +22,15 @@
                 <DataAnnotationsValidator />
                 <ValidationSummary />
 
-                <div class="row g-3">
+                <div class="row g-3 align-items-end">
                     <!-- Email -->
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label">Email</label>
                         <InputText class="form-control" @bind-Value="form.Email" required />
                     </div>
 
                     <!-- Password -->
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <label class="form-label">Password</label>
                         <div class="input-group">
                             <InputText class="form-control"
@@ -44,7 +45,7 @@
                     </div>
 
                     <!-- Provider -->
-                    <div class="col-md-6">
+                    <div class="col-md-2">
                         <label class="form-label">Provider</label>
                         <select class="form-select" @onchange="OnProviderChanged">
                             <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
@@ -52,46 +53,15 @@
                         </select>
                     </div>
 
-                    <!-- Firma -->
-                    <div class="col-12">
-                        <h6 class="mt-4">Firma</h6>
-                    </div>
-
-                    <div class="col-md-4">
-                        <label class="form-label">Nome (in grassetto)</label>
-                        <InputText class="form-control" @bind-Value="form.Nome" required />
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Titolo</label>
-                        <InputText class="form-control" @bind-Value="form.Titolo" />
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">Recapito</label>
-                        <InputText class="form-control" @bind-Value="form.Recapito" />
-                    </div>
-
-                    <!-- Anteprima Firma -->
-                    <div class="col-12">
-                        <div class="alert alert-info">
-                            <strong>Anteprima firma:</strong>
-                            <pre class="mb-0" style="font-family:'Courier New', monospace">
-Cordiali saluti.
-<b>@form.Nome</b>
-@form.Titolo
-<small>@form.Recapito</small>
-GRUPPO SANTACROCE
-                            </pre>
-                        </div>
-                    </div>
-
-                    <!-- Submit -->
-                    <div class="col-12">
-                        <button type="submit" class="btn btn-success">
-                            💾 Salva casella
+                    <!-- Bottone Salva -->
+                    <div class="col-md-2 d-flex justify-content-end">
+                        <button type="submit" class="btn btn-success w-100">
+                            ➕ Aggiungi Casella
                         </button>
                     </div>
                 </div>
             </EditForm>
+
         </div>
     </div>
 
@@ -101,39 +71,148 @@ GRUPPO SANTACROCE
             <h6 class="mb-0">📧 Caselle configurate</h6>
         </div>
         <div class="card-body p-0">
-            <table class="table table-hover table-striped mb-0">
+            <table class="table table-hover align-middle mb-0">
                 <thead class="table-light">
                     <tr>
                         <th>Email</th>
                         <th>Provider</th>
                         <th>IMAP</th>
-                        <th>Firma</th>
+                        <th>Password</th>
+                        <th class="text-center">Stato</th>
                     </tr>
                 </thead>
                 <tbody>
                     @foreach (var c in _caselle)
                     {
-                        <tr>
+                        var statoClasse = c.Stato switch
+                        {
+                            StatoConnessione.Ok => "btn btn-sm btn-success",
+                            StatoConnessione.Errore => "btn btn-sm btn-danger",
+                            _ => "btn btn-sm btn-secondary"
+                        };
+
+                        <tr title="@c.LastError">
                             <td>@c.Email</td>
                             <td>@c.Provider</td>
                             <td>@c.ImapHost:@c.ImapPort (SSL: @c.UseSsl)</td>
-                            <td>
-                                <b>@c.Nome</b><br />
-                                @c.Titolo<br />
-                                <small>@c.Recapito</small>
+                            <td style="width: 250px;">
+                                <input type="text"
+                                       class="form-control form-control-sm"
+                                       value="@c.Password"
+                                       @onchange="(e => AggiornaPasswordDiretta(c, e))" />
                             </td>
-                        </tr>
-                    }
+                            <td class="text-center">
+                                @if (c.InTest)
+                                {
+                                    <!-- 🌀 Mostra spinner mentre è in corso -->
+                                    <div class="spinner-border text-info spinner-border-sm" role="status">
+                                        <span class="visually-hidden">Verifica...</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <button class="@statoClasse" disabled
+                                    title="@(c.Stato == StatoConnessione.Ok
+                                                                        ? "Connessione OK"
+                                                                        : c.LastError ?? "Errore di connessione")">
+                                        @(
+                                        c.Stato == StatoConnessione.Ok ? "🟢" :
+                                                                c.Stato == StatoConnessione.Errore ? "🔴" : "⚪"
+                                        )
+                                    </button>
+                                }
+                            </td>
+                    </tr>
+                                        }
                 </tbody>
             </table>
         </div>
     </div>
 </div>
 
+<style>
+    .table td, .table th {
+        vertical-align: middle;
+    }
+
+    .table-hover tbody tr:hover {
+        background-color: #f9fafc;
+    }
+</style>
+
 @code {
     private bool showPwd = false;
     private void TogglePwd() => showPwd = !showPwd;
+    private string? _cp;
+    private System.Threading.Timer? _refreshTimer;
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            // ✅ Avvia subito il primo test parallelo
+            var tasks = _caselle.Select(c => TestConnessione(c));
+            await Task.WhenAll(tasks);
+
+            // ✅ Timer di refresh UI (ogni 15 secondi)
+            _refreshTimer = new System.Threading.Timer(async _ =>
+            {
+                try
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        var tasks = _caselle.Select(c => TestConnessione(c));
+                        await Task.WhenAll(tasks);
+                        StateHasChanged(); // 🔁 forza aggiornamento UI
+                    });
+                }
+                catch { }
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15)); // ogni 15 sec
+        }
+    }
+
+
+    private async Task AggiornaPasswordDiretta(CasellaPosta c, ChangeEventArgs e)
+    {
+        try
+        {
+            var nuovaPwd = e.Value?.ToString() ?? "";
+            if (string.IsNullOrWhiteSpace(nuovaPwd) || nuovaPwd == c.Password)
+                return;
+
+            c.Password = nuovaPwd;
+
+            await using var db = DbFactory.CreateDbContext();
+            var existing = await db.CasellePosta.FirstOrDefaultAsync(x => x.Id == c.Id);
+            if (existing is null) return;
+
+            existing.Password = c.Password;
+            await db.SaveChangesAsync();
+
+            Snackbar.Add($"🔐 Password aggiornata per {c.Email}", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"❌ Errore aggiornando password: {ex.Message}", Severity.Error);
+        }
+    }
+
+
+    protected override void OnInitialized()
+    {
+        var uri = new Uri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("cp", out var cp))
+            _cp = cp;
+    }
+
+    private void TornaHome()
+    {
+        if (!string.IsNullOrEmpty(_cp))
+            Nav.NavigateTo($"/?cp={_cp}");
+        else
+            Nav.NavigateTo("/");
+    }
     // ViewModel
     private class ConfigForm
     {
@@ -161,41 +240,99 @@ GRUPPO SANTACROCE
     }
 
     private async Task SalvaCasella()
+{
+    try
+    {
+        if (string.IsNullOrWhiteSpace(form.Email) || string.IsNullOrWhiteSpace(form.Password))
+        {
+            Snackbar.Add("Compila tutti i campi obbligatori.", Severity.Warning);
+            return;
+        }
+
+        await using var db = DbFactory.CreateDbContext();
+
+            bool exists = (await db.CasellePosta
+        .AsNoTracking()
+        .CountAsync(c => c.Email.ToUpper() == form.Email.ToUpper())) > 0;
+
+
+        if (exists)
+        {
+            Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
+            return;
+        }
+
+        var entity = new CasellaPosta
+        {
+            Email = form.Email,
+            Password = form.Password,
+            Provider = form.Provider,
+            ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
+            ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
+                ? "imaps.pec.aruba.it"
+                : "imap.aruba.it")
+            : "imap.gmail.com",
+            ImapPort = 993,
+            UseSsl = "Y",
+            CreatedAt = DateTime.Now
+        };
+
+        db.CasellePosta.Add(entity);
+        await db.SaveChangesAsync();
+
+        _caselle.Add(entity);
+        form = new ConfigForm(); // reset form
+        Snackbar.Add("✅ Casella email aggiunta correttamente.", Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Snackbar.Add($"Errore durante il salvataggio: {ex.Message}", Severity.Error);
+    }
+}
+
+    private async Task AggiornaPassword(CasellaPosta casella)
     {
         try
         {
             await using var db = DbFactory.CreateDbContext();
+            var existing = await db.CasellePosta.FirstOrDefaultAsync(c => c.Id == casella.Id);
+            if (existing is null) return;
 
-            var exists = await db.CasellePosta.AsNoTracking()
-                                              .AnyAsync(c => c.Email == form.Email);
-            if (exists)
-            {
-                Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
-                return;
-            }
-
-            var entity = new CasellaPosta
-            {
-                Email = form.Email,
-                Password = form.Password,
-                Provider = form.Provider,
-                UseSsl = "Y", // sempre attivo, gestito in automatico
-                CreatedAt = DateTime.Now,
-                Nome = form.Nome,
-                Titolo = form.Titolo,
-                Recapito = form.Recapito
-            };
-
-            db.CasellePosta.Add(entity);
+            existing.Password = casella.Password;
             await db.SaveChangesAsync();
-
-            _caselle.Add(entity);
-            form = new ConfigForm();        // reset form
-            Snackbar.Add("Casella salvata ✅", Severity.Success);
+            Snackbar.Add($"🔐 Password aggiornata per {casella.Email}", Severity.Success);
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"Errore salvataggio: {ex.Message}", Severity.Error);
+            Snackbar.Add($"Errore aggiornando password: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task TestConnessione(CasellaPosta c)
+    {
+        try
+        {
+            c.InTest = true;
+            await InvokeAsync(StateHasChanged);
+
+            using var client = new ImapClient();
+            client.ServerCertificateValidationCallback = (s, c1, h, e) => true;
+
+            await client.ConnectAsync(c.ImapHost, c.ImapPort, c.UseSsl == "Y");
+            await client.AuthenticateAsync(c.Email, c.Password);
+
+            c.Stato = StatoConnessione.Ok;
+            await client.DisconnectAsync(true);
+        }
+        catch (Exception ex)
+        {
+            c.Stato = StatoConnessione.Errore;
+            c.LastError = ex.Message;
+        }
+        finally
+        {
+            c.InTest = false;
+            await InvokeAsync(StateHasChanged);
         }
     }
 }

@@ -7,13 +7,17 @@ using SCemail.Components.Data;
 using SCemail.Components.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
-
+// ---------- LOGGING ----------
+builder.Logging.ClearProviders();
+builder.Logging.AddDebug();     // 🔹 log in Visual Studio → Output → Debug
+builder.Logging.AddConsole();   // 🔹 log in Console
 // ---------- DB ----------
 var connString = builder.Configuration.GetConnectionString("OracleDb")
     ?? throw new InvalidOperationException("Connection string 'OracleDb' non trovata");
 
 builder.Services.AddDbContextFactory<MailDbContext>(opt =>
 {
+
     opt.UseOracle(connString);
     opt.EnableSensitiveDataLogging().LogTo(Console.WriteLine, LogLevel.Information);
 });

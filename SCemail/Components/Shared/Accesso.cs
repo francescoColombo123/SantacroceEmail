@@ -1,4 +1,4 @@
-﻿namespace SCemail.Components.Shared
+﻿namespace SCemail.Components.Data
 {
     public class Accesso
     {

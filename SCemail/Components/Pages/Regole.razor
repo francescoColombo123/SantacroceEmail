@@ -1,43 +1,179 @@
 ﻿@page "/regole"
-@inject NavigationManager Navigation
+@using Microsoft.EntityFrameworkCore
+@using SCemail.Components.Data
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
 
-<PageTitle>GS MAIL</PageTitle>
+<div class="container my-5">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">📧 Regole di Gestione Email</h5>
+            <button class="btn btn-light btn-sm" @onclick="TornaIndietro">⬅️ Indietro</button>
+        </div>
 
-<div style="font-family:Verdana; font-size:10pt; background-color: #F0F4FF; margin: 0;">
-    <table style="width: 100%; border-collapse: collapse;">
-        <tr>
-            <td valign="top">
-                <div style="border-style: none none solid none; border-width: 1px; border-color: #CCCCCC; background-color: #E3EEFB;">
-                    <table cellpadding="5" cellspacing="0">
-                        <tr>
-                            <td style="padding-left:10px; padding-right:3px;">
-                                <img src="immagini/titolo.png" />
-                            </td>
-                            <td style="font-weight:bold; color: #003482; width: 100%;">
-                                GS - MAIL - Regole di Gestione
-                            </td>
-                        </tr>
-                    </table>
+        <div class="card-body">
+            <EditForm Model="@form" OnValidSubmit="@SalvaRegola">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+
+                <div class="row g-3 mb-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Mittente (LIKE)</label>
+                        <InputText class="form-control" @bind-Value="form.MittenteLike" />
+                        <small class="text-muted">Scrivi "TUTTI" per includere qualsiasi valore</small>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label">Destinatario (LIKE)</label>
+                        <InputText class="form-control" @bind-Value="form.DestLike" />
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label">Oggetto (LIKE)</label>
+                        <InputText class="form-control" @bind-Value="form.OggettoLike" />
+                    </div>
+
+                    <div class="col-md-3">
+                        <MudSelect T="string"
+                                   Label="Assegnatari"
+                                   MultiSelection="true"
+                                   SelectedValues="form.AssegnatariSelezionati"
+                                   SelectedValuesChanged="@(values => form.AssegnatariSelezionati = values.ToList())"
+                                   Dense="true"
+                                   Class="w-100">
+                            @foreach (var u in _utenti)
+                            {
+                                <MudSelectItem Value="@u">@u</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </div>
                 </div>
 
-                <div style="padding:10px; border-right: 1px solid #CCCCCC; height:100vh;">
-                    <table style="width:100%; border: 2px ridge #166AEE; background-color: #ECE9D8;">
-                        <tr>
-                            <td style="height:300px; vertical-align:top; text-align:left;">
-                                <button @onclick="GoBack">Indietro</button>
-                            </td>
-                        </tr>
-                    </table>
+                <div class="row g-3 align-items-center mb-3">
+                    <div class="col-md-3 form-check ms-3">
+                        <InputCheckbox class="form-check-input" @bind-Value="form.SoloInvio" />
+                        <label class="form-check-label ms-2">Solo invio (non visionare)</label>
+                    </div>
+
+                    <div class="col-md-3 form-check ms-3">
+                        <InputCheckbox class="form-check-input" @bind-Value="form.Attiva" />
+                        <label class="form-check-label ms-2">Regola attiva</label>
+                    </div>
+
+                    <div class="col-md-3 d-flex justify-content-end">
+                        <button type="submit" class="btn btn-success w-100">➕ Aggiungi Regola</button>
+                    </div>
                 </div>
-            </td>
-        </tr>
-    </table>
+            </EditForm>
+
+            <hr />
+
+            <h6 class="mb-3 text-secondary">Regole configurate</h6>
+
+            <table class="table table-striped table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Mittente</th>
+                        <th>Destinatario</th>
+                        <th>Oggetto</th>
+                        <th>Assegnatari</th>
+                        <th>Solo Invio</th>
+                        <th>Attiva</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_regole.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="text-center text-muted">Nessuna regola configurata</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var r in _regole)
+                        {
+                            <tr>
+                                <td>@r.MittenteLike</td>
+                                <td>@r.DestLike</td>
+                                <td>@r.OggettoLike</td>
+                                <td>@r.AssegnaA</td>
+                                <td>@(r.SoloInvio ? "✅" : "❌")</td>
+                                <td>@(r.Attiva ? "🟢" : "🔴")</td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
 </div>
 
 @code {
-    private void GoBack()
+    private List<EmailRegola> _regole = new();
+    private RegolaForm form = new();
+    private List<string> _utenti = new();
+
+    protected override async Task OnInitializedAsync()
     {
-        // Se usi NavigationManager per navigare indietro o altrove
-        Navigation.NavigateTo("/");
+        await using var db = DbFactory.CreateDbContext();
+
+        // ✅ carica solo utenti validi (iniziano con lettera + punto)
+        _utenti = await db.Database
+            .SqlQueryRaw<string>("SELECT UTENTE FROM INFOUSER WHERE REGEXP_LIKE(UTENTE, '^[A-Za-z]\\.') ORDER BY UTENTE")
+            .ToListAsync();
+
+        _regole = await db.EmailRegole.AsNoTracking()
+            .OrderByDescending(r => r.Id)
+            .ToListAsync();
+    }
+
+    private async Task SalvaRegola()
+    {
+        try
+        {
+            if (form.AssegnatariSelezionati == null || form.AssegnatariSelezionati.Count == 0)
+            {
+                Snackbar.Add("⚠️ Devi selezionare almeno un assegnatario.", Severity.Warning);
+                return;
+            }
+
+            var entity = new EmailRegola
+            {
+                MittenteLike = form.MittenteLike,
+                DestLike = form.DestLike,
+                OggettoLike = form.OggettoLike,
+                AssegnaA = string.Join(';', form.AssegnatariSelezionati),
+                SoloInvio = form.SoloInvio,
+                Attiva = form.Attiva,
+                CreatedAt = DateTime.Now,
+                CreatedBy = "admin"
+            };
+
+            await using var db = DbFactory.CreateDbContext();
+            db.EmailRegole.Add(entity);
+            await db.SaveChangesAsync();
+
+            _regole.Insert(0, entity);
+            form = new();
+            Snackbar.Add("✅ Regola salvata correttamente.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"❌ Errore durante il salvataggio: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private void TornaIndietro() => Nav.NavigateTo("/");
+
+    private class RegolaForm
+    {
+        public string? MittenteLike { get; set; }
+        public string? DestLike { get; set; }
+        public string? OggettoLike { get; set; }
+        public string AssegnaA { get; set; } = "";
+        public bool SoloInvio { get; set; }
+        public bool Attiva { get; set; } = true;
+        public List<string> AssegnatariSelezionati { get; set; } = new(); // ✅ aggiunta per la multiselect
     }
 }

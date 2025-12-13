@@ -1,0 +1,985 @@
+﻿@page "/mail-detail/{id:int}/{cp?}"
+@using Oracle.ManagedDataAccess.Client
+@using SCemail.Components.Data
+@using System.Text.RegularExpressions
+@inject MailService MailSvc
+@inject MailService_NEW MailSvc1
+@inject NavigationManager Nav
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<div class="detail-shell">
+    @if (_loading)
+    {
+        <div class="loading">Caricamento email...</div>
+    }
+    else if (_thread != null && _thread.Any())
+    {
+        <!-- SINISTRA: THREAD EMAIL -->
+        <section class="left-pane">
+            <header class="email-head">
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Color="Color.Primary" OnClick="@GoBack" />
+                <div class="head-texts">
+                    <h3 class="subj">@_email?.Oggetto</h3>
+                    <div class="meta">Thread di @_thread.Count messaggi</div>
+                </div>
+            </header>
+
+            <div class="email-thread">
+                @foreach (var mail in _thread.OrderBy(m => m.Data))
+                {
+                    <div class="gmail-msg">
+
+                        <!-- AVATAR STILE TEAMS -->
+                        <div class="gmail-head">
+                            <div class="avatar" style="background:@GetAvatarColor(mail.Mittente)">
+                                @GetInitials(mail.Mittente)
+                            </div>
+
+                            <div class="meta">
+                                <div class="from">@ExtractEmailOnly(mail.Mittente)</div>
+                                <div class="time">@mail.Data?.ToString("ddd d MMM yyyy HH:mm")</div>
+                            </div>
+                        </div>
+
+                        <div class="gmail-body">
+                            @((MarkupString)CleanQuotedPart(mail.CorpoHtml ?? mail.CorpoTesto ?? ""))
+                        </div>
+
+                        @if (mail.Allegati?.Any() == true)
+                        {
+                            <div class="gmail-attachments">
+                                <div class="attach-title">📎 Allegati:</div>
+
+                                @foreach (var a in mail.Allegati)
+                                {
+                                    <a href="@GetDownloadUrl(a.Id)" target="_blank" class="attach-link">
+                                        <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
+                                        @a.NomeFile
+                                    </a>
+                                }
+                            </div>
+                        }
+
+                        <div class="gmail-actions">
+                            <MudButton Variant="Variant.Text"
+                                       StartIcon="@Icons.Material.Filled.Reply"
+                                       OnClick="@(() => Reply(mail))">
+                                Rispondi
+                            </MudButton>
+                        </div>
+                    </div>
+                }
+            </div>
+
+        </section>
+
+        <!-- DESTRA: COMMENTI -->
+        <aside class="right-pane">
+            <h4 class="comments-title">💬 Commenti interni</h4>
+
+            <div class="comments-list">
+                @if (_comments == null)
+                {
+                    <div class="muted">Caricamento…</div>
+                }
+                else if (_comments.Count == 0)
+                {
+                    <div class="muted">Nessun commento</div>
+                }
+                else
+                {
+                    @foreach (var c in _comments)
+                    {
+                        <div class="comment-box">
+
+                            <!-- AVATAR TEAM STYLE -->
+                            <div class="avatar2" style="background:@GetAvatarColor(c.Autore)">
+                                @GetInitials(c.Autore)
+                            </div>
+
+                            <div class="comment-content">
+                                <div class="comment-header">
+                                    <span class="author">@c.Autore</span>
+                                    <span class="time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
+                                </div>
+
+                                <div class="comment-text">
+                                    @((MarkupString)HighlightMentions(c.Testo))
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(c.AllegatoNome))
+                                {
+                                    <div class="comment-attachment">
+                                        <MudIcon Icon="@GetAttachmentIcon(c.AllegatoNome)" />
+                                        <a href="@GetCommentAttachmentUrl(c.Id)" target="_blank">@c.AllegatoNome</a>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            </div>
+
+            <!-- EDITOR COMMENTI -->
+            <div class="editor">
+                <div class="mention-wrapper">
+                    <MudTextField T="string"
+                                  Value="_newComment"
+                                  ValueChanged="@(v => OnTextChanged(v))"
+                                  Lines="4"
+                                  Variant="Variant.Outlined"
+                                  Placeholder=@("Scrivi un commento… usa @ per menzionare")
+                                  Immediate="true"
+                                  OnKeyDown="@((KeyboardEventArgs e) => HandleKeyNav(e))"
+                                  Class="editor-text" />
+
+                    @if (_mentionOpen && _mentionSuggestions.Count > 0)
+                    {
+                        <div class="mention-popup top">
+                            @foreach (var u in _mentionSuggestions)
+                            {
+                                <div class="mention-item" @onclick="@(() => SelectMention(u))">@u</div>
+                            }
+                        </div>
+                    }
+                </div>
+
+                <!-- PULSANTE + FILE -->
+                <div class="editor-files">
+                    <label class="file-plus">
+                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Medium" />
+                        <InputFile OnChange="OnFilesSelected" multiple style="display:none" />
+                    </label>
+
+                    @if (_selectedFiles.Count > 0)
+                    {
+                        <div class="file-list">
+                            @foreach (var f in _selectedFiles)
+                            {
+                                <div class="file-chip">
+                                    <MudIcon Icon="@GetAttachmentIcon(f.Name)" />
+                                    @f.Name
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                                   Size="Size.Small"
+                                                   Color="Color.Error"
+                                                   OnClick="@(() => RemoveFile(f))" />
+                                </div>
+                            }
+                        </div>
+                    }
+
+                </div>
+
+                <MudButton Color="Color.Primary"
+                           Variant="Variant.Filled"
+                           OnClick="AddComment"
+                           Disabled="@_savingComment"
+                           Loading="@_savingComment">
+                    INVIA
+                </MudButton>
+            </div>
+
+        </aside>
+    }
+</div>
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [Parameter] public string? Cp { get; set; }
+
+    private EmailDetail_NEW? _email;
+    private List<EmailDetail_NEW> _thread = new();
+    private List<CommentoEmail>? _comments;
+    private bool _loading = true;
+    private string? _utente;
+
+    private string? _newComment;
+    private List<IBrowserFile> _selectedFiles = new();
+
+    private List<string> _allUsers = new();
+    private List<string> _mentionSuggestions = new();
+    private bool _mentionOpen;
+    private int _mentionIndex = 0;
+    private bool _savingComment = false;
+
+    public class EmailReplyInfo
+    {
+        public string CasellaMittente { get; set; } = "";
+        public string Destinatari { get; set; } = "";
+        public string? Cc { get; set; }
+        public string? Bcc { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp);
+        _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
+        if (!string.IsNullOrWhiteSpace(_utente))
+        {
+            await MailSvc1.SegnaNotificheVisteAsync(Id, _utente);
+        }
+        if (_email != null)
+        {
+            _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id);
+
+            _thread = _thread
+                .GroupBy(t => t.MessageId)
+                .Select(g => g.First())
+                .ToList();
+        }
+
+        _comments = await MailSvc.GetCommentsByEmailAsync(Id);
+
+        _comments = _comments?
+            .GroupBy(c => c.Id)
+            .Select(g => g.First())
+            .ToList();
+
+        _allUsers = await AccessiSrv.GetUserListAsync();
+        _loading = false;
+    }
+    private async Task Reply(EmailDetail_NEW msg)
+    {
+        if (msg is null) return;
+
+        var replyInfo = await MailSvc1.GetReplyInfoAsync(
+            msg.ThreadKey,
+            msg.InReplyTo
+        );
+
+        var parameters = new DialogParameters
+        {
+            ["Utente"] = _utente,
+            ["Oggetto"] = msg.Oggetto?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true
+                ? msg.Oggetto
+                : "Re: " + msg.Oggetto,
+
+            ["CorpoIniziale"] = $@"
+<br><br>
+---- Messaggio originale ----<br>
+<b>Da:</b> {msg.Mittente}<br>
+<b>Inviato:</b> {msg.Data}<br>
+<b>Oggetto:</b> {msg.Oggetto}<br><br>
+<blockquote style='border-left:3px solid #ccc; margin-left:10px; padding-left:10px; color:#555;'>
+{msg.CorpoHtml ?? msg.CorpoTesto}
+</blockquote>",
+
+            ["ReplyToMessageId"] = msg.MessageId,
+            ["References"] = BuildReferencesChain(msg),
+            ["ThreadKey"] = msg.ThreadKey
+        };
+
+        if (replyInfo != null)
+        {
+            parameters["CasellaMittente"] = replyInfo.CasellaMittente;
+            parameters["Destinatari"] = replyInfo.Destinatari;
+            parameters["Cc"] = replyInfo.Cc;
+            parameters["Bcc"] = replyInfo.Bcc;
+        }
+        else
+        {
+            parameters["Destinatari"] = ExtractEmailOnly(msg.Mittente);
+        }
+
+        var dialog = DialogService.Show<ComposeDialog>(
+            "Rispondi",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+        );
+
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Risposta inviata ✅", Severity.Success);
+    }
+
+
+  
+
+    private static string BuildReferencesChain(EmailDetail_NEW msg)
+    {
+        if (string.IsNullOrWhiteSpace(msg.References))
+            return msg.MessageId ?? "";
+
+        var refs = msg.References.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+
+        if (!string.IsNullOrWhiteSpace(msg.MessageId) && !refs.Contains(msg.MessageId))
+            refs.Add(msg.MessageId);
+
+        return string.Join(" ", refs);
+    }
+    private void RemoveFile(IBrowserFile file)
+    {
+        _selectedFiles.Remove(file);
+    }
+
+
+    private void GoBack() => Nav.NavigateTo($"/mail-new?cp={Cp}");
+    private string GetDownloadUrl(int id) => $"/api/attachments/{id}";
+    private string GetCommentAttachmentUrl(int id) => $"/api/comments/{id}/attachment";
+
+    private string GetAttachmentIcon(string? name)
+    {
+        var s = (name ?? "").ToLowerInvariant();
+        if (s.EndsWith(".pdf")) return Icons.Material.Filled.PictureAsPdf;
+        if (s.EndsWith(".jpg") || s.EndsWith(".png")) return Icons.Material.Filled.Image;
+        if (s.EndsWith(".doc") || s.EndsWith(".docx")) return Icons.Material.Filled.Description;
+        if (s.EndsWith(".xls") || s.EndsWith(".xlsx")) return Icons.Material.Filled.TableChart;
+        return Icons.Material.Filled.AttachFile;
+    }
+
+    private static string CleanQuotedPart(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return body;
+
+        var normalized = body.Replace("\r", "");
+        string[] markers = { "---- Messaggio originale ----", "Da:", "Inviato:", "Oggetto:" };
+
+        foreach (var marker in markers)
+        {
+            var idx = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx > 0)
+            {
+                normalized = normalized[..idx];
+                break;
+            }
+        }
+
+        return normalized.Trim();
+    }
+
+    private string GetInitials(string autore)
+    {
+        if (string.IsNullOrWhiteSpace(autore))
+            return "?";
+
+        var email = ExtractEmail(autore);
+
+        if (email.Contains('.') && !email.Contains("@"))
+        {
+            var p = email.Split('.');
+            if (p.Length >= 2)
+                return $"{char.ToUpper(p[0][0])}{char.ToUpper(p[1][0])}";
+        }
+
+        if (email.Contains("@"))
+            return email[0].ToString().ToUpper();
+
+        return email[0].ToString().ToUpper();
+    }
+
+    private string GetAvatarColor(string autore)
+    {
+        string[] colors = { "#5A78FF", "#34A853", "#F4B400", "#EA4335", "#A142F4", "#00ACC1" };
+        int hash = Math.Abs(autore.GetHashCode());
+        return colors[hash % colors.Length];
+    }
+    private void OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        foreach (var file in e.GetMultipleFiles())
+        {
+            _selectedFiles.Add(file);
+        }
+    }
+
+
+    private void OnTextChanged(string value)
+    {
+        _newComment = value;
+        if (string.IsNullOrWhiteSpace(_newComment))
+        {
+            _mentionOpen = false;
+            _mentionSuggestions.Clear();
+            return;
+        }
+
+        var last = _newComment.Split(' ', '\n', '\t').LastOrDefault() ?? "";
+
+        if (last == "@")
+        {
+            _mentionSuggestions = _allUsers.Take(8).ToList();
+            _mentionOpen = true;
+            _mentionIndex = 0;
+            return;
+        }
+
+        if (!last.StartsWith("@"))
+        {
+            _mentionOpen = false;
+            _mentionSuggestions.Clear();
+            return;
+        }
+
+        var query = last[1..].ToLowerInvariant();
+        _mentionSuggestions = _allUsers
+            .Where(u => u.Contains(query))
+            .Take(8)
+            .ToList();
+
+        _mentionOpen = _mentionSuggestions.Any();
+        _mentionIndex = 0;
+    }
+
+    private void HandleKeyNav(KeyboardEventArgs e)
+    {
+        if (!_mentionOpen || _mentionSuggestions.Count == 0) return;
+
+        if (e.Key == "ArrowDown")
+            _mentionIndex = (_mentionIndex + 1) % _mentionSuggestions.Count;
+        else if (e.Key == "ArrowUp")
+            _mentionIndex = (_mentionIndex - 1 + _mentionSuggestions.Count) % _mentionSuggestions.Count;
+        else if (e.Key == "Enter")
+            SelectMention(_mentionSuggestions[_mentionIndex]);
+        else if (e.Key == "Escape")
+            _mentionOpen = false;
+    }
+
+    private void SelectMention(string user)
+    {
+        if (string.IsNullOrWhiteSpace(_newComment)) return;
+
+        var parts = _newComment.Split(' ', '\n', '\t').ToList();
+        for (int i = parts.Count - 1; i >= 0; i--)
+            if (parts[i].StartsWith("@")) { parts[i] = "@" + user; break; }
+
+        _newComment = string.Join(" ", parts);
+        _mentionOpen = false;
+        _mentionSuggestions.Clear();
+    }
+    private static string ExtractEmail(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "?";
+
+        var m = Regex.Match(raw, @"<(?<mail>[^>]+)>");
+        return m.Success ? m.Groups["mail"].Value : raw;
+    }
+
+    private static string ExtractEmailOnly(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "";
+
+
+        var match = Regex.Match(raw, "<([^>]+)>");
+        if (match.Success)
+            return match.Groups[1].Value;
+
+
+        if (raw.Contains("@"))
+            return raw.Trim();
+
+        return raw;
+    }
+
+    private async Task AddComment()
+    {
+        if (_savingComment)
+            return;
+
+        _savingComment = true;
+
+        try
+        {
+            // ❌ Niente testo e niente allegati
+            if (string.IsNullOrWhiteSpace(_newComment) && _selectedFiles.Count == 0)
+            {
+                Snackbar.Add("Scrivi un commento o allega almeno un file.", Severity.Info);
+                return;
+            }
+
+            int commentId;
+
+            // =========================
+            // 1️⃣ COMMENTO PRINCIPALE
+            // =========================
+            byte[]? bytes = null;
+            string? name = null;
+
+            if (_selectedFiles.Count == 1)
+            {
+                var f = _selectedFiles.First();
+                using var s = f.OpenReadStream(12 * 1024 * 1024);
+                using var ms = new MemoryStream();
+                await s.CopyToAsync(ms);
+                bytes = ms.ToArray();
+                name = f.Name;
+            }
+
+            commentId = await MailSvc.AddCommentAsync(
+                emailId: Id,
+                autore: _utente!,
+                testo: _newComment ?? "",
+                fileBytes: bytes,
+                fileName: name
+            );
+
+            // =========================
+            // 2️⃣ ALLEGATI MULTIPLI
+            // =========================
+            if (_selectedFiles.Count > 1)
+            {
+                foreach (var f in _selectedFiles)
+                {
+                    using var s = f.OpenReadStream(12 * 1024 * 1024);
+                    using var ms = new MemoryStream();
+                    await s.CopyToAsync(ms);
+
+                    await MailSvc.AddCommentAsync(
+                        emailId: Id,
+                        autore: _utente!,
+                        testo: "(allegato)",
+                        fileBytes: ms.ToArray(),
+                        fileName: f.Name
+                    );
+                }
+            }
+
+            // =========================
+            // 3️⃣ MENZIONI (@utente)
+            // =========================
+            var mentionedUsers = Regex.Matches(
+                    _newComment ?? "",
+                    @"@([a-z]\.[a-z0-9]+)",
+                    RegexOptions.IgnoreCase)
+                .Select(m => m.Groups[1].Value.ToLowerInvariant())
+                .Distinct()
+                .ToList();
+
+            // =========================
+            // 4️⃣ PARTECIPANTI EMAIL
+            // =========================
+            var partecipanti = (await MailSvc.GetPartecipantiEmailAsync(Id))
+     .Distinct(StringComparer.OrdinalIgnoreCase)
+     .ToList();
+
+            var proprietariEmail = await MailSvc.GetProprietariEmailAsync(Id);
+
+            // UNION partecipanti + menzionati
+            var utentiDaNotificare = partecipanti
+    .Union(mentionedUsers, StringComparer.OrdinalIgnoreCase)
+    .Union(proprietariEmail, StringComparer.OrdinalIgnoreCase) 
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToList();
+            foreach (var u in utentiDaNotificare)
+            {
+                if (u.Equals(_utente, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                bool isMention =
+      mentionedUsers.Contains(u, StringComparer.OrdinalIgnoreCase)
+      || proprietariEmail.Contains(u, StringComparer.OrdinalIgnoreCase);
+
+
+                await MailSvc.RegistraEventoChatAsync(
+                    emailId: Id,
+                    utente: u,
+                    isMention: isMention,
+                    commentoId: commentId,
+                    autore: _utente!
+                );
+            }
+
+
+
+            // =========================
+            // 5️⃣ RESET UI
+            // =========================
+            _newComment = "";
+            _selectedFiles.Clear();
+            _mentionOpen = false;
+            _mentionSuggestions.Clear();
+
+            _comments = await MailSvc.GetCommentsByEmailAsync(Id);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore AddComment: {ex.Message}");
+            Snackbar.Add("Errore durante l'invio del commento", Severity.Error);
+        }
+        finally
+        {
+            _savingComment = false;
+            StateHasChanged();
+        }
+    }
+
+
+
+
+    private static readonly Regex _mentionRegex =
+        new(@"@([a-z]\.[a-z0-9]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static string HighlightMentions(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        return _mentionRegex.Replace(
+            text,
+            "<span class=\"mention-tag\">@$1</span>"
+        );
+    }
+}
+
+
+<style>
+    .c-text {
+        white-space: pre-wrap;
+        margin-top: 4px;
+    }
+
+    .mention-tag {
+        color: #1565c0; /* colore a scelta */
+        font-weight: 600;
+    }
+.detail-shell{display:grid;grid-template-columns:2fr 1fr;gap:16px;height:calc(100vh - 90px);padding:16px;background:#f5f8ff}
+.left-pane{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow-y:auto}
+.email-head{display:flex;gap:10px;align-items:center;border-bottom:1px solid #e8eefc;padding-bottom:8px;margin-bottom:10px}
+.head-texts{display:flex;flex-direction:column}
+.subj{margin:0;font-size:18px}
+.email-body{font-size:14px;line-height:1.4}
+.attachments{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
+.attach-link{display:inline-flex;align-items:center;gap:6px;text-decoration:none;color:#1565c0}
+
+    .right-pane {
+        background: #fff;
+        border-radius: 10px;
+        padding: 14px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.06);
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+.comments-title{margin-top:0}
+.muted{color:#93a1bf;font-size:13px}
+.comments-list{overflow-y:auto;flex:1 1 auto;border:1px solid #eef3ff;border-radius:8px;padding:8px;margin-bottom:10px}
+.comment-item{border-bottom:1px solid #f1f4ff;padding:6px 4px}
+.comment-item:last-child{border-bottom:none}
+.c-head{display:flex;justify-content:space-between;font-size:13px}
+.c-date{color:#8aa}
+.c-text{white-space:pre-wrap;margin-top:4px}
+.c-file{color:#1565c0;font-size:13px;text-decoration:none}
+
+    .editor {
+        position: relative; /* 👈 fondamentale per il posizionamento */
+        border-top: 1px solid #eef3ff;
+        padding-top: 10px;
+    }
+
+    .editor-text {
+        width: 100%
+    }
+.editor-files{margin:6px 0}
+.selected-file{margin-left:8px;font-size:13px;color:#1565c0}
+
+    .mention-wrapper {
+        position: relative;
+    }
+
+    .mention-popup {
+        position: absolute;
+        left: 0;
+        width: 100%;
+        background: white;
+        border: 1px solid #d6e6ff;
+        border-radius: 6px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.08);
+        max-height: 220px;
+        overflow-y: auto;
+        z-index: 9999;
+    }
+        /* Sopra la textarea */
+        .mention-popup.top {
+            bottom: calc(100% + 4px);
+        }
+
+        /* (opzionale) Se vuoi aprirla sotto in futuro */
+        .mention-popup.bottom {
+            top: calc(100% + 4px);
+        }
+    .mention-item {
+        padding: 6px 10px;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
+
+        .mention-item.active,
+        .mention-item:hover {
+            background: #eaf2ff;
+        }
+
+
+@@media (max-width:980px){.detail-shell{grid-template-columns:1fr;height:auto}.comments-list{max-height:40vh}}
+
+
+    .email-item {
+        background: #fff;
+        border: 1px solid #e0e6f5;
+        border-radius: 8px;
+        padding: 12px 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .email-meta {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px;
+        color: #444;
+        margin-bottom: 6px;
+    }
+
+    .email-body-text {
+        font-size: 14px;
+        line-height: 1.5;
+        color: #222;
+    }
+
+    .mail-actions {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 8px;
+        border-top: 1px solid #eef3ff;
+        padding-top: 6px;
+    }
+
+
+    .email-bubble {
+        max-width: 85%;
+        border-radius: 14px;
+        padding: 10px 14px;
+        position: relative;
+        font-size: 14px;
+        line-height: 1.45;
+        box-shadow: 0 1px 3px rgba(0,0,0,.08);
+    }
+
+        .email-bubble.received {
+            align-self: flex-start;
+            background: #ffffff;
+            border: 1px solid #e0e6f5;
+        }
+
+        .email-bubble.sent {
+            align-self: flex-end;
+            background: #e7f1ff;
+            border: 1px solid #cdddf8;
+        }
+
+    .bubble-head {
+        display: flex;
+        align-items: center;
+        margin-bottom: 4px;
+    }
+
+    .bubble-body {
+        color: #222;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    .bubble-attachments {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .attach-link {
+        font-size: 13px;
+        text-decoration: none;
+        color: #1565c0;
+    }
+
+    .time {
+        font-size: 12px;
+        color: #99a;
+        margin-left: 6px;
+    }
+
+    .email-thread {
+        display: flex;
+        flex-direction: column;
+        gap: 24px;
+        padding: 16px 12px;
+        background: #f8fafc;
+    }
+
+    .gmail-msg {
+        background: #fff;
+        border: 1px solid #e0e6f0;
+        border-radius: 10px;
+        padding: 14px 18px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        transition: background 0.2s;
+    }
+
+        .gmail-msg:hover {
+            background: #fdfefe;
+        }
+
+    .gmail-head {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+
+    .avatar {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        background: #5a78ff;
+        color: #fff;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 10px;
+        font-size: 15px;
+    }
+
+    .meta {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .from {
+        font-weight: 600;
+        color: #222;
+        font-size: 15px;
+    }
+
+    .time {
+        font-size: 13px;
+        color: #8a8f9b;
+    }
+
+    .gmail-body {
+        margin-top: 6px;
+        font-size: 14px;
+        line-height: 1.6;
+        color: #222;
+        word-wrap: break-word;
+    }
+
+    .gmail-attachments {
+        margin-top: 10px;
+        border-top: 1px solid #eef3ff;
+        padding-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .attach-link {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: #1a73e8;
+        text-decoration: none;
+        font-size: 13px;
+    }
+
+        .attach-link:hover {
+            text-decoration: underline;
+        }
+
+    .gmail-actions {
+        margin-top: 10px;
+        display: flex;
+        justify-content: flex-end;
+    }
+
+    .attach-title {
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+        color: #444;
+    }
+    .comment-box {
+    display: flex;
+    gap: 12px;
+    padding: 12px 6px;
+    border-bottom: 1px solid #eef3ff;
+}
+
+.avatar2 {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.comment-content {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.comment-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.comment-header .author {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.comment-header .time {
+    font-size: 12px;
+    color: #888;
+}
+
+.comment-text {
+    margin: 4px 0 6px 0;
+    white-space: pre-wrap;
+    font-size: 14px;
+}
+
+.comment-attachment {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: #f2f6ff;
+    border-radius: 6px;
+    font-size: 13px;
+    width: fit-content;
+    border: 1px solid #dce7ff;
+}
+
+.file-plus {
+    cursor: pointer;
+    color: #5a78ff;
+    display: inline-flex;
+    align-items: center;
+}
+
+.file-plus:hover {
+    opacity: 0.7;
+}
+
+    .file-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        background: #f0f4ff;
+        padding: 6px 10px;
+        border-radius: 20px;
+        font-size: 13px;
+        border: 1px solid #d6e4ff;
+        margin-left: 8px;
+    }
+
+</style>

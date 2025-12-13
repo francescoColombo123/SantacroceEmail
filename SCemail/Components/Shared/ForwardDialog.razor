@@ -1,10 +1,11 @@
 ﻿@using MudBlazor
+@using SCemail.Components.Data
 
 <MudDialog>
     <DialogContent>
-        <MudText Typo="Typo.h6">Inoltra a utente</MudText>
+        <MudText Typo="Typo.h6" Class="mb-2">Inoltra email</MudText>
 
-        <MudSelect T="string" Label="Inoltra email" @bind-Value="_user" Dense="true" Required="true" Class="mt-2">
+        <MudSelect T="string" Label="Destinatario" @bind-Value="_user" Dense="true" Required="true" Class="mt-2">
             @foreach (var u in Users)
             {
                 <MudSelectItem Value="@u">@u</MudSelectItem>
@@ -12,11 +13,27 @@
         </MudSelect>
 
         <MudTextField @bind-Value="_comment"
-                      Label="Commento (opzionale)" Lines="3" Variant="Variant.Outlined" Class="mt-2" />
+                      Label="Commento (opzionale)"
+                      Lines="3"
+                      Variant="Variant.Outlined"
+                      Class="mt-3" />
     </DialogContent>
+
     <DialogActions>
-        <MudButton OnClick="Cancel">Annulla</MudButton>
-        <MudButton Color="Color.Primary" OnClick="Ok">Inoltra</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Annulla</MudButton>
+        <MudSpacer />
+        <MudButton Color="Color.Secondary"
+                   Variant="Variant.Outlined"
+                   OnClick="() => Ok(false)"
+                   Disabled="@string.IsNullOrWhiteSpace(_user)">
+            Tieni traccia
+        </MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="() => Ok(true)"
+                   Disabled="@string.IsNullOrWhiteSpace(_user)">
+            Inoltra
+        </MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -31,12 +48,20 @@
     {
         public string User { get; init; } = default!;
         public string? Comment { get; init; }
+        public bool SoloInvio { get; init; } // true = invia, false = tieni traccia
     }
 
     void Cancel() => MudDialog.Cancel();
-    void Ok()
+
+    void Ok(bool soloInvio)
     {
-        if (string.IsNullOrWhiteSpace(_user)) return;
-        MudDialog.Close(DialogResult.Ok(new ForwardResult { User = _user!, Comment = _comment }));
+        var result = new ForwardResult
+        {
+            User = _user!,
+            Comment = _comment,
+            SoloInvio = soloInvio
+        };
+
+        MudDialog.Close(DialogResult.Ok(result));
     }
 }

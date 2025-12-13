@@ -4,7 +4,7 @@ using SCemail.Components.Data;
 
 namespace SCemail.Components.Controllers
 {
-    // Ora il prefisso è /api/attachments
+    // Prefisso principale per allegati: /api/attachments
     [ApiController]
     [Route("api/attachments")]
     public class AttachmentsController : ControllerBase
@@ -18,22 +18,36 @@ namespace SCemail.Components.Controllers
             _logger = logger;
         }
 
-        // Preview inline -> /api/attachments/{id}/inline
+        // === ALLEGATI EMAIL ===
+
+        // Anteprima inline -> /api/attachments/{id}/inline
         [HttpGet("{id:int}/inline")]
         public async Task<IActionResult> Inline(int id, CancellationToken ct)
             => await GetFile(id, inline: true, ct);
 
-        // Download "compatibile" con l'URL usato dalla pagina:
-        // /api/attachments/{id}
+        // Download compatibile -> /api/attachments/{id}
         [HttpGet("{id:int}")]
         public async Task<IActionResult> DownloadCompat(int id, CancellationToken ct)
             => await GetFile(id, inline: false, ct);
 
-        // (opzionale) download anche su /api/attachments/{id}/download
+        // Download esplicito -> /api/attachments/{id}/download
         [HttpGet("{id:int}/download")]
         public async Task<IActionResult> Download(int id, CancellationToken ct)
             => await GetFile(id, inline: false, ct);
 
+        // === ALLEGATI COMMENTI ===
+        // Route ASSOLUTA per commenti (non soggetta al prefisso /api/attachments)
+        [HttpGet("/api/comments/{id:int}/attachment")]
+        public async Task<IActionResult> GetCommentAttachment(int id, CancellationToken ct)
+        {
+            var res = await _mail.GetCommentAttachmentAsync(id, ct);
+            if (res is null)
+                return NotFound();
+
+            return File(res.Value.data, "application/octet-stream", res.Value.filename);
+        }
+
+        // === LOGICA COMUNE ===
         private async Task<IActionResult> GetFile(int id, bool inline, CancellationToken ct)
         {
             try

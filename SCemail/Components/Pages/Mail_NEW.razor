@@ -1,735 +1,1288 @@
 ﻿@page "/mail-new"
 @using Microsoft.AspNetCore.WebUtilities
-@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Web
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.EntityFrameworkCore
 @using Microsoft.JSInterop
+@using Oracle.ManagedDataAccess.Client
 @using SCemail.Components.Data
 @using MudBlazor
 @using System.Text.RegularExpressions
-@using System.Net
+@using static SCemail.Components.Data.MailService_NEW
 @inject NavigationManager Nav
 @inject MailService_NEW MailSvc
-@inject MailService mailService
-@inject IJSRuntime Js
 @inject SCemail.Components.Data.AccessiService AccessiSrv
-@inject HttpClient Http
 @inject IDialogService DialogService
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 @inject SCemail.Components.Shared.IEmailTasksClient TaskClient
+@inject IDbContextFactory<MailDbContext> DbFactory
+@if (_isLoading)
+{
+    <div class="loading-screen">
+        <div class="dots-loader">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+        <div class="loading-text">Caricamento email in corso…</div>
+    </div>
+}
+else
+{
+    <div class="workspace">
+        <!-- ===== SIDEBAR ===== -->
+        <aside class="sidebar @( _sidebarOpen ? "open" : "closed")"
+               @onmouseenter="() => _sidebarOpen = true"
+               @onmouseleave="() => _sidebarOpen = false">
+            <div class="sidebar-inner">
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.Edit"
+                           OnClick="NewEmail"
+                           Class="sidebar-btn">
+                    @if (_sidebarOpen)
+                    {
+                        <span>Nuova email</span>
+                    }
+                </MudButton>
 
-<div class="mail-container">
-    <!-- SIDEBAR -->
-    <aside class="sidebar">
-        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Home"
-                   OnClick="@(()=> Nav.NavigateTo("/"))">
-            Home
-        </MudButton>
-        <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                   StartIcon="@Icons.Material.Filled.Edit"
-                   OnClick="NewEmail">
-            Nuova Email
-        </MudButton>
-        <MudTextField @bind-Value="_search"
-                      Placeholder="🔍 Filtra oggetto o mittente"
-                      Adornment="Adornment.Start"
-                      AdornmentIcon="@Icons.Material.Filled.Search"
-                      Immediate="true"
-                      Class="mb-3" />
+                <ul class="folder-list">
 
-        <ul class="folder-list">
-            @foreach (var f in _folders)
+                    @* Se admin → aggiunge la cartella Amministrazione *@
+                    @if (_isAdmin)
+                    {
+                        <li @onclick="@(() => ChangeFolder("admin"))"
+                            class="@IsActive("admin")">
+                            <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" />
+                            @if (_sidebarOpen)
+                            {
+                                <span class="label">Amministrazione</span>
+                            }
+                        </li>
+                    }
+
+                    @* Cartelle normali *@
+                    @foreach (var f in _folders)
+                    {
+                        <li @onclick="@(() => ChangeFolder(f.UiName))"
+                            class="@IsActive(f.UiName)">
+                            <MudIcon Icon="@f.IconClass" />
+
+                            @if (_sidebarOpen)
+                            {
+                                <span class="label">@f.Label</span>
+                                @* <span class="bubble">@f.Count</span> *@
+                            }
+                        </li>
+                    }
+                    <li @onclick="@(() => ChangeFolder("mentions"))"
+                        class="@IsActive("mentions")">
+
+                        <MudIcon Icon="@Icons.Material.Filled.Campaign" />
+
+                        @if (_sidebarOpen)
+                        {
+                            <span class="label">Menzioni</span>
+
+                            @if (_mentionsCount > 0)
+                            {
+                                <span class="bubble">@_mentionsCount</span>
+                            }
+                        }
+                    </li>
+
+
+
+                </ul>
+
+            </div>
+        </aside>
+
+        <!-- ===== MAIN ===== -->
+        <main class="mail-container">
+            @if (_folder != "admin")
             {
-                <li @onclick='() => ChangeFolder(f.UiName)' class="@IsActive(f.UiName)">
-                    <MudIcon Icon="@f.IconClass" />
-                    <span class="label">@f.Label</span>
-                    <span class="bubble">@f.Count</span>
-                </li>
-            }
-        </ul>
-    </aside>
+                <div class="mail-header-top">
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Home"
+                               OnClick="@GoHome">
+                        Home
+                    </MudButton>
 
-    <!-- MAIN -->
-    <section class="mail-grid @( _thread?.Any() == true ? "" : "full-list" )">
-        <!-- LISTA -->
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.TaskAlt"
+                               OnClick="@GoToTasks">
+                        Vai ai Task
+                    </MudButton>
+                </div>
+            }
+            @if (_folder == "admin" && _isAdmin)
+            {
+        <MudPaper Class="redirect-admin">
+            <MudText Typo="Typo.h6">Reindirizzamento alla dashboard amministrativa…</MudText>
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+        </MudPaper>
+    }
+
+    else
+    {
+            <section class="mail-grid @( _selectedId != null ? "detail-view" : "full-list")">
+
+        @* ============================
+           LISTA NORMALE
+           ============================ *@
         <div class="mail-list">
             <div class="list-header">
-                <h4>@Title</h4>
-                <MudIconButton Icon="@Icons.Material.Filled.Refresh" OnClick="Reload" Color="Color.Primary" />
+                <div class="title">
+                    <MudIcon Icon="@Icons.Material.Filled.Mail" />
+                    <span>@Title</span>
+                </div>
+
+                <MudTextField T="string"
+                              Value="_searchText"
+                              ValueChanged="async v => await OnSearchChanged(v)"
+                              Placeholder="Cerca..."
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              DebounceInterval="400"
+                              Immediate="true"
+                              Class="search-box" />
+
+                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                               OnClick="Reload"
+                               Color="Color.Primary" />
             </div>
-            <MudText Typo="Typo.caption" Class="text-muted ms-2">
-                (@_thread.Count messaggi)
-            </MudText>
 
-            <div class="list-scroll" @key="_folder">
+            <div id="mailScroll" class="list-scroll" @ref="_scrollDiv">
                 <ul class="mail-ul">
-                    <Virtualize TItem="EmailListItem_NEW" ItemsProvider="LoadEmails" Context="item">
+                    @foreach (var item in _emails)
+                    {
                         <li @key="item.Id"
-                            @onclick="() => SelectEmail(item.Id)"
-                            class="mail-item @( _selectedId == item.Id ? "selected" : "" ) @(string.IsNullOrEmpty(item.Aperto) || item.Aperto != "Y" ? "unread" : "")">
-                            <div class="list-row">
-                                <MudAvatar Text="@item.Mittente?.FirstOrDefault().ToString()" Color="Color.Info" />
+                            class="mail-row @(item.Aperto == "Y" ? "read" : "unread")"
+                            @onclick="@(() => OpenEmailAndMarkRead(item))">
 
-                                <div class="list-main">
-                                    <div class="row-top">
-                                        <span class="subject">@item.Oggetto</span>
-                                        <span class="date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</span>
-                                    </div>
-                                    <div class="row-bottom">
-                                        <span class="from" title="@item.Mittente">@item.Mittente</span>
-                                        <span class="snippet text-muted">
-                                            @((item.Preview?.Length > 120 ? item.Preview[..120] + "…" : item.Preview) ?? "")
-                                        </span>
-                                    </div>
-                                </div>
+                            <div class="status-strip"></div>
 
-                                <div class="attachments-icons">
-                                    @if (item.Allegati?.Any() == true)
-                                    {
-                                        @foreach (var a in item.Allegati.Take(3))
+                            <div class="left">
+                                <MudTooltip Text="@item.Mittente">
+                                    <div class="from">@ExtractEmail(item.Mittente)</div>
+                                </MudTooltip>
+
+                                <div class="subject">@item.Oggetto</div>
+                                <div class="preview">@item.Preview</div>
+                                <div class="casella">@item.CasellaEmail</div>
+                            </div>
+
+                            <div class="right">
+                                @{
+                                    var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
+                                    var shortList = assList.Take(2).ToList();
+                                    var extra = assList.Count - shortList.Count;
+                                }
+
+                                <MudTooltip Text="@string.Join("\n", assList)">
+                                    <div class="assigned">
+                                        @foreach (var a in shortList)
                                         {
-                                            <MudTooltip Text="@a.NomeFile">
-                                                <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" Size="Size.Small" Class="mx-1" />
+                                            <span class="chip">@a</span>
+                                        }
+                                        @if (extra > 0)
+                                        {
+                                            <span class="chip more">+@extra</span>
+                                        }
+                                    </div>
+                                </MudTooltip>
+
+                                @if (item.Allegati?.Any() == true)
+                                {
+                                    <div class="attach">
+                                        @foreach (var icon in GetAttachmentGroupIcons(item))
+                                        {
+                                            var files = item.Allegati
+                                            .Where(a => MatchesIcon(a.NomeFile, icon))
+                                            .Select(a => a.NomeFile)
+                                            .ToList();
+
+                                            <MudTooltip Text="@string.Join("\n", files)">
+                                                <MudIcon Icon="@icon" Class="att-icon" />
                                             </MudTooltip>
                                         }
-                                    }
-                                </div>
-
-                            </div>
-                        </li>
-                    </Virtualize>
-                </ul>
-            </div>
-        </div>
-
-        <!-- DETTAGLIO -->
-        <div class="mail-detail">
-            @if (_loadingDetail)
-            {
-                <MudSkeleton Width="100%" Height="200px" Animation="Animation.Wave" />
-            }
-            else if (_thread?.Any() == true)
-            {
-                <header class="conv-head">
-                    <MudText Typo="Typo.h6"><MudIcon Icon="@Icons.Material.Filled.Email" /> @_thread.Last().Oggetto</MudText>
-
-                    <div class="conv-head-actions">
-                        <MudTooltip Text="Segna tutto come letto">
-                            <div @onclick:stopPropagation="true">
-                                <MudIconButton Icon="@Icons.Material.Filled.MarkEmailRead"
-                                               OnClick="MarkThreadReadAsync" />
-                            </div>
-                        </MudTooltip>
-
-                        <MudTooltip Text="Segna tutto come non letto">
-                            <div @onclick:stopPropagation="true">
-                                <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
-                                               OnClick="MarkThreadUnreadAsync" />
-                            </div>
-                        </MudTooltip>
-
-                        <div @onclick:stopPropagation="true">
-                            <MudIconButton Icon="@Icons.Material.Filled.UnfoldMore" OnClick="ExpandAll" />
-                        </div>
-                        <div @onclick:stopPropagation="true">
-                            <MudIconButton Icon="@Icons.Material.Filled.UnfoldLess" OnClick="CollapseMiddle" />
-                        </div>
-                    </div>
-
-                </header>
-
-                <ul class="conv-list">
-                    @foreach (var msg in _thread)
-                    {
-                        var isExpanded = _expanded.Contains(msg.Id);
-                        var isUnread = string.IsNullOrEmpty(msg.Aperto) || msg.Aperto != "Y";
-
-                        <li class="conv-item @(isExpanded ? "open" : "closed")" @onclick="() => ToggleMsg(msg)">
-                            <div class="conv-line" @onclick:stopPropagation="true">
-
-                                <MudIcon Icon="@Icons.Material.Filled.Circle"
-                                         Color="@(isUnread ? Color.Primary : Color.Default)" Size="Size.Small" />
-                                <div class="conv-meta">
-                                    <div class="top">
-                                        <span class="from"><MudIcon Icon="@Icons.Material.Filled.Person" /> @msg.Mittente</span>
-                                        <span class="to">→ @msg.Destinatari</span>
-                                        <span class="date"><MudIcon Icon="@Icons.Material.Filled.Schedule" /> @msg.Data?.ToString("dd/MM/yyyy HH:mm")</span>
                                     </div>
-                                    <div class="subject @(isUnread ? "bold" : "")">
-                                        @msg.Oggetto
-                                        <span class="pill">@((isExpanded ? "▲" : "▼"))</span>
-                                    </div>
-                                </div>
+                                }
 
-                                <div class="conv-actions" style="margin-left:auto;display:flex;gap:6px;">
-                                    <MudTooltip Text="Segna come letto">
-                                        <div @onclick:stopPropagation="true">
-                                            <MudIconButton Icon="@Icons.Material.Filled.MarkEmailRead"
-                                                           Color="Color.Default"
-                                                           OnClick="@(() => MarkAsReadAsync(msg))" />
-                                        </div>
-                                    </MudTooltip>
+                                <div class="date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</div>
 
-                                    <MudTooltip Text="Segna come non letto">
-                                        <div @onclick:stopPropagation="true">
-                                            <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
-                                                           Color="Color.Default"
-                                                           OnClick="@(() => MarkAsUnreadAsync(msg))" />
-                                        </div>
-                                    </MudTooltip>
+                                <div class="actions" style="display:flex; gap:6px; margin-top:4px;">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                   Color="Color.Primary"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => Forward(item))"
+                                                   OnClick:stopPropagation="true"
+                                                   Title="Inoltra" />
 
-                                    <div @onclick:stopPropagation="true">
-                                        <MudIconButton Icon="@Icons.Material.Filled.Reply"
-                                                       Size="Size.Small"
-                                                       OnClick="@(() => Reply(msg))"
-                                                       Title="Rispondi" />
-                                    </div>
-
-                                    <div @onclick:stopPropagation="true">
-                                        <MudIconButton Icon="@Icons.Material.Filled.ReplyAll"
-                                                       Size="Size.Small"
-                                                       OnClick="@(() => ReplyAll(msg))"
-                                                       Title="Rispondi a tutti" />
-                                    </div>
-
-                                    <div @onclick:stopPropagation="true">
-                                        <MudIconButton Icon="@Icons.Material.Filled.Forward"
-                                                       Size="Size.Small"
-                                                       OnClick="@(() => Forward(msg))"
-                                                       Title="Inoltra come task" />
-                                    </div>
-                                </div>
-
-                            </div>
-
-                            @if (isExpanded)
-                            {
-                                <div class="conv-body-grid" @onclick:stopPropagation="true">
-                                    <div class="conv-main">
-                                        @if (!msg.IsLoaded)
-                                        {
-                                            <MudSkeleton Height="120px" Animation="Animation.Wave" />
-                                        }
-                                        else
-                                        {
-                                            @((MarkupString)(msg.CorpoHtml ?? msg.CorpoTesto ?? ""))
-
-                                            @if (msg.Allegati?.Any() == true)
-                                            {
-                                                <div class="conv-attachments">
-                                                    @foreach (var a in msg.Allegati)
-                                                    {
-                                                        <a class="attach" href="@GetDownloadUrl(a.Id)" target="_blank"
-                                                           title="Scarica @a.NomeFile" @onclick:stopPropagation="true">
-                                                            <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" Size="Size.Small" />
-                                                            <span>@a.NomeFile</span>
-                                                        </a>
-                                                    }
-                                                </div>
-                                            }
-                                        }
-                                    </div>
-
-                                    @if (_comments.ContainsKey(msg.Id) && _comments[msg.Id].Any())
+                                    @if (_folder == "inbox")
                                     {
-                                        <div class="conv-comments">
-                                            @foreach (var c in _comments[msg.Id])
-                                            {
-                                                <div class="comment">
-                                                    <div class="meta">@c.Utente - @c.DataCreazione.ToString("g")</div>
-                                                    @RenderMentions(c.Testo)
-                                                </div>
-                                            }
-                                        </div>
+                                        <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                       Color="Color.Success"
+                                                       Size="Size.Small"
+                                                       OnClick="@(() => Archive(item))"
+                                                       OnClick:stopPropagation="true"
+                                                       Title="Archivia" />
                                     }
                                 </div>
-                            }
+                            </div>
                         </li>
                     }
                 </ul>
 
-                <!-- compose -->
-                @if (_showCompose)
+                @if (_loadingList)
                 {
-                    <div class="compose-box">
-                        <MudTextField Label="A" @bind-Value="_composeTo" FullWidth="true" />
-                        <MudTextField Label="Oggetto" @bind-Value="_composeSubject" FullWidth="true" />
-                        <MudTextField Label="Messaggio"
-                                      @bind-Value="_composeBody"
-                                      Lines="8"
-                                      FullWidth="true"
-                                      Style="font-family:Courier New, monospace;" />
-
-                        <InputFile OnChange="OnFileSelected" multiple />
-
-                        <div class="actions">
-                            <MudButton OnClick="SendCompose" Color="Color.Primary">Invia</MudButton>
-                            <MudButton OnClick="@(() => _showCompose = false)">Chiudi</MudButton>
+                    <div class="load-more">
+                        <div class="dots-loader small">
+                            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                         </div>
+                        <span class="load-text">Carico…</span>
                     </div>
                 }
-            }
-            else
+            </div>
+        </div>
+
+        @* ============================
+           DETTAGLIO EMAIL
+           ============================ *@
+        <div class="mail-detail">
+            @if (_loadingDetail)
             {
-                <MudText Typo="Typo.subtitle1" Class="text-muted">
-                    Seleziona un'email dalla lista
-                </MudText>
+                <div class="detail-loader">
+                    <div class="dots-loader small">
+                        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                    </div>
+                    <span class="load-text">Carico email…</span>
+                </div>
+            }
+            else if (_thread?.Any() == true)
+            {
+                var msg = _thread.Last();
+
+                <div class="detail-header">
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                   Color="Color.Primary"
+                                   OnClick="@BackToList"
+                                   Title="Torna alla lista" />
+                    <div class="head-titles">
+                        <div class="head-subject">@msg.Oggetto</div>
+                        <div class="head-meta">@msg.Mittente • @msg.Data?.ToString("dd/MM/yyyy HH:mm")</div>
+                    </div>
+                </div>
+
+                <div class="mail-actions" style="margin: 10px 16px; display:flex; gap:10px;">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Reply"
+                               OnClick="@(() => Reply(msg))">
+                        Rispondi
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
+                               StartIcon="@Icons.Material.Filled.ReplyAll"
+                               OnClick="@(() => ReplyAll(msg))">
+                        Rispondi a tutti
+                    </MudButton>
+                </div>
+
+                <div class="mail-body">
+                    @((MarkupString)(msg.CorpoHtml ?? msg.CorpoTesto ?? ""))
+
+                    @if (msg.Allegati?.Any() == true)
+                    {
+                        <div class="attachments-grid">
+                            @foreach (var a in msg.Allegati)
+                            {
+                                <a class="attach-chip" href="@GetDownloadUrl(a.Id)" target="_blank">
+                                    <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
+                                    <span>@a.NomeFile</span>
+                                </a>
+                            }
+                        </div>
+                    }
+                </div>
             }
         </div>
-    </section>
-</div>
+                </section>
+
+    }
+
+
+           
+        </main>
+    </div>
+    }
+}
 
 @code {
     private string _folder = "inbox";
-    private string? _cp;
-    private string? _utente;
-    private string? _firma;
-    private int? _selectedId;
-    private List<EmailDetail_NEW> _thread = new();
-    private HashSet<int> _expanded = new();
+    private string? _cp, _utente;
+    private bool _isLoading = true, _loadingList, _loadingDetail, _sidebarOpen = true;
     private List<FolderItem_NEW> _folders = new();
-
-    private bool _loadingDetail;
-    private bool _showCompose;
-    private string? _composeTo, _composeSubject, _composeBody;
-
-    private Dictionary<int, List<TaskComment_NEW>> _comments = new();
-    private Dictionary<int, string> _newComments = new();
-
-    private readonly List<MailService_NEW.OutgoingAttachment_NEW> _outgoing = new();
-    private string? _search;
-    private CancellationTokenSource? _selectCts;
-
+    private List<EmailListItem_NEW> _emails = new();
+    private List<EmailDetail_NEW> _thread = new();
+    private int _pageSize = 20;  // carica 20 email per volta
+    private int _currentIndex = 0;
+    private bool _hasMore = true;
+    private int? _selectedId;
+    private List<MailService_NEW.CommentoEmail> _comments = new();
+    private string? _newCommentText;
+    private List<string> _mentionSuggestions = new();
     private List<string> _allUsers = new();
-    private bool _showMention;
-    private int? _mentionMsgId;
-    private string _mentionPrefix = "";
-    private List<string> _mentionCandidates = new();
+    private List<AdminEmailDto> _emailInLavorazione = new();
+    private bool _isAdmin;
+    private int _mentionsCount = 0;
 
+    private List<AdminEmailDto> _emailConcluse = new();
+    private List<AdminEmailDto> _emailInLavorazioneFiltrate = new();
+    private List<AdminEmailDto> _emailConcluseFiltrate = new();
+    private bool _loadingDashboard = false;
     private string Title => _folder switch
     {
-        "inbox" => "📥 Posta in arrivo",
-        "drafts" => "📝 Bozze",
-        "sent" => "📤 Inviati",
-        "all" => "📚 Tutti",
-        "trash" => "🗑️ Cestino",
-        "spam" => "🚫 Spam",
-        _ => "📂 Posta"
+        "inbox" => "Posta in arrivo (assegnate a me)",
+        "myarchive" => "Mio archivio",
+        "all" => "Tutti i messaggi",
+        _ => "Posta"
     };
+    private string? _searchText;
+    private List<int>? _caselleIds;
+    private string? _filtroUtente = "";
+    private DateRange _filtroDate = new();
+    private List<string> utenti = new();
+
+    private string? _filtroStato = "";
+    private List<string> utentiFiltrati = new();
+
+    private List<string> _chartLabels = new();
+    private List<double[]> _chartData = new();
+
+    // modal
+    private bool _dialogOpen = false;
+    private string _dialogTitle = "";
+    private List<AdminEmailDto> _dialogList = new();
+
+
+    private void ApplicaFiltri()
+    {
+        IEnumerable<AdminEmailDto> aperte = _emailInLavorazione;
+        IEnumerable<AdminEmailDto> chiuse = _emailConcluse;
+
+        // --------------------------
+        // FILTRO UTENTE
+        // --------------------------
+        if (!string.IsNullOrWhiteSpace(_filtroUtente))
+        {
+            aperte = aperte.Where(x => x.AssegnatoA == _filtroUtente);
+            chiuse = chiuse.Where(x => x.AssegnatoA == _filtroUtente);
+        }
+
+        // --------------------------
+        // FILTRO STATO
+        // --------------------------
+        if (_filtroStato == "open")
+            chiuse = Enumerable.Empty<AdminEmailDto>();
+        else if (_filtroStato == "closed")
+            aperte = Enumerable.Empty<AdminEmailDto>();
+
+        // --------------------------
+        // FILTRO DATE
+        // --------------------------
+        if (_filtroDate?.Start != null && _filtroDate?.End != null)
+        {
+            var da = _filtroDate.Start.Value.Date;
+            var a = _filtroDate.End.Value.Date.AddDays(1).AddTicks(-1);
+
+            aperte = aperte.Where(x => x.Data >= da && x.Data <= a);
+            chiuse = chiuse.Where(x => x.Data >= da && x.Data <= a);
+        }
+
+        // --------------------------
+        // AGGIORNA LISTE FILTRATE
+        // --------------------------
+        _emailInLavorazioneFiltrate = aperte.ToList();
+        _emailConcluseFiltrate = chiuse.ToList();
+
+        // --------------------------
+        // AGGIORNA NOMI UTENTI DA MOSTRARE
+        // --------------------------
+        utentiFiltrati = aperte
+            .Concat(chiuse)
+            .Select(x => x.AssegnatoA)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToList();
+
+        StateHasChanged();
+    }
+
+    private void ResetFiltri()
+    {
+        _filtroUtente = "";
+        _filtroStato = "";
+        _filtroDate = new DateRange();
+
+        _emailInLavorazioneFiltrate = _emailInLavorazione;
+        _emailConcluseFiltrate = _emailConcluse;
+
+        utentiFiltrati = utenti;
+
+        StateHasChanged();
+    }
+
+
+    private void MostraListaCompleta(string utente, bool concluse)
+    {
+        _dialogOpen = true;
+        _dialogTitle = concluse ? $"Email concluse di {utente}" : $"Email da svolgere di {utente}";
+
+        _dialogList = concluse
+            ? _emailConcluse.Where(x => x.AssegnatoA == utente).OrderByDescending(x => x.Data).ToList()
+            : _emailInLavorazione.Where(x => x.AssegnatoA == utente).OrderByDescending(x => x.Data).ToList();
+    }
+
+    private void ApriEmail(int id)
+    {
+        Nav.NavigateTo($"/mail-detail/{id}/{_cp}");
+    }
+
+    private async Task OnSearchChanged(string? value)
+    {
+        _searchText = value?.Trim();
+        _currentIndex = 0;
+        _emails.Clear();
+        _hasMore = true;
+
+        _caselleIds ??= await AccessiSrv.GetCaselleAbilitateAsync(_utente!);
+
+        await LoadMoreEmails(_caselleIds, _searchText);
+    }
+
+
+
+
+
+    private bool MatchesIcon(string? fileName, string icon)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return false;
+        var f = fileName.ToLowerInvariant();
+
+        return icon switch
+        {
+            Icons.Material.Filled.PictureAsPdf => f.EndsWith(".pdf"),
+            Icons.Material.Filled.Image => f.EndsWith(".jpg") || f.EndsWith(".jpeg") || f.EndsWith(".png"),
+            Icons.Material.Filled.Description => f.EndsWith(".doc") || f.EndsWith(".docx"),
+            Icons.Material.Filled.TableChart => f.EndsWith(".xls") || f.EndsWith(".xlsx"),
+            _ => true
+        };
+    }
+
+
+    private async Task ApplyFilter()
+    {
+        _currentIndex = 0;
+        _emails.Clear();
+        _hasMore = true;
+        await LoadMoreEmails();
+    }
+
+    private async Task LoadCommentsAsync(int emailId)
+    {
+        _comments = await MailSvc.GetCommentsByEmailAsync(emailId);
+        StateHasChanged();
+    }
+
+    private void BackToList()
+    {
+        _selectedId = null;
+        _thread.Clear();
+        _comments.Clear();
+    }
+
+    private ElementReference _scrollDiv;
+    private bool _listenerAttached;
+    private DotNetObjectReference<Mail_NEW>? _dotNetRef;
+    protected override void OnInitialized()
+    {
+        _dotNetRef = DotNetObjectReference.Create(this);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_isLoading && !_listenerAttached && _scrollDiv.Context != null)
+        {
+            await JS.InvokeVoidAsync("initMailScrollListener", _dotNetRef, _scrollDiv);
+            _listenerAttached = true;
+            Console.WriteLine("🟢 Scroll listener JS inizializzato");
+        }
+    }
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+    }
+
+    [JSInvokable]
+    public async Task OnMailScrolledToBottom()
+    {
+        if (_loadingEmails || !_hasMore) return;
+        await LoadMoreEmails();
+    }
 
     protected override async Task OnParametersSetAsync()
     {
+        
         var uri = Nav.ToAbsoluteUri(Nav.Uri);
         var q = QueryHelpers.ParseQuery(uri.Query);
         _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
-        if (!string.IsNullOrWhiteSpace(_cp)) _utente = AccessiSrv.GetUtenteFromCp(_cp);
-
         _folder = q.TryGetValue("folder", out var f) ? f.ToString().ToLower() : "inbox";
+        _allUsers = await MailSvc.GetUserListAsync();
+
+        _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+        _isAdmin = await AccessiSrv.IsAdminAsync(_utente);
+
+        // ⬇️ se hai un modo per capire se è admin, usalo qui
+        // per esempio:
+        //_isAdmin = await AccessiSrv.IsAdminAsync(_utente);
+        // oppure lascialo se lo gestisci altrove
+        if (_folder == "admin" && _isAdmin)
+        {
+            Nav.NavigateTo($"/admin-dashboard?cp={_cp}", true);
+            return;
+        }
 
         if (!string.IsNullOrWhiteSpace(_utente))
         {
-            var id = await MailSvc.GetCasellaIdAsync(_utente);
-            _folders = await MailSvc.GetFoldersAsync(id);
+            _caselleIds = await AccessiSrv.GetCaselleAbilitateAsync(_utente);
 
-            if (_allUsers.Count == 0)
-                _allUsers = await MailSvc.GetUserListAsync();
+            var unreadInbox = await MailSvc.CountUnreadAsync(_utente!);
+            var unreadArchive = 0;
+            var unreadAll = 0;
 
-            // 👇 carica la firma dell’utente se non ancora presente
-            if (_firma == null)
-                _firma = await MailSvc.GetFirmaUtenteAsync(_utente);
+            _folders = new()
+        {
+            new FolderItem_NEW("inbox",     "Posta in arrivo", Icons.Material.Filled.Inbox,   1, unreadInbox),
+            new FolderItem_NEW("myarchive", "Mio archivio",    Icons.Material.Filled.Archive, 2, unreadArchive),
+            new FolderItem_NEW("all",       "Tutti i messaggi", Icons.Material.Filled.AllInbox, 3, unreadAll)
+        };
+
+            // ⬇️ IMPORTANTE: se sono in admin NON carico le mail normali
+            if (_folder != "admin")
+            {
+                // Carica la lista normale di email
+                await LoadMoreEmails(_caselleIds);
+            }
+            else
+            {
+                if (_isAdmin)
+                {
+                    // Carica la dashboard admin
+                    _loadingDashboard = true;
+                    _emailInLavorazione = await GetEmailInLavorazioneAsync();
+                    _emailConcluse = await GetEmailCompletateAsync();
+
+                    _emailInLavorazioneFiltrate = _emailInLavorazione;
+                    _emailConcluseFiltrate = _emailConcluse;
+
+                    utenti = _emailInLavorazione
+                       .Concat(_emailConcluse)
+                       .Select(x => x.AssegnatoA)
+                       .Where(x => !string.IsNullOrWhiteSpace(x))
+                       .Distinct()
+                       .OrderBy(x => x)
+                       .ToList();
+
+                    utentiFiltrati = utenti;
+                    _loadingDashboard = false;
+                }
+            }
+
+        }
+
+        _isLoading = false;
+    }
+
+
+
+    private string GetAttachmentCss(string icon)
+    {
+        if (icon == Icons.Material.Filled.PictureAsPdf) return "att-ico pdf";
+        return "att-ico";
+    }
+    private string ExtractEmail(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "";
+
+        raw = raw.Trim();
+
+        // 1️⃣ Se contiene <email>, estrai quella
+        int start = raw.IndexOf('<');
+        int end = raw.IndexOf('>');
+        if (start >= 0 && end > start)
+        {
+            var inside = raw.Substring(start + 1, end - start - 1).Trim();
+            if (IsValidEmail(inside))
+                return inside;
+        }
+
+        // 2️⃣ Se la stringa contiene già un indirizzo email senza < >
+        var match = Regex.Match(raw, @"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}");
+        if (match.Success)
+            return match.Value.ToLower();
+
+        // 3️⃣ fallback: restituisci tutto
+        return raw;
+    }
+
+    private bool IsValidEmail(string email)
+    {
+        return Regex.IsMatch(email,
+            @"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$");
+    }
+
+
+
+    private List<string> GetAttachmentGroupIcons(EmailListItem_NEW item)
+    {
+        return item.Allegati?
+            .Select(a => a.NomeFile?.ToLowerInvariant() ?? "")
+            .Select(n =>
+            {
+                if (n.EndsWith(".pdf")) return Icons.Material.Filled.PictureAsPdf;
+                if (n.EndsWith(".jpg") || n.EndsWith(".jpeg") || n.EndsWith(".png"))
+                    return Icons.Material.Filled.Image;
+                if (n.EndsWith(".doc") || n.EndsWith(".docx"))
+                    return Icons.Material.Filled.Description;
+                if (n.EndsWith(".xls") || n.EndsWith(".xlsx"))
+                    return Icons.Material.Filled.TableChart;
+                return Icons.Material.Filled.AttachFile;
+            })
+            .Distinct()
+            .ToList() ?? new List<string>();
+    }
+
+
+    private string IsActive(string f) => _folder == f ? "active" : "";
+    private void ChangeFolder(string folder) => Nav.NavigateTo($"/mail-new?cp={_cp}&folder={folder}", true);
+
+    private async Task Reply(EmailDetail_NEW msg)
+    {
+        var parameters = new DialogParameters
+        {
+            ["Utente"] = _utente,
+            ["Destinatari"] = msg.Mittente,
+            ["Oggetto"] = "Re: " + (msg.Oggetto ?? ""),
+            ["CorpoIniziale"] = "",
+            ["ReplyToMessageId"] = msg.MessageId,
+            ["CasellaMittente"] = msg.CasellaEmail
+        };
+
+        var dialog = DialogService.Show<ComposeDialog>(
+        "Rispondi",
+        parameters,
+        new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+    );
+
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Risposta inviata ✅", Severity.Success);
+    }
+
+    private List<string> GetAssignedList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return new List<string>();
+        return raw.Split(';', ',')
+                  .Select(s => s.Trim())
+                  .Where(s => s.Length > 0)
+                  .ToList();
+    }
+
+
+    private async Task ReplyAll(EmailDetail_NEW msg)
+    {
+        // Mittente + tutti i destinatari (escludendo duplicati e il proprio indirizzo)
+        var destinatariTutti = string.Join("; ",
+            new[] { msg.Mittente }
+            .Concat((msg.Destinatari ?? "").Split(';', ',').Select(x => x.Trim()))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct());
+
+        var parameters = new DialogParameters
+        {
+            ["Utente"] = _utente,
+            ["Destinatari"] = msg.Mittente,
+            ["Oggetto"] = "Re: " + (msg.Oggetto ?? ""),
+            ["CorpoIniziale"] = "",
+            ["ReplyToMessageId"] = msg.MessageId,
+            ["CasellaMittente"] = msg.CasellaEmail
+        };
+        var dialog = DialogService.Show<ComposeDialog>(
+            "Rispondi a tutti",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+        );
+
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Risposta a tutti inviata ✅", Severity.Success);
+    }
+    private async Task Archive(EmailListItem_NEW item)
+    {
+        await MailSvc.ArchiveEmailAsync(item.Id, _utente!);
+        Snackbar.Add("Email archiviata ✔", Severity.Success);
+
+        if (_folder == "inbox")
+            _emails.Remove(item);
+
+        StateHasChanged();
+    }
+    public async Task<List<AdminEmailDto>> GetEmailInLavorazioneAsync()
+    {
+        using var db = DbFactory.CreateDbContext();
+
+        var query =
+            from a in db.EmailAssegnazione
+            join e in db.EmailRicevute on a.EmailId equals e.Id
+            where !db.EmailArchivio.Any(ar => ar.IdEmail == e.Id)
+            select new
+            {
+                e.Id,
+                e.Oggetto,
+                e.Mittente,
+                e.DataRicezione,
+                a.Utente
+            };
+
+        var raw = await query.OrderByDescending(x => x.DataRicezione).ToListAsync();
+
+        // 👉 Qui aggiungiamo la proprietà Completata *in memoria* (NO SQL)
+        return raw.Select(x => new AdminEmailDto
+        {
+            EmailId = x.Id,
+            Oggetto = x.Oggetto,
+            Mittente = x.Mittente,
+            Data = x.DataRicezione,
+            AssegnatoA = x.Utente,
+            Completata = false   // ← questo ora NON finisce in SQL
+        }).ToList();
+    }
+
+
+
+    public async Task<List<AdminEmailDto>> GetEmailCompletateAsync()
+    {
+        using var db = DbFactory.CreateDbContext();
+
+        var query =
+            from ar in db.EmailArchivio
+            join e in db.EmailRicevute on ar.IdEmail equals e.Id
+            select new
+            {
+                e.Id,
+                e.Oggetto,
+                e.Mittente,
+                ar.DataArchiviazione,
+                ar.Utente
+            };
+
+        var raw = await query.OrderByDescending(x => x.DataArchiviazione).ToListAsync();
+
+        return raw.Select(x => new AdminEmailDto
+        {
+            EmailId = x.Id,
+            Oggetto = x.Oggetto,
+            Mittente = x.Mittente,
+            Data = x.DataArchiviazione,
+            AssegnatoA = x.Utente,
+            Completata = true
+        }).ToList();
+    }
+
+
+
+    private async Task MoveToFolder(int emailId, string newFolder)
+    {
+        await MailSvc.UpdateFolderPathAsync(emailId, newFolder);
+        _emails.RemoveAll(x => x.Id == emailId);
+        Snackbar.Add(newFolder == "trash" ? "Spostata nel cestino" : "Aggiunta ai preferiti", Severity.Success);
+    }
+
+    private async Task HandleScroll()
+    {
+        Console.WriteLine("🔹 Scroll event triggerato (C#)");
+
+        try
+        {
+            bool atBottom = await JS.InvokeAsync<bool>("checkMailScrollBottom");
+            Console.WriteLine($"🔸 JS returned atBottom = {atBottom}");
+
+            if (atBottom && !_loadingList && _hasMore)
+            {
+                Console.WriteLine("⚡️ Carico altre email...");
+                await LoadMoreEmails();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore nello scroll: {ex.Message}");
         }
     }
 
-    private async ValueTask<ItemsProviderResult<EmailListItem_NEW>> LoadEmails(ItemsProviderRequest request)
+
+
+    private bool _loadingEmails = false;
+
+    public async Task LoadMoreEmails(List<int>? casellaIds = null, string? filtro = null)
     {
+        if (_loadingEmails)
+            return;
+
+        _loadingEmails = true;
+        _loadingList = true;
+        StateHasChanged();
+
         try
         {
             if (string.IsNullOrWhiteSpace(_utente))
-                return new ItemsProviderResult<EmailListItem_NEW>(Array.Empty<EmailListItem_NEW>(), 0);
+                return;
 
-            var casellaId = await MailSvc.GetCasellaIdAsync(_utente, request.CancellationToken);
+            casellaIds ??= _caselleIds ?? await AccessiSrv.GetCaselleAbilitateAsync(_utente);
+            string? filtroEffettivo = filtro ?? _searchText?.Trim();
 
-            // Forza batch piccolo
-            var pageSize = Math.Min(request.Count, 20);
-
-            var (list, total) = await MailSvc.GetEmailPageAsync(
-                casellaId,
-                request.StartIndex,
-                pageSize,
-                folderUi: _folder,
-                ct: request.CancellationToken);
-
-            if (!string.IsNullOrWhiteSpace(_search))
+            // 🔔 MENTIONS (intoccato)
+            if (_folder == "mentions")
             {
-                list = list.Where(x =>
-                    (x.Oggetto ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase) ||
-                    (x.Mittente ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase)
-                ).ToList();
-                total = list.Count;
+                var (page, total) =
+                    await MailSvc.GetMentionedEmailsPagedSafeAsync(
+                        _utente!,
+                        _currentIndex,
+                        _pageSize
+                    );
+
+                if (_currentIndex == 0)
+                    _emails = page;
+                else
+                    _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                _currentIndex += _pageSize;
+                _hasMore = _emails.Count < total;
+
+                _mentionsCount = _emails.Count(x => x.Aperto == "N");
+                return;
             }
 
-            return new ItemsProviderResult<EmailListItem_NEW>(list, total);
+
+            // 🔍 RICERCA VELOCE (MITTENTE + OGGETTO)
+            if (!string.IsNullOrWhiteSpace(filtroEffettivo) && filtroEffettivo.Length >= 2)
+            {
+                var (page, total) = await MailSvc.SearchEmailsAsync(
+                    casellaIds: casellaIds,
+                    start: _currentIndex,
+                    pageSize: _pageSize,
+                    searchText: filtroEffettivo
+                );
+
+                if (_currentIndex == 0)
+                    _emails = page;
+                else
+                    _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                _currentIndex += _pageSize;
+                _hasMore = _emails.Count < total;
+                return;
+            }
+
+            // 📥 CARICAMENTO NORMALE
+            var (normalPage, totalCount) = await MailSvc.GetEmailPageAsync(
+                casellaIds,
+                _currentIndex,
+                _pageSize,
+                folderUi: _folder,
+                utente: _utente!,
+                filtro: null
+            );
+
+            if (_currentIndex == 0)
+                _emails = normalPage;
+            else
+                _emails.AddRange(normalPage.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+            _currentIndex += _pageSize;
+            _hasMore = _emails.Count < totalCount;
         }
-        catch (TaskCanceledException)
+        finally
         {
-            // ignorala: succede se scrolli veloce
-            return new ItemsProviderResult<EmailListItem_NEW>(Array.Empty<EmailListItem_NEW>(), 0);
+            _loadingEmails = false;
+            _loadingList = false;
+            StateHasChanged();
         }
     }
+
+
+
+
 
     private async Task SelectEmail(int id)
     {
         _selectedId = id;
         _loadingDetail = true;
-        _expanded.Clear();
-        _comments.Clear();
-        _newComments.Clear();
-        StateHasChanged();
+        _thread.Clear();
+        var full = await MailSvc.GetEmailDetailAsync(id, onlyMeta: false);
+        if (full != null)
+            _thread.Add(full);
 
-        // mostra subito meta
-        var meta = await MailSvc.GetEmailDetailAsync(id, onlyMeta: true);
-        _thread = meta is null ? new() : new() { meta };
-        _expanded = meta is null ? new() : new() { meta.Id };
         _loadingDetail = false;
-        StateHasChanged();
-
-        if (meta is not null)
-            _ = EnsureMessageLoadedAsync(meta);
-
+        await MailSvc.MarkOpenedAsync(id);
+        var opened = _emails.FirstOrDefault(e => e.Id == id);
+        if (opened != null)
+        {
+            opened = opened with { Aperto = "Y" };
+            var idx = _emails.FindIndex(e => e.Id == id);
+            if (idx >= 0)
+                _emails[idx] = opened;
+            StateHasChanged();
+        }
         _ = Task.Run(async () =>
         {
-            var conv = await MailSvc.GetConversationAsync(id);
-            if (conv?.Any() == true)
+            var conv = await MailSvc.GetConversationByThreadAsync(id);
+            if (conv != null && conv.Count > 1)
             {
-                var keep = new HashSet<int>();
-                keep.Add(conv.First().Id);
-                keep.Add(conv.Last().Id);
-
                 await InvokeAsync(() =>
                 {
-                    _thread = conv;
-                    _expanded = keep;
+                    // evita duplicato della mail già caricata
+                    foreach (var c in conv)
+                        if (!_thread.Any(t => t.Id == c.Id))
+                            _thread.Insert(0, c);
+
                     StateHasChanged();
                 });
             }
         });
-
-        _ = MailSvc.MarkOpenedAsync(id);
     }
 
-    private async Task EnsureMessageLoadedAsync(EmailDetail_NEW msg)
-    {
-        if (msg.IsLoaded) return;
-        var full = await MailSvc.GetEmailDetailAsync(msg.Id, onlyMeta: false);
-        if (full is null) return;
-        msg.CorpoHtml = full.CorpoHtml;
-        msg.CorpoTesto = full.CorpoTesto;
-        msg.Allegati = full.Allegati ?? Enumerable.Empty<AllegatoItem_NEW>();
-        msg.IsLoaded = true;
-        StateHasChanged();
-    }
-
-    private async Task EnsureCommentsLoadedAsync(int msgId)
-    {
-        if (_comments.ContainsKey(msgId)) return;
-        var raw = await TaskClient.GetCommentsAsync(msgId) ?? new();
-        _comments[msgId] = raw.Select(c => new TaskComment_NEW(c.Id, c.TaskId, c.Utente ?? "", c.Testo ?? "", c.DataCreazione)).ToList();
-        StateHasChanged();
-    }
-
-    private void ToggleMsg(EmailDetail_NEW msg)
-    {
-        if (_expanded.Contains(msg.Id))
-        {
-            _expanded.Remove(msg.Id);
-        }
-        else
-        {
-            // ✅ se vuoi UNA sola aperta, sostituisci con:
-            // _expanded = new HashSet<int> { msg.Id };
-            _expanded.Add(msg.Id);
-            _ = EnsureMessageLoadedAsync(msg);
-            _ = EnsureCommentsLoadedAsync(msg.Id);
-        }
-    }
-
-    private void ExpandAll() => _expanded = _thread.Select(m => m.Id).ToHashSet();
-    private void CollapseMiddle() { if (_thread.Count > 0) _expanded = new HashSet<int> { _thread.First().Id, _thread.Last().Id }; }
-    private void ChangeFolder(string folder) => Nav.NavigateTo($"/mail-new?cp={_cp}&folder={folder}", forceLoad: true);
-    private string IsActive(string f) => _folder == f ? "active" : "";
-
-    private async Task MarkAsReadAsync(EmailDetail_NEW msg)
-    {
-        await MailSvc.MarkOpenedAsync(msg.Id);
-        msg.Aperto = "Y";
-        StateHasChanged();
-    }
-    private async Task MarkAsUnreadAsync(EmailDetail_NEW msg)
-    {
-        await MailSvc.MarkUnreadAsync(msg.Id);
-        msg.Aperto = "N";
-        StateHasChanged();
-    }
-    private async Task MarkThreadReadAsync()
-    {
-        foreach (var m in _thread) { await MailSvc.MarkOpenedAsync(m.Id); m.Aperto = "Y"; }
-        StateHasChanged();
-    }
-    private async Task MarkThreadUnreadAsync()
-    {
-        foreach (var m in _thread) { await MailSvc.MarkUnreadAsync(m.Id); m.Aperto = "N"; }
-        StateHasChanged();
-    }
-
-    private static string ExtractFirstEmail(string? header)
+    private async Task Forward(EmailDetail_NEW msg)
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(header)) return "";
-            var list = MimeKit.InternetAddressList.Parse(header);
-            return list.Mailboxes.FirstOrDefault()?.Address ?? "";
+            // 1️⃣ Mostra il dialog con lista utenti
+            var parameters = new DialogParameters
+            {
+                ["Users"] = await MailSvc.GetUserListAsync()
+            };
+
+            var dialog = DialogService.Show<ForwardDialog>(
+                "Inoltra a utente",
+                parameters,
+                new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+            );
+
+            var result = await dialog.Result;
+
+            if (!result.Canceled && result.Data is ForwardDialog.ForwardResult fr)
+            {
+
+                await MailSvc.AssignEmailAsync(
+                    msg.Id,
+                    fr.User,
+                    fr.SoloInvio,
+                    fr.Comment
+                );
+                Snackbar.Add($"Email {(fr.SoloInvio ? "inoltrata" : "assegnata")} a {fr.User} ✅", Severity.Success);
+
+                var action = fr.SoloInvio ? "inoltrata" : "assegnata per tracciamento";
+                Snackbar.Add($"Email {action} a {fr.User} ✅", Severity.Success);
+            }
         }
-        catch { return header ?? ""; }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore in Forward: {ex.Message}");
+            Snackbar.Add($"Errore nell'inoltro: {ex.Message}", Severity.Error);
+        }
     }
-    private static string JoinEmails(string? a, string? b) => string.Join(", ", new[] { a, b }.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct());
 
-    private static readonly Regex _rxMentionTail = new(@"(^|\s)@([a-zA-Z0-9_.-]*)$", RegexOptions.Compiled);
-    private void UpdateMentionState(int msgId)
+    private async Task Forward(EmailListItem_NEW item)
     {
-        var txt = _newComments.TryGetValue(msgId, out var t) ? t : "";
-        var m = _rxMentionTail.Match(txt);
-        if (!m.Success) { _showMention = false; _mentionMsgId = null; _mentionCandidates.Clear(); return; }
-        _mentionPrefix = m.Groups[2].Value ?? "";
-        _mentionCandidates = _allUsers.Where(u => u.Contains(_mentionPrefix, StringComparison.OrdinalIgnoreCase)).Take(8).ToList();
-        _mentionMsgId = msgId; _showMention = _mentionCandidates.Any();
+        try
+        {
+            var full = await MailSvc.GetEmailDetailAsync(item.Id, onlyMeta: false);
+
+            if (full == null)
+            {
+                Snackbar.Add("Impossibile caricare il dettaglio dell'email per l'inoltro.", Severity.Error);
+                return;
+            }
+
+            // 2️⃣ Chiama la versione originale del metodo
+            await Forward(full);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore durante l'inoltro: {ex.Message}");
+            Snackbar.Add($"Errore durante l'inoltro: {ex.Message}", Severity.Error);
+        }
     }
-    private void ChooseMention(int msgId, string user)
+
+    private async Task OpenEmailAndMarkRead(EmailListItem_NEW item)
     {
-        var txt = _newComments.TryGetValue(msgId, out var t) ? t : "";
-        _newComments[msgId] = _rxMentionTail.Replace(txt, m => $"{m.Groups[1].Value}@{user} ");
-        _showMention = false;
-        _mentionMsgId = null;
-        _mentionCandidates.Clear();
+        try
+        {
+            // 🔸 Marca come letta a livello grafico
+            if (item.Aperto != "Y")
+            {
+                var updated = item with { Aperto = "Y" };
+                var idx = _emails.FindIndex(e => e.Id == item.Id);
+                if (idx >= 0)
+                    _emails[idx] = updated;
+
+                StateHasChanged();
+            }
+
+            // 🔸 Aggiorna in background (DB)
+            _ = Task.Run(async () =>
+            {
+                await MailSvc.SegnaLettaAsync(item.Id, item.AssegnatoA);
+                await MailSvc.MarkOpenedAsync(item.Id);
+
+                // ⬅️ NUOVO: marca la menzione come VISTA
+                await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
+            });
+
+            // 🔸 Vai al dettaglio
+            Nav.NavigateTo($"/mail-detail/{item.Id}/{_cp}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore in OpenEmailAndMarkRead: {ex.Message}");
+            Snackbar.Add("Errore durante apertura email", Severity.Error);
+        }
     }
 
-    private async Task PostComment(int msgId)
+
+
+    private async Task NewEmail()
     {
-        if (string.IsNullOrWhiteSpace(_utente)) return;
-        if (!_newComments.TryGetValue(msgId, out var text) || string.IsNullOrWhiteSpace(text)) return;
-
-        var id = await TaskClient.AddCommentAsync(msgId, _utente!, text);
-        if (!_comments.ContainsKey(msgId)) _comments[msgId] = new List<TaskComment_NEW>();
-        _comments[msgId].Add(new TaskComment_NEW(id, msgId, _utente!, text, DateTime.Now));
-        _newComments[msgId] = "";
-        StateHasChanged();
+        var parameters = new DialogParameters { ["Utente"] = _utente };
+        var dialog = DialogService.Show<ComposeDialog>("Nuova email", parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Email inviata ✅", Severity.Success);
     }
-
-    private string GetDownloadUrl(int attachmentId) => $"/api/attachments/{attachmentId}";
-    private void Reload() => Nav.NavigateTo(Nav.Uri, forceLoad: true);
 
     private string GetAttachmentIcon(string? name)
     {
         var s = (name ?? "").ToLowerInvariant();
         if (s.EndsWith(".pdf")) return Icons.Material.Filled.PictureAsPdf;
-        if (s.EndsWith(".jpg") || s.EndsWith(".jpeg") || s.EndsWith(".png") || s.EndsWith(".gif")) return Icons.Material.Filled.Image;
+        if (s.EndsWith(".jpg") || s.EndsWith(".png")) return Icons.Material.Filled.Image;
         if (s.EndsWith(".doc") || s.EndsWith(".docx")) return Icons.Material.Filled.Description;
         if (s.EndsWith(".xls") || s.EndsWith(".xlsx")) return Icons.Material.Filled.TableChart;
-        if (s.EndsWith(".ppt") || s.EndsWith(".pptx")) return Icons.Material.Filled.Slideshow;
-        if (s.EndsWith(".zip") || s.EndsWith(".rar") || s.EndsWith(".7z")) return Icons.Material.Filled.FolderZip;
         return Icons.Material.Filled.AttachFile;
     }
 
-    private static readonly Regex _rxRenderMention =
-        new(@"(?<=^|\s)@([a-zA-Z0-9_.-]+)", RegexOptions.Compiled);
-
-    private MarkupString RenderMentions(string? txt)
+    private string GetDownloadUrl(int id) => $"/api/attachments/{id}";
+    private void Reload() => Nav.NavigateTo(Nav.Uri, true);
+    private void GoHome()
     {
-        if (string.IsNullOrWhiteSpace(txt))
-            return (MarkupString)string.Empty;
-
-        var encoded = WebUtility.HtmlEncode(txt);
-        var withMentions = _rxRenderMention.Replace(encoded, m => $"<span class=\"mention\">@{m.Groups[1].Value}</span>");
-        withMentions = withMentions.Replace("\r\n", "<br/>").Replace("\n", "<br/>");
-        return (MarkupString)withMentions;
+        Nav.NavigateTo($"/?cp={Uri.EscapeDataString(_cp ?? "")}");
     }
 
-    private void Reply(EmailDetail_NEW msg)
+    private void GoToTasks()
     {
-        _composeTo = ExtractFirstEmail(msg.Mittente);
-        _composeSubject = msg.Oggetto?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true ? msg.Oggetto : $"Re: {msg.Oggetto}";
-        _composeBody = "";
-        _showCompose = true;
+        Nav.NavigateTo($"/tasks-new?cp={Uri.EscapeDataString(_cp ?? "")}");
     }
 
-    private void ReplyAll(EmailDetail_NEW msg)
-    {
-        var to = ExtractFirstEmail(msg.Mittente);
-        var others = msg.Destinatari;
-        _composeTo = JoinEmails(to, others);
-        _composeSubject = msg.Oggetto?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true ? msg.Oggetto : $"Re: {msg.Oggetto}";
-        _composeBody = "";
-        _showCompose = true;
-    }
-
-    private async Task Forward(EmailDetail_NEW msg)
-    {
-        var parameters = new DialogParameters { ["Users"] = _allUsers };
-        var dialog = DialogService.Show<ForwardDialog>("Inoltra", parameters);
-        var result = await dialog.Result;
-
-        if (!result.Canceled && result.Data is ForwardDialog.ForwardResult fr)
-        {
-            await TaskClient.AddCommentAsync(msg.Id, fr.User, $"[INOLTRO] {fr.Comment}");
-            Snackbar.Add($"Inoltrato a {fr.User}", Severity.Success);
-        }
-    }
-
-    private async Task SendCompose()
-    {
-        if (string.IsNullOrWhiteSpace(_utente)) return;
-        if (string.IsNullOrWhiteSpace(_composeTo))
-        {
-            Snackbar.Add("Destinatario mancante", Severity.Warning);
-            return;
-        }
-
-        await MailSvc.SendEmailAsync(
-            _utente!,                       // 👈 usa l'utente, non _a
-            _composeTo!,
-            _composeSubject ?? "(nessun oggetto)",
-            _composeBody ?? "" + "<br><br>" + _firma,   // aggiungo firma se vuoi sempre
-            _outgoing                       // 👈 passa direttamente la lista di OutgoingAttachment_NEW
-        );
-
-        Snackbar.Add("Email inviata ✅", Severity.Success);
-        _showCompose = false;
-        _composeTo = _composeSubject = _composeBody = null;
-        _outgoing.Clear();   // 👈 pulisci qui
-    }
-
-    private async Task OnFileSelected(InputFileChangeEventArgs e)
-    {
-        _outgoing.Clear();
-
-        foreach (var file in e.GetMultipleFiles())
-        {
-            using var ms = new MemoryStream();
-
-            // 🚀 qui alziamo il limite a 50 MB (puoi anche usare long.MaxValue)
-            await file.OpenReadStream(long.MaxValue) // nessun limite pratico
-            .CopyToAsync(ms);
-
-            _outgoing.Add(new MailService_NEW.OutgoingAttachment_NEW(
-                file.Name, file.ContentType, ms.ToArray()));
-        }
-    }
-
-
-    private async Task NewEmail()
-    {
-        if (string.IsNullOrWhiteSpace(_utente)) return;
-
-        var parameters = new DialogParameters
-        {
-            ["Utente"] = _utente!
-        };
-
-        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
-
-        DialogService.Show<ComposeDialog>("Nuova Email", parameters, options);
-    }
 }
+
 <style>
+    /* ===== COLORI BASE ===== */
     :root {
         --bg: #f6f8fc;
-        --panel: #ffffff;
+        --panel: #fff;
         --line: #e6eefc;
-        --muted: #6a82b7;
-        --ink: #0b3a82;
-        --ink-2: #2d3a55;
+        --ink: #183a72;
+        --muted: #6b7ba3;
         --primary: #1a73e8;
-        --primary-hover: #155ec0;
-        --shadow: rgba(27, 78, 163, .08);
+        --accent: #eaf2ff;
+    }
+
+    html, body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        font-family: "Segoe UI", Roboto, Arial, sans-serif;
     }
 
     * {
         box-sizing: border-box;
-        margin: 0;
-        padding: 0;
     }
 
-    body {
-        font-family: "Segoe UI", Roboto, Arial, sans-serif;
-        background: var(--bg);
-    }
-
-    .mail-container {
-        display: grid;
-        grid-template-columns: var(--sidebar-width, 240px) 1fr;
+    /* ===== LOADER 3 PALLINI BLU ===== */
+    .loading-screen {
         height: 100vh;
-        transition: grid-template-columns 0.3s ease;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+    }
+
+    .dots-loader {
+        display: inline-flex;
+        gap: 10px;
+        align-items: center;
+    }
+
+    .dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--primary);
+        animation: dot-bounce 1s infinite ease-in-out;
+    }
+
+    .dots-loader.small .dot {
+        width: 8px;
+        height: 8px;
+    }
+
+    .dot:nth-child(2) {
+        animation-delay: 0.2s;
+    }
+
+    .dot:nth-child(3) {
+        animation-delay: 0.4s;
+    }
+
+    @@keyframes dot-bounce {
+        0%, 80%, 100%
+
+    {
+        transform: scale(0.6);
+        opacity: 0.6;
+    }
+
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
+
+    }
+
+    .loading-text, .load-text {
+        color: var(--muted);
+        font-size: 14px;
+    }
+
+    .mail-header-top {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        background: #fff;
+    }
+
+    /* ===== LAYOUT ===== */
+    .workspace {
+        display: flex;
+        height: 100vh;
+        width: 100%;
+        overflow: hidden;
     }
 
     .sidebar {
+        width: 64px;
+        transition: width .25s ease;
         background: #eef4ff;
         border-right: 1px solid #d9e6ff;
-        padding: 16px;
-        width: 240px;
-        height: 100vh;
-        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        z-index: 10;
+    }
+
+        .sidebar.open {
+            width: 240px;
+            box-shadow: 4px 0 12px rgba(0, 0, 0, 0.08);
+        }
+
+    .sidebar-inner {
+        padding: 12px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        overflow: auto;
+    }
+
+    .sidebar-btn {
+        justify-content: flex-start !important;
+        gap: 12px;
+        width: 100%;
     }
 
     .folder-list {
-        margin-top: 16px;
+        list-style: none;
+        margin: 4px 0 0;
+        padding: 0;
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
     }
 
-    .mail-item.unread {
-        background: #eef3ff;
-        font-weight: 700;
-    }
-
-    .folder-list li {
-        display: grid;
-        grid-template-columns: 28px 1fr auto;
-        align-items: center;
-        gap: 10px;
-        background: var(--panel);
-        border: 1px solid #d6e6ff;
-        border-radius: 12px;
-        padding: 10px 12px;
-        cursor: pointer;
-        color: var(--ink);
-        font-weight: 600;
-        transition: 0.2s;
-    }
-
-        .folder-list li:hover {
-            background: #f3f7ff;
-            transform: translateX(2px);
+        .folder-list li {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            background: #fff;
+            border: 1px solid #d6e6ff;
+            color: #003482;
+            cursor: pointer;
+            transition: background .2s, transform .2s;
         }
 
-        .folder-list li.active {
-            background: #eaf2ff;
-            border-color: #c7dafd;
-            font-weight: 700;
-            color: var(--primary);
+            .folder-list li:hover {
+                background: #f0f5ff;
+                transform: translateX(2px);
+            }
+
+            .folder-list li.active {
+                background: #eaf2ff;
+                border-color: #c7dafd;
+                color: #166aee;
+                font-weight: 600;
+            }
+
+        .folder-list .bubble {
+            margin-left: auto;
+            background: #166aee;
+            color: #fff;
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
         }
 
-    .folder-list .bubble {
-        background: var(--primary);
-        color: white;
-        font-size: 11px;
-        padding: 2px 8px;
-        border-radius: 999px;
+    .mail-container {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        overflow: hidden;
+        background: #f9fbff;
     }
 
     .mail-grid {
         display: grid;
-        grid-template-columns: 480px 1fr;
-        height: 100vh;
+        grid-template-columns: 520px 1fr;
+        height: 100%;
+        overflow: hidden;
     }
 
         .mail-grid.full-list {
@@ -737,253 +1290,853 @@
         }
 
     .mail-list {
-        background: #f9fbff;
-        border-right: 1px solid var(--line);
         display: flex;
         flex-direction: column;
+        height: 100%; /* serve a dare altezza completa */
+        min-height: 0; /* fondamentale per permettere overflow */
+    }
+
+    .list-scroll {
+        flex: 1 1 auto; /* lascia che si ridimensioni */
+        min-height: 0; /* evita che si blocchi */
+        overflow-y: auto;
+        overflow-x: hidden;
     }
 
     .list-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 14px 16px;
-        border-bottom: 1px solid var(--line);
-        font-weight: 700;
-        color: var(--ink);
+        padding: 12px 14px;
         background: #fff;
-        position: sticky;
-        top: 0;
-        z-index: 10;
+        border-bottom: 1px solid var(--line);
     }
 
-    .list-scroll {
-        flex: 1;
-        overflow-y: auto;
-    }
+        .list-header .title {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            color: var(--ink);
+            font-weight: 600;
+        }
 
     .mail-ul {
         list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+    /* =========================================================
+       LISTA EMAIL — STILE GMAIL-LIKE 2025
+       ========================================================= */
+
+    .mail-ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
     }
 
-    .mail-item {
-        padding: 12px 14px;
-        border-bottom: 1px solid #eef3ff;
-        transition: background .2s;
-        cursor: pointer;
-    }
-
-        .mail-item:hover {
-            background: #f4f8ff;
-        }
-
-        .mail-item.selected {
-            background: #eaf2ff;
-        }
-
-    .list-row {
+    /* Riga principale */
+    .mail-row {
         display: grid;
-        grid-template-columns: 40px 1fr auto;
-        gap: 12px;
+        grid-template-columns: 6px 1fr auto;
+        gap: 14px;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e8eefc;
+        background: white;
+        cursor: pointer;
         align-items: center;
     }
 
-    .mail-item .attachments-icons {
-        margin-left: auto;
+    .mail-row:hover {
+        background: #f5f8ff;
+    }
+
+    .status-strip {
+        width: 6px;
+        height: 100%;
+        border-radius: 4px;
+    }
+
+    .mail-row.unread .status-strip {
+        background: #1a73e8;
+    }
+
+    .left {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        grid-template-rows: auto auto auto;
+        gap: 3px 14px;
+        align-items: center;
+    }
+
+    .from {
+        grid-column: 1;
+        font-weight: 700;
+        color: #0b2542;
+        font-size: 14px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+        .mail-row.unread {
+            background: #eef4ff;
+            font-weight: 600;
+        }
+
+        .mail-row .status {
+            width: 6px;
+            height: 100%;
+            border-radius: 2px;
+            background: transparent;
+        }
+
+        .mail-row.unread .status {
+            background: var(--primary);
+        }
+
+    /* Contenuto principale */
+    .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        padding-left: 8px;
+    }
+
+    .line-top {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow: hidden;
+    }
+
+    .mittente {
+        color: var(--ink);
+        font-size: 14px;
+        flex-shrink: 0;
+        max-width: 180px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .subject-line {
+        flex: 1;
+        color: var(--ink);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+        .subject-line strong {
+            font-weight: 700;
+            color: var(--ink);
+        }
+
+        .subject-line .count {
+            color: var(--muted);
+            font-weight: 500;
+            margin-left: 6px;
+        }
+
+    .preview-line {
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        margin-top: 2px;
+    }
+
+    /* Colonna destra (icone + data) */
+    .right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        width: 140px;
+    }
+
+    .assigned-group {
+        display: flex;
+        gap: 4px;
+        flex-wrap: nowrap;
+        max-width: 140px;
+        overflow: hidden;
+    }
+
+
+    .date {
+        color: var(--muted);
+        font-size: 12px;
+        flex-shrink: 0;
+        min-width: 70px;
+        text-align: right;
+    }
+
+    .att-ico {
+        color: #6b7ba3;
+        font-size: 18px;
+    }
+
+        .att-ico.pdf {
+            color: #c12d2d;
+        }
+
+    .assigned {
+        background: #edf3ff;
+        color: #0b3a82;
+        padding: 2px 6px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    /* Migliorie mobile */
+    @@media (max-width: 800px) {
+        .mail-row
+
+    {
+        grid-template-columns: 4px 1fr;
+        padding: 10px 12px;
+    }
+
+    .right {
+        display: none;
+    }
+
+    .mittente {
+        max-width: 140px;
+    }
+
+    }
+
+    .unread-strip {
+        width: 4px;
+        height: 100%;
+        border-radius: 2px;
+        background: transparent;
+    }
+
+        .unread-strip.active {
+            background: #1a73e8;
+        }
+
+    .col-from {
+        font-weight: 600;
+        color: #123;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .col-subject {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    .row-top {
+        display: grid;
+        grid-template-columns: 1fr auto auto auto auto;
+        gap: 8px;
+        align-items: center;
     }
 
     .subject {
-        font-weight: 700;
-        color: var(--ink);
+        grid-column: 2;
+        font-weight: 600;
+        color: #0b2542;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
 
     .date {
-        margin-left: auto;
         font-size: 12px;
         color: var(--muted);
-    }
-
-    .row-top {
-        display: flex;
-        gap: 8px;
-        align-items: center;
     }
 
     .row-bottom {
         display: flex;
-        gap: 8px;
-        font-size: 12px;
-        color: var(--muted);
+        gap: 12px;
+        margin-top: 4px;
+        min-width: 0;
     }
 
+    .casella {
+        grid-column: 2;
+        font-size: 11px;
+        background: #dceaff;
+        color: #003a80;
+        padding: 2px 6px;
+        border-radius: 6px;
+        display: inline-block;
+        width: fit-content;
+    }
+
+    .right {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    .chip {
+    background: #e9f5e9;
+    color: #1d7034;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 11px;
+}
+
+        .chip.more {
+            background: #dce5ff;
+            color: #2540a1;
+        }
+
+
+
+    .assigned {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+    }
+
+    .from, .preview {
+        grid-column: 2;
+        font-size: 13px;
+        color: #6b7ba3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .attachments-icons {
+        margin-top: 6px;
+    }
+
+    .load-more {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+    }
+
+    /* ===== DETTAGLIO EMAIL ===== */
     .mail-detail {
         background: var(--panel);
-        padding: 18px;
         overflow-y: auto;
-        box-shadow: inset 0 6px 12px rgba(0,0,0,.03);
+        overflow-x: hidden;
+        min-width: 0;
     }
 
     .conv-head {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        align-items: center;
-        margin-bottom: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line);
+        gap: 10px;
+        background: #fff;
+        position: sticky;
+        top: 0;
+        z-index: 5;
     }
 
-    .conv-head-actions {
-        display: flex;
-        gap: 6px;
-        align-items: center;
-    }
-
-    .conv-list {
-        list-style: none;
-        display: grid;
-        gap: 14px;
-    }
-
-    .conv-item {
-        border: 1px solid var(--line);
-        background: #f9fbff;
-        border-radius: 12px;
-        box-shadow: 0 4px 8px var(--shadow);
-    }
-
-        .conv-item.closed {
-            background: #f3f6fc;
-        }
-
-    .conv-line {
-        padding: 12px;
-        display: flex;
-        gap: 12px;
-        align-items: center;
-    }
-
-    .conv-meta {
-        flex: 1;
-        min-width: 0;
-    }
-
-    .top {
+    .head-left {
         display: flex;
         gap: 10px;
+        align-items: center;
+        color: var(--ink);
+    }
+
+    .head-titles {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .head-subject {
+        font-weight: 700;
+    }
+
+    .head-meta {
         font-size: 12px;
         color: var(--muted);
     }
 
-        .top .date {
-            margin-left: auto;
-        }
-
-    .subject.bold {
-        font-weight: 900;
-    }
-
-    .subject .pill {
-        margin-left: 8px;
-        font-size: 11px;
-        color: var(--muted);
-    }
-
-    .conv-body-grid {
-        display: grid;
-        grid-template-columns: 2fr 1fr;
-        gap: 16px;
-        padding: 12px;
-    }
-
-    .conv-main {
-        overflow: hidden;
-    }
-
-    .conv-comments {
-        border-left: 1px solid var(--line);
-        padding-left: 12px;
+    .mail-actions {
         display: flex;
-        flex-direction: column;
+        gap: 6px;
+    }
+
+    .mail-body {
+        padding: 16px;
+        background: #fff;
+    }
+
+    .attachments-grid {
+        display: flex;
         gap: 10px;
-    }
-
-    .comment {
-        background: #f4f8ff;
-        border: 1px solid #dde7ff;
-        border-radius: 8px;
-        padding: 6px 8px;
-        margin-top: 6px;
-    }
-
-        .comment .meta {
-            font-size: 11px;
-            color: var(--muted);
-            margin-bottom: 4px;
-        }
-
-    /* attachments */
-    .conv-attachments {
-        display: flex;
         flex-wrap: wrap;
-        gap: 8px;
         margin-top: 12px;
     }
 
-    .attach {
+    .attach-chip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 8px;
         background: #eef4ff;
         border: 1px solid #d6e6ff;
-        border-radius: 999px;
-        padding: 4px 10px;
-        text-decoration: none;
+        border-radius: 12px;
+        padding: 6px 10px;
         color: #0b3a82;
-        font-size: 12px;
+        text-decoration: none;
+        transition: background 0.2s;
     }
 
-        .attach:hover {
+        .attach-chip:hover {
             background: #e6f0ff;
         }
 
-    /* mentions */
-    .mention-wrap {
-        position: relative;
+    .detail-loader {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        height: 160px;
     }
 
-    .mention-menu {
-        position: absolute;
-        top: 100%;
-        left: 0;
-        z-index: 1400;
-        background: #fff;
-        border: 1px solid #d6e6ff;
-        border-radius: 8px;
-        box-shadow: 0 8px 20px rgba(0,0,0,.08);
-        max-height: 220px;
-        overflow: auto;
-        min-width: 260px;
+    .att-icon {
+        font-size: 18px;
+        color: #6b7ba3;
     }
 
-    .mention-item {
-        padding: 8px 10px;
-        cursor: pointer;
-    }
-
-        .mention-item:hover {
-            background: #f3f7ff;
-        }
-
-    .snippet {
-        margin-left: 8px;
+    .date {
         font-size: 12px;
+        color: #6b7ba3;
+        min-width: 90px;
+        text-align: right;
+    }
+    .empty-detail {
+        height: 100%;   
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
         color: var(--muted);
+        gap: 8px;
+    }
+
+    /* ===== RESPONSIVE ===== */
+    @@media (max-width: 1000px) {
+        .mail-grid
+
+    {
+        grid-template-columns: 1fr;
+    }
+
+    .from, .preview {
+        max-width: 100%;
+    }
+    .preview {
+    font-size: 12px;
+    color: #677;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+    .preview-line {
+        color: #607196;
+        color: #607196;
+        font-size: 13px;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
-        max-width: 280px;
-        display: inline-block;
+        margin-top: 2px;
+        opacity: 0.85;
     }
+
+        .col-icons {
+            text-align: center;
+        }
+
+    .mail-row.unread .preview-line {
+        color: #1a3b7d;
+        font-weight: 500;
+    }
+
+        .mail-row.unread {
+            background: #eef4ff;
+            font-weight: 600;
+            transition: background 0.25s ease;
+        }
+
+        .mail-row.read {
+            background: #ffffff;
+            font-weight: 400;
+            transition: background 0.25s ease;
+        }
+
+        .mail-row.read {
+            animation: fadeRead 0.4s ease-in-out;
+        }
+        @@keyframes fadeRead {
+            from
+
+    {
+        background-color: #dce8ff;
+    }
+
+    to {
+        background-color: #ffffff;
+    }
+
+    }
+
+        .mailbox {
+            background: #d9eaff;
+            color: #003a80;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .assigned-chip {
+            background: #e9f5e9;
+            color: #1d7034;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+        }
+
+        .assigned-more {
+            background: #dce5ff;
+            color: #2540a1;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 11px;
+        }
+        .col-date {
+            font-size: 12px;
+            color: #6b7ba3;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        .col-actions {
+            display: flex;
+            gap: 4px;
+            justify-content: flex-end;
+        }
+        .actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .attach-icons {
+            display: flex;
+            gap: 6px;
+        }
+
+        .att-ico {
+            font-size: 18px;
+            color: #6b7ba3;
+        }
+
+            .att-ico.pdf {
+                color: #c12d2d;
+            }
+
+        .right {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+
+            .right .date {
+                font-size: 12px;
+                color: #6b7ba3;
+            }
+
+        .col-assigned {
+            display: flex;
+            gap: 4px;
+            overflow: hidden;
+        }
+
+        .col-from, .col-dest, .col-assigned {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            font-size: 13px;
+            max-width: 180px;
+        }
+
+        .badge-more {
+            background: #dce5ff;
+            color: #2540a1;
+            padding: 1px 6px;
+            border-radius: 6px;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+
+        .admin-dashboard {
+            padding: 20px;
+        }
+
+        .dash-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            color: #183a72;
+        }
+
+        .filter-bar {
+            padding: 16px;
+            margin-bottom: 20px;
+            border-radius: 12px;
+        }
+
+        .chart-card {
+            padding: 20px;
+            margin-bottom: 25px;
+            border-radius: 12px;
+        }
+
+        .user-card {
+            margin-bottom: 25px;
+            padding: 20px;
+            border-radius: 12px;
+        }
+
+        .user-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 15px;
+        }
+
+        .avatar {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: #1a73e8;
+            color: #fff;
+            font-size: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .user-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .user-name {
+            font-weight: bold;
+            font-size: 18px;
+        }
+
+        .user-stats {
+            display: flex;
+            gap: 15px;
+            font-size: 13px;
+        }
+
+        .section ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .section li {
+            display: flex;
+            gap: 10px;
+            padding: 6px 4px;
+            border-bottom: 1px solid #e0e8ff;
+            cursor: pointer;
+        }
+
+            .section li:hover {
+                background: #edf3ff;
+            }
+
+        .empty {
+            font-size: 13px;
+            color: #6b7ba3;
+        }
+
+        .date {
+            min-width: 90px;
+            color: #6b7ba3;
+            font-size: 12px;
+        }
+
+        .subject {
+            flex: 1;
+        }
+
+        .modal-list {
+            list-style: none;
+            padding: 0;
+        }
+
+            .modal-list li {
+                display: flex;
+                gap: 10px;
+                padding: 8px;
+                cursor: pointer;
+                border-bottom: 1px solid #ddd;
+            }
+        /* LAYOUT */
+        .admin-user-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+            gap: 28px;
+            margin-top: 30px;
+        }
+        /* CARD */
+        .admin-user-card {
+            padding: 22px;
+            border-radius: 12px;
+            background: #ffffff;
+            border: 1px solid #dfe6f3;
+        }
+        /* HEADER */
+        .auc-header {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 22px;
+        }
+
+        .auc-avatar {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: #1f4ea3;
+            color: white;
+            font-size: 22px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .auc-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #1a2240;
+        }
+        /* COUNTERS */
+        .auc-counters {
+            display: flex;
+            gap: 26px;
+            margin-top: 6px;
+        }
+
+        .auc-counter {
+            display: flex;
+            flex-direction: column;
+        }
+
+            .auc-counter .count {
+                font-size: 20px;
+                font-weight: 700;
+                color: #1a2240;
+            }
+
+            .auc-counter .label {
+                font-size: 13px;
+                color: #6c7a95;
+            }
+
+            .auc-counter.open .count {
+                color: #0052cc;
+            }
+
+            .auc-counter.closed .count {
+                color: #2c8b3f;
+            }
+        /* SECTION */
+        .auc-section {
+            margin-bottom: 26px;
+        }
+
+        .auc-section-title {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-weight: 600;
+            color: #1a2240;
+        }
+        /* LISTA */
+        .auc-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .auc-item {
+            display: flex;
+            gap: 14px;
+            padding: 8px 4px;
+            border-bottom: 1px solid #e6eaf3;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+            .auc-item:hover {
+                background: #f2f6ff;
+            }
+
+            .auc-item .date {
+                width: 90px;
+                font-size: 13px;
+                color: #607091;
+            }
+
+            .auc-item .subject {
+                flex: 1;
+                font-size: 14px;
+                color: #1a2240;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+        .auc-empty {
+            color: #7a879e;
+            font-size: 14px;
+            padding: 6px 0;
+            font-style: italic;
+        }
+
+        .admin-section {
+            width: 100%;
+            padding: 24px 32px;
+            overflow-y: auto;
+            background: #f5f8ff;
+        }
+
+        .admin-dashboard {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .chart-card {
+            min-height: 280px !important;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .admin-chart {
+            height: 360px !important;
+            width: 100%;
+        }
 
 </style>

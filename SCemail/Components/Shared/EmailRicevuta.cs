@@ -1,4 +1,6 @@
-﻿namespace SCemail.Components.Shared
+﻿using System.ComponentModel.DataAnnotations.Schema;
+
+namespace SCemail.Components.Data
 {
     public class EmailRicevuta
     {
@@ -11,14 +13,19 @@
         public string? Oggetto { get; set; }
         public string? CorpoHtml { get; set; }
         public string? CorpoTesto { get; set; }
+        [Column("APERTO")]
         public string? Aperto { get; set; }
+        [Column("ELIMINATO")]
         public string? Eliminato { get; set; }
 
         // NUOVI
         public string? FolderPath { get; set; }
         public long? MessageUid { get; set; }
-
+        public string? InReplyTo { get; set; }
+        [Column("REFERENCES_HDR")]
+        public string? ReferencesHdr { get; set; }
         public CasellaPosta Casella { get; set; } = default!;
+        public string? ThreadKey { get; set; }
         public ICollection<EmailAllegato> Allegati { get; set; } = new List<EmailAllegato>();
     }
 }

@@ -17,7 +17,7 @@
         @Body
     </MudMainContent>
 </MudLayout>
-
+<script src="../wwwroot/js/site.js"></script>
 @code {
     [Inject] NavigationManager Nav { get; set; } = default!;
     private void Refresh() => Nav.NavigateTo(Nav.Uri, forceLoad: true);

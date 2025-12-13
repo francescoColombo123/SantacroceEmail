@@ -1,0 +1,573 @@
+﻿@page "/admin-dashboard"
+@using MudBlazor
+@using SCemail.Components.Data
+@using MudBlazor.Utilities
+
+@inject NavigationManager Nav
+@inject MailService_NEW MailSvc
+@inject AccessiService AccessiSrv
+@inject ISnackbar Snackbar
+
+<PageTitle>Dashboard Amministrazione</PageTitle>
+
+@if (_loading)
+{
+    <div class="admin-loading">
+        <div class="dots-loader">
+            <span class="dot"></span>
+            <span class="dot"></span>
+            <span class="dot"></span>
+        </div>
+        <span>Caricamento dashboard…</span>
+    </div>
+}
+else
+{
+    <div class="admin-wrapper">
+
+        <!-- HEADER -->
+        <div class="admin-header">
+            <div class="title-wrap">
+                <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Class="header-icon" />
+                <h1>Dashboard Amministrazione</h1>
+            </div>
+
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.ArrowBack"
+                       OnClick="@ReturnToMail">
+                Torna alla Posta
+            </MudButton>
+        </div>
+
+        <!-- FILTRI -->
+        <MudPaper Class="filter-bar" Elevation="1" @key="_filtersKey">
+            <MudGrid>
+
+                <!-- FILTRO UTENTE -->
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="string"
+                               Label="Filtra per utente"
+                               Value="_filtroUtente"
+                               ValueChanged="@(v => { _filtroUtente = v; ApplicaFiltri(); })">
+                        <MudSelectItem T="string" Value="@null">Tutti</MudSelectItem>
+                        @foreach (var u in utenti)
+                        {
+                            <MudSelectItem T="string" Value="@u">@u</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <!-- FILTRO DATA -->
+                <MudItem xs="6" sm="4">
+                    <MudDateRangePicker Label="Intervallo date"
+                                        Editable="true"
+                                        AllowKeyboardInput="true"
+                                        DateFormat="dd/MM/yyyy"
+                                        Mask="@(new PatternMask("00/00/0000"))"
+                                        Clearable="true"
+                                        PickerVariant="PickerVariant.Dialog"
+                                        DateRange="_filtroDate"
+                                        DateRangeChanged="OnDateRangeChanged" />
+
+
+                </MudItem>
+
+
+                <!-- FILTRO STATO -->
+                <MudItem xs="6" sm="4">
+                    <MudSelect T="string"
+                               Label="Stato"
+                               Value="_filtroStato"
+                               ValueChanged="@(v => { _filtroStato = v; ApplicaFiltri(); })">
+                        <MudSelectItem T="string" Value="@null">Tutti</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("open")">Aperte</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("closed")">Concluse</MudSelectItem>
+
+                    </MudSelect>
+                </MudItem>
+
+            </MudGrid>
+
+            <div class="filter-buttons">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.FilterList"
+                           OnClick="ApplicaFiltri">
+                    Applica
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.Refresh"
+                           OnClick="ResetFiltri">
+                    Reset
+                </MudButton>
+            </div>
+        </MudPaper>
+
+
+        <!-- CARDS UTENTI -->
+        <div class="user-cards">
+
+            @foreach (var u in utentiFiltrati)
+            {
+                var aperte = _emailInLavorazioneFiltrate
+                    .Where(x => x.AssegnatoA == u)
+                    .OrderByDescending(x => x.Data)
+                    .Take(15).ToList();
+
+                var chiuse = _emailConcluseFiltrate
+                    .Where(x => x.AssegnatoA == u)
+                    .OrderByDescending(x => x.Data)
+                    .Take(15).ToList();
+
+                <MudPaper Class="user-card" Elevation="3">
+
+                    <div class="user-head">
+                        <div class="avatar">@u.Substring(0,1).ToUpper()</div>
+
+                        <div class="uh-info">
+                            <div class="uh-name">@u</div>
+
+                            <div class="uh-counts">
+                                <span class="c-open">@aperte.Count aperte</span>
+                                <span class="c-closed">@chiuse.Count concluse</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- SEZIONE APERTE -->
+                    <div class="uc-section">
+                        <div class="sec-title">
+                            Da svolgere
+                            @if (aperte.Any())
+                            {
+                                <MudButton Variant="Variant.Text"
+                                           OnClick="@(() => MostraTutte(u, false))">
+                                    Vedi tutte →
+                                </MudButton>
+                            }
+                        </div>
+
+                        @if (!aperte.Any())
+                        {
+                            <div class="empty">Nessuna attività</div>
+                        }
+                        else
+                        {
+                            @foreach (var m in aperte)
+                            {
+                                <div class="mail-row" @onclick="@(() => ApriEmail(m.EmailId))">
+                                    <span class="date">@m.Data?.ToString("dd/MM")</span>
+                                    <span class="subject">@m.Oggetto</span>
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    <!-- SEZIONE CHIUSE -->
+                    <div class="uc-section">
+                        <div class="sec-title">
+                            Concluse
+                            @if (chiuse.Any())
+                            {
+                                <MudButton Variant="Variant.Text"
+                                           OnClick="@(() => MostraTutte(u, true))">
+                                    Vedi tutte →
+                                </MudButton>
+                            }
+                        </div>
+
+                        @if (!chiuse.Any())
+                        {
+                            <div class="empty">Nessuna email conclusa</div>
+                        }
+                        else
+                        {
+                            @foreach (var m in chiuse)
+                            {
+                                <div class="mail-row closed" @onclick="@(() => ApriEmail(m.EmailId))">
+                                    <span class="date">@m.Data?.ToString("dd/MM")</span>
+                                    <span class="subject">@m.Oggetto</span>
+                                </div>
+                            }
+                        }
+                    </div>
+
+                </MudPaper>
+            }
+        </div>
+
+        <!-- MODALE MOSTRA TUTTE -->
+        <MudDialog @bind-IsVisible="_dialogOpen"
+                   MaxWidth="MaxWidth.Large"
+                   FullWidth="true">
+
+            <DialogContent>
+                <h3>@_dialogTitle</h3>
+
+                @if (_dialogList.Any())
+                {
+                    <div class="dialog-list">
+                        @foreach (var m in _dialogList)
+                        {
+                            <div class="d-row" @onclick="@(() => ApriEmail(m.EmailId))">
+                                <span class="d-date">@m.Data?.ToString("dd/MM/yyyy")</span>
+                                <span class="d-subject">@m.Oggetto</span>
+                            </div>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <p>Nessuna email presente.</p>
+                }
+            </DialogContent>
+
+            <DialogActions>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           OnClick="@(() => _dialogOpen = false)">
+                    Chiudi
+                </MudButton>
+            </DialogActions>
+
+        </MudDialog>
+
+    </div>
+}
+@code {
+
+    private bool _loading = true;
+
+    private string? _cp;
+    private string? _utente;
+
+    private string? _filtroUtente = null;
+    private string? _filtroStato = null;
+    private DateRange? _filtroDate = null;
+    private int _filtersKey = 0;
+
+    private List<string> utenti = new();
+    private List<string> utentiFiltrati = new();
+
+    private List<AdminEmailDto> _emailInLavorazione = new();
+    private List<AdminEmailDto> _emailConcluse = new();
+
+    private List<AdminEmailDto> _emailInLavorazioneFiltrate = new();
+    private List<AdminEmailDto> _emailConcluseFiltrate = new();
+
+    private bool _dialogOpen = false;
+    private string _dialogTitle = "";
+    private List<AdminEmailDto> _dialogList = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        try
+        {
+          
+            var uri = Nav.ToAbsoluteUri(Nav.Uri);
+            var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+
+            _cp = q.TryGetValue("cp", out var v) && !string.IsNullOrWhiteSpace(v)
+                ? v.ToString()
+                : null;
+
+            _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+
+            var utentiTask = AccessiSrv.GetUserListAsync();
+            var openTask = MailSvc.GetEmailInLavorazioneAsync();
+            var closedTask = MailSvc.GetEmailCompletateAsync();
+
+            await Task.WhenAll(utentiTask, openTask, closedTask);
+
+            utenti = utentiTask.Result;
+            _emailInLavorazione = openTask.Result;
+            _emailConcluse = closedTask.Result;
+
+            utentiFiltrati = new List<string>(utenti);
+
+            _emailInLavorazioneFiltrate = new List<AdminEmailDto>(_emailInLavorazione);
+            _emailConcluseFiltrate = new List<AdminEmailDto>(_emailConcluse);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("❌ Errore inizializzazione dashboard: " + ex.Message);
+            Snackbar.Add("Errore durante il caricamento della dashboard", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+    private void OnDateRangeChanged(DateRange range)
+    {
+        _filtroDate = range;
+        ApplicaFiltri();
+    }
+
+
+    private void MostraTutte(string utente, bool concluse)
+    {
+        _dialogOpen = true;
+
+        _dialogTitle = concluse
+            ? $"Tutte le email concluse di {utente}"
+            : $"Tutte le attività aperte di {utente}";
+
+        _dialogList = concluse
+            ? _emailConcluse.Where(x => x.AssegnatoA == utente).OrderByDescending(x => x.Data).ToList()
+            : _emailInLavorazione.Where(x => x.AssegnatoA == utente).OrderByDescending(x => x.Data).ToList();
+    }
+
+    private void ApplicaFiltri()
+    {
+        IEnumerable<AdminEmailDto> open = _emailInLavorazione;
+        IEnumerable<AdminEmailDto> closed = _emailConcluse;
+
+        // =========================
+        // FILTRO UTENTE
+        // =========================
+        if (!string.IsNullOrWhiteSpace(_filtroUtente))
+        {
+            open = open.Where(x => x.AssegnatoA == _filtroUtente);
+            closed = closed.Where(x => x.AssegnatoA == _filtroUtente);
+        }
+
+
+        // FILTRO DATE (INCLUSIVO)
+        if (_filtroDate?.Start.HasValue == true)
+        {
+            var start = _filtroDate.Start.Value.Date;
+
+            open = open.Where(x =>
+                x.Data.HasValue &&
+                x.Data.Value >= start);
+
+            closed = closed.Where(x =>
+                x.Data.HasValue &&
+                x.Data.Value >= start);
+        }
+
+        if (_filtroDate?.End.HasValue == true)
+        {
+            var end = _filtroDate.End.Value.Date.AddDays(1); // inclusivo
+
+            open = open.Where(x =>
+                x.Data.HasValue &&
+                x.Data.Value < end);
+
+            closed = closed.Where(x =>
+                x.Data.HasValue &&
+                x.Data.Value < end);
+        }
+
+
+        // =========================
+        // FILTRO STATO
+        // =========================
+        if (_filtroStato == "open")
+        {
+            closed = Enumerable.Empty<AdminEmailDto>();
+        }
+        else if (_filtroStato == "closed")
+        {
+            open = Enumerable.Empty<AdminEmailDto>();
+        }
+
+        // =========================
+        // APPLICA RISULTATI
+        // =========================
+        _emailInLavorazioneFiltrate = open.ToList();
+        _emailConcluseFiltrate = closed.ToList();
+
+        // =========================
+        // UTENTI VISIBILI (SOLO SE HANNO EMAIL)
+        // =========================
+        utentiFiltrati = utenti
+            .Where(u =>
+                _emailInLavorazioneFiltrate.Any(x => x.AssegnatoA == u)
+             || _emailConcluseFiltrate.Any(x => x.AssegnatoA == u))
+            .ToList();
+    }
+
+     private void ResetFiltri()
+    {
+        _filtroUtente = null;
+        _filtroStato = null;
+        _filtroDate = null;
+
+        _emailInLavorazioneFiltrate = new List<AdminEmailDto>(_emailInLavorazione);
+        _emailConcluseFiltrate = new List<AdminEmailDto>(_emailConcluse);
+        utentiFiltrati = new List<string>(utenti);
+
+        _filtersKey++;      // 🔥 forza reset UI dei componenti
+        StateHasChanged();  // 🔥 aggiorna subito
+    }
+
+
+
+    private void ReturnToMail()
+    {
+        Nav.NavigateTo($"/mail-new?cp={_cp}");
+    }
+
+    private void ApriEmail(long id)
+    {
+        Nav.NavigateTo($"/mail-detail/{id}/{_cp}");
+    }
+}
+
+<style>
+    .admin-wrapper {
+        padding: 28px;
+        background: #f5f8ff;
+        min-height: 100vh;
+    }
+
+    .admin-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 26px;
+    }
+
+    .header-icon {
+        font-size: 34px;
+        color: #1a73e8;
+    }
+
+    .filter-bar {
+        padding: 18px;
+        border-radius: 14px;
+        margin-bottom: 24px;
+    }
+
+    .user-cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+        gap: 22px;
+    }
+
+    .user-card {
+        border-radius: 16px;
+        padding: 18px;
+        background: white;
+    }
+
+    .user-head {
+        display: flex;
+        gap: 14px;
+        margin-bottom: 16px;
+    }
+
+    .avatar {
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: #1a73e8;
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        font-weight: 600;
+    }
+
+    .uh-name {
+        font-size: 18px;
+        font-weight: 600;
+    }
+
+    .uh-counts {
+        display: flex;
+        gap: 10px;
+        color: #607090;
+        font-size: 13px;
+    }
+
+    .c-open {
+        color: #1a73e8;
+        font-weight: 600;
+    }
+
+    .c-closed {
+        color: #388e3c;
+        font-weight: 600;
+    }
+
+    .uc-section {
+        margin-top: 12px;
+    }
+
+    .sec-title {
+        font-weight: 600;
+        margin-bottom: 6px;
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .mail-row {
+        display: flex;
+        gap: 10px;
+        padding: 6px 4px;
+        border-bottom: 1px solid #e5e9f5;
+        cursor: pointer;
+    }
+
+        .mail-row:hover {
+            background: #eef4ff;
+        }
+
+        .mail-row.closed {
+            opacity: .6;
+        }
+
+    .date {
+        width: 60px;
+        color: #6b7ba3;
+        font-size: 13px;
+    }
+
+    .subject {
+        flex: 1;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    .empty {
+        color: #8c94a8;
+        font-style: italic;
+    }
+
+    .dialog-list {
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+
+    .d-row {
+        display: flex;
+        gap: 14px;
+        padding: 8px 4px;
+        border-bottom: 1px solid #e5e9f5;
+        cursor: pointer;
+    }
+
+        .d-row:hover {
+            background: #eef4ff;
+        }
+
+    .d-date {
+        width: 90px;
+        color: #607090;
+        font-size: 13px;
+    }
+
+    .d-subject {
+        flex: 1;
+    }
+
+</style>

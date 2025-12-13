@@ -631,7 +631,7 @@
         _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
 
         if (!string.IsNullOrWhiteSpace(_cp))
-            _utente = AccessiSrv.GetUtenteFromCp(_cp);
+            _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp); 
 
         _folder = q.TryGetValue("folder", out var f) ? f.ToString() : "inbox";
 

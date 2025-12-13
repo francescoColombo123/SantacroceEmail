@@ -83,15 +83,15 @@
     private string? _body;
     private string? _msg;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
         var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
 
-        // ⚠️ ora gestiamo cp come nel resto del progetto
         var cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
         if (!string.IsNullOrWhiteSpace(cp))
-            _utente = AccessiSrv.GetUtenteFromCp(cp);
+            _utente = await AccessiSrv.GetUtenteFromCpAsync(cp);
     }
+
 
     private async Task Send()
     {

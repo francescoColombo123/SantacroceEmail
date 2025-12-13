@@ -1,204 +1,220 @@
 ﻿@page "/tasks-new"
 @using System.Text.RegularExpressions
 @using MudBlazor
-@using Oracle.ManagedDataAccess.Client
 @using SCemail.Components.Data
+@using Microsoft.AspNetCore.Components.Web
 @inject SCemail.Components.Shared.IEmailTasksClient TaskClient
 @inject MailService_NEW MailSvc
 @inject NavigationManager Nav
 @inject SCemail.Components.Data.AccessiService AccessiSrv
-@inject IConfiguration Configuration
 
 <PageTitle>GS – Task (NEW)</PageTitle>
 
-<div class="task-layout">
-    <!-- LISTA -->
-    <MudPaper Class="task-panel">
-        <div class="panel-header">
-            <MudIcon Icon="@Icons.Material.Filled.ListAlt" />
-            <span>Task di @_utente</span>
-        </div>
+<div class="page-wrapper">
+    <!-- 🔹 Barra superiore -->
+    <div class="task-topbar">
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Info"
+                   StartIcon="@Icons.Material.Filled.Home"
+                   OnClick="@GoHome">
+            Home
+        </MudButton>
 
-        <div class="filters">
-            <MudChip T="string" OnClick="@(() => SetFilter(null))"
-                     Color="@(_filter==null ? Color.Primary : Color.Default)">
-                Tutti
-            </MudChip>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Error"
+                   StartIcon="@Icons.Material.Filled.Mail"
+                   OnClick="@GoToMail">
+            Vai alle Mail
+        </MudButton>
+    </div>
 
-            <MudChip T="string" OnClick="@(() => SetFilter(StatoAperto))"
-                     Color="@(_filter==StatoAperto ? Color.Primary : Color.Default)">
-                Aperti
-            </MudChip>
+    <!-- 🔹 Layout principale -->
+    <div class="task-layout">
+        <!-- LISTA -->
+        <MudPaper Class="task-panel">
+            <div class="panel-header">
+                <MudIcon Icon="@Icons.Material.Filled.ListAlt" />
+                <span>Task di @_utente</span>
+            </div>
 
-            <MudChip T="string" OnClick="@(() => SetFilter(StatoChiuso))"
-                     Color="@(_filter==StatoChiuso ? Color.Primary : Color.Default)">
-                Chiusi
-            </MudChip>
+            <div class="filters">
+                <MudChip T="string" OnClick="@(() => SetFilter(null))" Color="@(_filter == null ? Color.Primary : Color.Default)">Tutti</MudChip>
+                <MudChip T="string" OnClick="@(() => SetFilter(StatoAperto))" Color="@(_filter == StatoAperto ? Color.Primary : Color.Default)">Aperti</MudChip>
+                <MudChip T="string" OnClick="@(() => SetFilter(StatoChiuso))" Color="@(_filter == StatoChiuso ? Color.Primary : Color.Default)">Chiusi</MudChip>
+                <MudChip T="string" OnClick="@(() => _onlyMentions = !_onlyMentions)" Color="@(_onlyMentions? Color.Primary: Color.Default)">Solo menzioni</MudChip>
+            </div>
 
-            <MudChip T="string" OnClick="@(() => _onlyMentions = !_onlyMentions)"
-                     Color="@(_onlyMentions ? Color.Primary : Color.Default)">
-                Solo menzioni
-            </MudChip>
-        </div>
-
-        <MudDivider />
-
-        <div class="task-list">
-            @if (!_loaded)
-            {
-                <MudProgressCircular Indeterminate />
-            }
-            else if (!Filtered().Any())
-            {
-                <MudText Typo="Typo.caption">Nessun task.</MudText>
-            }
-            else
-            {
-                @foreach (var t in Filtered())
+            <div class="task-list">
+                @if (!_loaded)
                 {
-                    var tagged = _taggedTaskIds.Contains(t.Id);
-
-                    <MudCard Class="@GetTaskItemClass(tagged)" @onclick="@(() => SelectTask(t))">
-                        <MudCardContent>
-                            <div class="title" title="@t.Titolo">@t.Titolo</div>
-                            <div class="meta">@t.DataCreazione.ToString("dd/MM/yyyy HH:mm")</div>
-                            @if (!string.IsNullOrWhiteSpace(t.Commento))
-                            {
-                                <div class="comment-preview" title="@t.Commento">@t.Commento</div>
-                            }
-                        </MudCardContent>
-                        <MudCardActions>
-                            @if (tagged)
-                            {
-                                <MudChip T="string" Size="Size.Small" Color="Color.Primary">@($"@{_utente}")</MudChip>
-                            }
-                            <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Chat">
-                                @(_commentCounts.TryGetValue(t.Id, out var c) ? c : 0)
-                            </MudChip>
-                            <MudChip T="string" Size="Size.Small"
-                                     Color="@(t.Stato==StatoChiuso ? Color.Success : Color.Info)">
-                                @t.Stato
-                            </MudChip>
-                        </MudCardActions>
-                    </MudCard>
+                    <MudProgressCircular Indeterminate />
                 }
-            }
-        </div>
-    </MudPaper>
-
-    <!-- DETTAGLIO -->
-    <MudPaper Class="task-panel">
-        <div class="panel-header">Dettaglio</div>
-        <div class="panel-body">
-            @if (_mail is null)
-            {
-                <MudText Typo="Typo.caption">Seleziona un task</MudText>
-            }
-            else
-            {
-                <div class="detail-header">
-                    <MudText Typo="Typo.h6">@(_mail.Oggetto ?? "(nessun oggetto)")</MudText>
-                    <MudSpacer />
-                    @if (_sel is not null)
+                else if (!Filtered().Any())
+                {
+                    <MudText Typo="Typo.caption">Nessun task.</MudText>
+                }
+                else
+                {
+                    @foreach (var t in Filtered())
                     {
-                        <MudButton Variant="Variant.Outlined"
-                                   StartIcon="@Icons.Material.Filled.Mail"
-                                   OnClick="@(() => OpenMail(_sel))">
-                            Apri Mail
-                        </MudButton>
+                        var tagged = _taggedTaskIds.Contains(t.Id);
 
-                        @if (_sel.Stato != StatoChiuso)
+                        <MudCard Class="@GetTaskItemClass(tagged)" @onclick="@(() => SelectTask(t))">
+                            <MudCardContent>
+                                <div class="title" title="@t.Titolo">@t.Titolo</div>
+                                <div class="meta">@t.DataCreazione.ToString("dd/MM/yyyy HH:mm")</div>
+                                @if (!string.IsNullOrWhiteSpace(t.Commento))
+                                {
+                                    <div class="comment-preview" title="@t.Commento">@t.Commento</div>
+                                }
+                            </MudCardContent>
+                            <MudCardActions>
+                                @if (tagged)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">
+                                        &#64;@_utente
+                                    </MudChip>
+                                }
+                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Chat">
+                                    @(_commentCounts.TryGetValue(t.Id, out var c) ? c : 0)
+                                </MudChip>
+                                <MudChip T="string" Size="Size.Small" Color="@(t.Stato == StatoChiuso ? Color.Success : Color.Info)">
+                                    @t.Stato
+                                </MudChip>
+                            </MudCardActions>
+                        </MudCard>
+                    }
+                }
+            </div>
+        </MudPaper>
+
+        <!-- DETTAGLIO -->
+        <MudPaper Class="task-panel">
+            <div class="panel-header">Dettaglio</div>
+            <div class="panel-body">
+                @if (_mail is null)
+                {
+                    <MudText Typo="Typo.caption">Seleziona un task</MudText>
+                }
+                else
+                {
+                    <div class="detail-header">
+                        <MudText Typo="Typo.h6">@(_mail.Oggetto ?? "(nessun oggetto)")</MudText>
+                        <MudSpacer />
+                        @if (_sel is not null && _sel.Stato != StatoChiuso)
                         {
-                            <MudButton Color="Color.Success"
-                                       StartIcon="@Icons.Material.Filled.Done"
-                                       OnClick="MarkClosed">
+                            <MudButton Color="Color.Success" StartIcon="@Icons.Material.Filled.Done" OnClick="@MarkClosed">
                                 Chiudi
                             </MudButton>
                         }
-                    }
-                </div>
+                    </div>
 
-                <MudText Typo="Typo.caption">
-                    Da: @_mail.Mittente | A: @_mail.Destinatari |
-                    Data: @_mail.Data?.ToString("dd/MM/yyyy HH:mm")
-                </MudText>
+                    <MudText Typo="Typo.caption">
+                        Da: @_mail.Mittente | A: @_mail.Destinatari | Data: @_mail.Data?.ToString("dd/MM/yyyy HH:mm")
+                    </MudText>
 
-                <MudDivider Class="my-2" />
-
-                @((MarkupString)(_mail.CorpoHtml ?? _mail.CorpoTesto ?? ""))
-            }
-        </div>
-    </MudPaper>
-
-    <!-- COMMENTI -->
-    <MudPaper Class="task-panel">
-        <div class="panel-header">Commenti</div>
-        <div class="panel-body">
-            @if (_sel is null)
-            {
-                <MudText Typo="Typo.caption">Apri un task per vedere i commenti</MudText>
-            }
-            else
-            {
-                <div class="comment-list">
-                    @if (_comments.Count == 0)
-                    {
-                        <MudText Typo="Typo.caption">Nessun commento</MudText>
-                    }
-                    else
-                    {
-                        @foreach (var c in _comments)
-                        {
-                            <div class="comment">
-                                <div class="meta"><b>@c.Utente</b> • @c.DataCreazione.ToString("dd/MM HH:mm")</div>
-                                <div>@RenderMentions(c.Testo)</div>
-                            </div>
-                        }
-                    }
-                </div>
-
-                <MudDivider Class="my-2" />
-
-                <div style="position: relative;">
-                      <MudTextField T="string"
-                  @bind-Value="_newText"
-                  Lines="3"
-                  Variant="Variant.Outlined"
-                  Placeholder="Scrivi un commento (usa &#64; per menzionare)"
-                  OnKeyUp="HandleTyping" />
-
-    @if (_showMention && _mentionOptions.Any())
-    {
-            <div class="mention-pop">
-                @foreach (var u in _mentionOptions)
-                {
-                        <div class="sugg @(u == _mentionActive ? "active" : "")"
-                             @onclick="@(() => PickMention(u))">
-                            @u
-                        </div>
+                    <MudDivider Class="my-2" />
+                    @((MarkupString)(_mail.CorpoHtml ?? _mail.CorpoTesto ?? ""))
                 }
             </div>
-    }
-                </div>
+        </MudPaper>
 
-                <MudButton OnClick="PostComment" Color="Color.Primary" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Send">
-                    Invia
-                </MudButton>
-            }
-        </div>
-    </MudPaper>
+        <!-- COMMENTI -->
+        <MudPaper Class="task-panel comments-panel">
+            <div class="panel-header">Commenti</div>
+            <div class="panel-body">
+                @if (_sel is null)
+                {
+                    <MudText Typo="Typo.caption">Apri un task per vedere i commenti</MudText>
+                }
+                else
+                {
+                    <div class="comment-list">
+                        @if (_comments.Count == 0)
+                        {
+                            <MudText Typo="Typo.caption">Nessun commento</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var c in _comments)
+                            {
+                                <div class="comment">
+                                    <div class="meta"><b>@c.Utente</b> • @c.DataCreazione.ToString("dd/MM HH:mm")</div>
+                                    <div>@RenderMentionsHtml(c.Testo)</div>
+                                </div>
+                            }
+                        }
+                    </div>
+
+                    <MudDivider Class="my-2" />
+
+                    <div class="mention-anchor" @ref="_anchorRef">
+                        <MudTextField T="string"
+                                      Value="@_newText"
+                                      ValueChanged="OnCommentChanged"
+                                      Lines="3"
+                                      Variant="Variant.Outlined"
+                                      Placeholder="Scrivi un commento (usa  &#64s per menzionare)"
+                                      Immediate="true" />
+                    </div>
+
+                    <MudPopover Open="@_showMention"
+                                AnchorEl="_anchorRef"
+                                AnchorOrigin="Origin.TopCenter"
+                                TransformOrigin="Origin.BottomCenter">
+                        <div style="min-width:260px; max-height:220px; overflow-y:auto;">
+                            <MudList T="string">
+                                @foreach (var u in _mentionOptions)
+                                {
+                                    <MudListItem T="string"
+                                                 Class="@(u == _mentionActive ? "active" : "")"
+                                                 @onclick="@(() => PickMention(u))">
+                                        @u
+                                    </MudListItem>
+                                }
+                            </MudList>
+                        </div>
+                    </MudPopover>
+
+                    <MudButton OnClick="PostComment" Color="Color.Primary" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Send">
+                        Invia
+                    </MudButton>
+                }
+            </div>
+        </MudPaper>
+    </div>
 </div>
 
 <style>
+    /* --- Layout generale --- */
+    .page-wrapper {
+        display: flex;
+        flex-direction: column;
+        height: 100vh;
+        background: #f6f8fc;
+        padding: 12px;
+        gap: 10px;
+    }
+
+    .task-topbar {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        background: #ffffff;
+        border: 1px solid #e8eef7;
+        border-radius: 10px;
+        padding: 8px 14px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+    }
+
     .task-layout {
         display: grid;
         grid-template-columns: 340px 1fr 360px;
-        height: 100vh;
+        flex: 1;
         gap: 12px;
-        padding: 12px;
-        background: #f6f8fc;
     }
 
+    /* --- Pannelli --- */
     .task-panel {
         display: flex;
         flex-direction: column;
@@ -206,7 +222,11 @@
         background: #fff;
         border: 1px solid #e8eef7;
         border-radius: 14px;
-        box-shadow: 0 6px 18px rgba(27, 78, 163, .06);
+        box-shadow: 0 6px 18px rgba(27,78,163,.06);
+    }
+
+    .comments-panel {
+        overflow: visible;
     }
 
     .panel-header {
@@ -220,8 +240,7 @@
     }
 
     .task-list {
-        flex: none;
-        max-height: 45vh;
+        flex: 1;
         overflow-y: auto;
         padding: 10px;
         display: flex;
@@ -255,42 +274,29 @@
         font-weight: 700;
     }
 
-    .mention-pop {
-        position: absolute;
-        bottom: 100%; /* la lista si piazza sopra il campo */
-        margin-bottom: 6px; /* distacco di 6px */
-        left: 0;
-        right: 0;
-        background: white;
-        border: 1px solid #ccc;
-        border-radius: 6px;
-        z-index: 3000;
-        max-height: 180px;
-        overflow-y: auto;
-        box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    .mud-list-item.active {
+        background: #e6f0ff;
+        font-weight: bold;
     }
-
-        .mention-pop .sugg {
-            padding: 6px 10px;
-            cursor: pointer;
-        }
-
-            .mention-pop .sugg.active {
-                background: #e6f0ff;
-                font-weight: bold;
-            }
 </style>
 
 @code {
     private const string StatoAperto = "APERTO";
     private const string StatoChiuso = "CHIUSO";
     private bool _showMention;
+    private ElementReference _anchorRef;
     private List<string> _mentionOptions = new();
     private string? _mentionActive;
-    private List<string> _allUsers = new(); // utenti caricati all'avvio
+
+    private readonly List<string> _allUsers = new()
+    {
+        "a.saldarella","a.tomaiuoli","admin","amministrazione","b.demilio",
+        "c.costa","c.diiorio","corsud","coseme","diagnosys","eurocereali",
+        "f.maulucci","generale","laboratorio","m.prencipe","raya"
+    };
+
     [Parameter, SupplyParameterFromQuery] public string? Cp { get; set; }
     private string? _utente;
-
     private List<UserTaskItem_NEW> _items = new();
     private UserTaskItem_NEW? _sel;
     private EmailDetail_NEW? _mail;
@@ -302,41 +308,38 @@
     private string? _newText;
     private bool _loaded;
 
-    protected override async Task OnInitializedAsync()
+    private void OnCommentChanged(string value)
     {
-        try
-        {
-            _allUsers = await LoadUsersFromOracleAsync();
-            Console.WriteLine($"[DEBUG] Utenti caricati in OnInitializedAsync: {_allUsers.Count}");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[ERRORE] Caricamento utenti fallito: {ex.Message}");
-            _allUsers = new List<string>();
-        }
+        _newText = value;
+        UpdateMentionState();
+    }
+
+    private async Task MarkClosed()
+    {
+        if (_sel is null || string.IsNullOrWhiteSpace(_utente)) return;
+
+        await TaskClient.CloseAsync(_sel.Id, _utente!);
+        _sel = _sel with { Stato = StatoChiuso };
+
+        var idx = _items.FindIndex(x => x.Id == _sel.Id);
+        if (idx >= 0) _items[idx] = _sel;
+
+        StateHasChanged();
     }
 
     protected override async Task OnParametersSetAsync()
     {
-        _loaded = false;
-        _items.Clear();
-        _commentCounts.Clear();
-        _taggedTaskIds.Clear();
+        _loaded = false; _items.Clear(); _commentCounts.Clear(); _taggedTaskIds.Clear();
 
         if (!string.IsNullOrWhiteSpace(Cp))
         {
-            _utente = AccessiSrv.GetUtenteFromCp(Cp);
-
+        _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp); 
             if (!string.IsNullOrWhiteSpace(_utente))
             {
                 var raw = await TaskClient.GetForUserAsync(_utente);
-
                 _items = raw.Select(r => new UserTaskItem_NEW(
-                    Id: r.Id,
-                    Utente: _utente!,
-                    EmailId: r.EmailId.ToString(),
-                    Titolo: r.Titolo ?? "(senza titolo)",
-                    Commento: r.Commento,
+                    Id: r.Id, Utente: _utente!, EmailId: r.EmailId.ToString(),
+                    Titolo: r.Titolo ?? "(senza titolo)", Commento: r.Commento,
                     Stato: string.IsNullOrWhiteSpace(r.Stato) ? StatoAperto : r.Stato,
                     DataCreazione: r.DataCreazione
                 )).ToList();
@@ -345,14 +348,11 @@
                 {
                     var cs = await TaskClient.GetCommentsAsync(t.Id);
                     _commentCounts[t.Id] = cs?.Count ?? 0;
-
                     var rx = new Regex(@$"(?<=^|\s)@{Regex.Escape(_utente!)}\b", RegexOptions.IgnoreCase);
-                    if (cs != null && cs.Any(c => rx.IsMatch(c.Testo ?? "")))
-                        _taggedTaskIds.Add(t.Id);
+                    if (cs != null && cs.Any(c => rx.IsMatch(c.Testo ?? ""))) _taggedTaskIds.Add(t.Id);
                 }
             }
         }
-
         _loaded = true;
     }
 
@@ -373,7 +373,6 @@
     private async Task SelectTask(UserTaskItem_NEW t)
     {
         _sel = t;
-
         if (int.TryParse(t.EmailId, out var emailId) && emailId > 0)
             _mail = await MailSvc.GetEmailDetailAsync(emailId, false);
         else
@@ -381,23 +380,18 @@
 
         var cs = await TaskClient.GetCommentsAsync(t.Id);
         _comments = (cs ?? new()).Select(c => new TaskComment_NEW(
-            Id: c.Id,
-            TaskId: c.TaskId,
-            Utente: c.Utente ?? "(sconosciuto)",
-            Testo: c.Testo ?? "",
-            DataCreazione: c.DataCreazione
+            Id: c.Id, TaskId: c.TaskId, Utente: c.Utente ?? "(sconosciuto)",
+            Testo: c.Testo ?? "", DataCreazione: c.DataCreazione
         )).ToList();
     }
 
-    private void OpenMail(UserTaskItem_NEW row)
-        => Nav.NavigateTo($"/mail-new?cp={Cp}&openEmailId={row.EmailId}");
-
-    private MarkupString RenderMentions(string? txt)
+    private MarkupString RenderMentionsHtml(string? txt)
     {
-        var source = txt ?? "";
+        if (string.IsNullOrEmpty(txt)) return (MarkupString)"";
+        var safe = System.Net.WebUtility.HtmlEncode(txt);
         var html = Regex.Replace(
-            source,
-            @"(?<=\s|^)@([a-zA-Z0-9_.-]+)",
+            safe,
+            @"&#64;([a-zA-Z0-9_.-]+)",
             m => $"<span class=\"mention\">@{m.Groups[1].Value}</span>"
         );
         return (MarkupString)html;
@@ -405,19 +399,10 @@
 
     private async Task PostComment()
     {
-        if (_sel is null || string.IsNullOrWhiteSpace(_newText) || string.IsNullOrWhiteSpace(_utente))
-            return;
+        if (_sel is null || string.IsNullOrWhiteSpace(_newText) || string.IsNullOrWhiteSpace(_utente)) return;
 
         var id = await TaskClient.AddCommentAsync(_sel.Id, _utente!, _newText);
-
-        _comments.Add(new TaskComment_NEW(
-            Id: id,
-            TaskId: _sel.Id,
-            Utente: _utente!,
-            Testo: _newText,
-            DataCreazione: DateTime.Now
-        ));
-
+        _comments.Add(new TaskComment_NEW(id, _sel.Id, _utente!, _newText, DateTime.Now));
         _newText = "";
         _commentCounts[_sel.Id] = (_commentCounts.TryGetValue(_sel.Id, out var ct) ? ct : 0) + 1;
 
@@ -427,81 +412,31 @@
         StateHasChanged();
     }
 
-    private async Task MarkClosed()
+    private void UpdateMentionState()
     {
-        if (_sel is null || string.IsNullOrWhiteSpace(_utente))
-            return;
-
-        await TaskClient.CloseAsync(_sel.Id, _utente!);
-        _sel = _sel with { Stato = StatoChiuso };
-
-        var idx = _items.FindIndex(x => x.Id == _sel.Id);
-        if (idx >= 0) _items[idx] = _sel;
-
-        StateHasChanged();
-    }
-
-    private async Task HandleTyping(KeyboardEventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(_newText))
+        var txt = _newText ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(txt))
         {
             _showMention = false;
+            StateHasChanged();
             return;
         }
 
-        var last = _newText.Split(' ').LastOrDefault() ?? "";
-
+        var last = txt.Split(' ').LastOrDefault() ?? string.Empty;
         if (!last.StartsWith("@"))
         {
             _showMention = false;
+            StateHasChanged();
             return;
         }
 
-        var term = last.Substring(1);
+        var term = last.Length > 1 ? last[1..] : string.Empty;
+        _mentionOptions = string.IsNullOrWhiteSpace(term)
+            ? _allUsers.Take(12).ToList()
+            : _allUsers.Where(u => u.Contains(term, StringComparison.OrdinalIgnoreCase)).Take(12).ToList();
 
-        // ✅ se non hai scritto nulla dopo la @ -> mostra tutta la lista
-        if (string.IsNullOrWhiteSpace(term))
-        {
-            _mentionOptions = _allUsers.Take(20).ToList(); // mostra i primi 20
-        }
-        else
-        {
-            _mentionOptions = _allUsers
-    .Where(u => string.IsNullOrEmpty(term) || u.Contains(term, StringComparison.OrdinalIgnoreCase))
-    .Take(5)
-    .ToList();
-        }
-
-        if (!_mentionOptions.Any())
-        {
-            _showMention = false;
-            return;
-        }
-
-        // Navigazione con tastiera
-        if (e.Key == "ArrowDown")
-        {
-            var idx = _mentionOptions.IndexOf(_mentionActive ?? _mentionOptions.First());
-            idx = (idx + 1) % _mentionOptions.Count;
-            _mentionActive = _mentionOptions[idx];
-        }
-        else if (e.Key == "ArrowUp")
-        {
-            var idx = _mentionOptions.IndexOf(_mentionActive ?? _mentionOptions.First());
-            idx = (idx - 1 + _mentionOptions.Count) % _mentionOptions.Count;
-            _mentionActive = _mentionOptions[idx];
-        }
-        else if (e.Key == "Enter" && _mentionActive != null)
-        {
-            PickMention(_mentionActive);
-            return; // evita invio del form
-        }
-        else
-        {
-            _mentionActive = _mentionOptions.FirstOrDefault();
-        }
-
-        _showMention = true;
+        _mentionActive = _mentionOptions.FirstOrDefault();
+        _showMention = _mentionOptions.Any();
         StateHasChanged();
     }
 
@@ -510,49 +445,17 @@
         var parts = (_newText ?? "").TrimEnd().Split(' ').ToList();
         for (int i = parts.Count - 1; i >= 0; i--)
         {
-            if (parts[i].StartsWith("@")) { parts[i] = "@" + user; break; }
+            if (parts[i].StartsWith("@"))
+            {
+                parts[i] = "@" + user;
+                break;
+            }
         }
         _newText = string.Join(' ', parts) + " ";
         _showMention = false;
+        InvokeAsync(StateHasChanged);
     }
 
-
-    private static List<string>? _cachedUsers;
-    private static DateTime _lastLoadTime;
-
-    private async Task<List<string>> LoadUsersFromOracleAsync()
-    {
-        // Se già caricati e non vuoti negli ultimi 10 minuti → usa cache
-        if (_cachedUsers is not null && _cachedUsers.Any() &&
-            (DateTime.Now - _lastLoadTime).TotalMinutes < 10)
-        {
-            return _cachedUsers;
-        }
-
-        var utenti = new List<string>();
-        var connectionString = Configuration["ConnectionStrings:OracleDb"];
-
-        using var conn = new OracleConnection(connectionString);
-        await conn.OpenAsync();
-
-        using var cmd = new OracleCommand("SELECT UTENTE FROM INFOUSER ORDER BY UTENTE", conn);
-        using var reader = await cmd.ExecuteReaderAsync();
-
-        while (await reader.ReadAsync())
-        {
-            if (!reader.IsDBNull(0))
-            {
-                var u = reader.GetString(0).Trim();
-                utenti.Add(u);
-            }
-        }
-
-        _cachedUsers = utenti;
-        _lastLoadTime = DateTime.Now;
-
-        Console.WriteLine($"[INFO] Cache utenti popolata con {_cachedUsers.Count} record");
-
-        return utenti;
-    }
-
+    private void GoHome() => Nav.NavigateTo($"/?cp={Uri.EscapeDataString(Cp ?? "")}");
+    private void GoToMail() => Nav.NavigateTo($"/mail-new?cp={Uri.EscapeDataString(Cp ?? "")}");
 }
