@@ -30,6 +30,8 @@ namespace SCemail.Components.Data
         public DbSet<EmailAssegnazione> EmailAssegnazione => Set<EmailAssegnazione>();
         public DbSet<EmailArchivio> EmailArchivio => Set<EmailArchivio>();
         public DbSet<EmailWorkflow> EmailWorkflow => Set<EmailWorkflow>();
+        public DbSet<PostIt> PostIt { get; set; } = null!;
+        public DbSet<RubricaContatto> RubricaContatti => Set<RubricaContatto>();
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
         {
@@ -83,6 +85,62 @@ namespace SCemail.Components.Data
                 e.Property(x => x.SoloInvio).HasColumnName("SOLO_INVIO");
             });
 
+            mb.Entity<RubricaContatto>(entity =>
+            {
+                entity.ToTable("RUBRICA_CONTATTI", "SGAPP");
+
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Id).HasColumnName("ID");
+                entity.Property(e => e.FirstName).HasColumnName("FIRST_NAME");
+                entity.Property(e => e.MiddleName).HasColumnName("MIDDLE_NAME");
+                entity.Property(e => e.LastName).HasColumnName("LAST_NAME");
+                entity.Property(e => e.Email).HasColumnName("EMAIL").IsRequired();
+                entity.Property(e => e.CreatedAt).HasColumnName("CREATED_AT");
+
+                entity.HasIndex(e => e.Email)
+                      .HasDatabaseName("UX_RUBRICA_EMAIL")
+                      .IsUnique();
+
+            });
+
+
+            mb.Entity<PostIt>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Id)
+                      .HasColumnName("ID");
+
+                entity.Property(e => e.Utente)
+                      .HasColumnName("UTENTE")
+                      .HasMaxLength(100)
+                      .IsRequired();
+
+                entity.Property(e => e.Testo)
+                      .HasColumnName("TESTO")
+                      .HasColumnType("CLOB")
+                      .IsRequired();
+
+                entity.Property(e => e.Colore)
+                      .HasColumnName("COLORE")
+                      .HasMaxLength(20)
+                      .HasDefaultValue("yellow");
+
+                entity.Property(e => e.DataCreazione)
+                      .HasColumnName("DATA_CREAZIONE")
+                      .HasColumnType("TIMESTAMP")
+                      .HasDefaultValueSql("SYSTIMESTAMP");
+
+                entity.Property(e => e.DataModifica)
+                      .HasColumnName("DATA_MODIFICA")
+                      .HasColumnType("TIMESTAMP");
+
+                entity.Property(e => e.Attivo)
+                      .HasColumnName("ATTIVO")
+                      .HasMaxLength(1)
+                      .HasDefaultValue("Y");
+            });
             mb.Entity<CommentoEmail>(entity =>
             {
                 entity.ToTable("COMMENTI_EMAIL");
@@ -230,6 +288,8 @@ namespace SCemail.Components.Data
                 e.Property(x => x.Id).HasColumnName("ID");
                 e.Property(x => x.Utente).HasColumnName("UTENTE");
                 e.Property(x => x.Destinatari).HasColumnName("DESTINATARI");
+                e.Property(x => x.Cc) .HasColumnName("CC").HasColumnType("CLOB");
+                e.Property(x => x.Ccn).HasColumnName("CCN").HasColumnType("CLOB");
                 e.Property(x => x.Oggetto).HasColumnName("OGGETTO");
                 e.Property(x => x.CorpoHtml).HasColumnName("CORPO_HTML");
                 e.Property(x => x.LastSaved).HasColumnName("LAST_SAVED"); // tipo DATE/NULL

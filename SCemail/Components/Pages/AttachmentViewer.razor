@@ -1,0 +1,94 @@
+﻿@page "/attachment-viewer/{Id:int}"
+@inject HttpClient Http
+
+<h3 style="margin:0 0 10px 0;">Anteprima allegato</h3>
+
+@if (_loading)
+{
+    <p>Caricamento…</p>
+}
+else if (_error != null)
+{
+    <div style="padding:12px;border:1px solid #f3c0c0;background:#fff2f2;border-radius:10px;">
+        <b>Impossibile aprire l’allegato</b>
+        <div style="margin-top:6px;">@_error</div>
+        <div style="margin-top:10px;">
+            Se l’errore riguarda le credenziali, occorre <b>riaggiornare la password</b> della casella,
+            altrimenti non è possibile scaricare i PDF/DOC.
+        </div>
+    </div>
+}
+else
+{
+    <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+        <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60vw;">
+            @_meta!.Filename
+        </div>
+
+        <a href="@_downloadUrl" target="_blank" rel="noopener"
+           style="padding:8px 12px; background:#1a73e8; color:white; border-radius:8px; text-decoration:none;">
+            Scarica
+        </a>
+    </div>
+
+    @if (_isPreviewable)
+    {
+        @if (_meta!.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            <img src="@_inlineUrl" style="max-width:100%; border:1px solid #e0e0e0; border-radius:10px;" />
+        }
+        else
+        {
+            <iframe src="@_inlineUrl"
+                    style="width:100%; height:80vh; border:1px solid #e0e0e0; border-radius:10px;"
+                    loading="lazy"></iframe>
+        }
+    }
+    else
+    {
+        <div style="padding:12px;border:1px solid #e6e6e6;background:#fafafa;border-radius:10px;">
+            Questo file (<b>@_meta!.Mime</b>) non è visualizzabile direttamente nel browser.<br />
+            Puoi comunque scaricarlo e aprirlo con Word/Excel.
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private bool _loading = true;
+    private string? _error;
+
+    private AttachmentMetaDto? _meta;
+    private bool _isPreviewable;
+
+    private string _inlineUrl => $"/api/attachments/{Id}/inline";
+    private string _downloadUrl => $"/api/attachments/{Id}/download";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _meta = await Http.GetFromJsonAsync<AttachmentMetaDto>($"/api/attachments/{Id}/meta");
+            if (_meta is null) { _error = "Metadati non disponibili."; return; }
+
+            var mime = (_meta.Mime ?? "").ToLowerInvariant();
+
+            _isPreviewable =
+                mime == "application/pdf" ||
+                mime.StartsWith("image/") ||
+                mime.StartsWith("text/") ||
+                mime == "text/html";
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private sealed record AttachmentMetaDto(int Id, string Filename, string Mime);
+}

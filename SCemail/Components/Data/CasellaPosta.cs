@@ -19,6 +19,9 @@ namespace SCemail.Components.Data
         [NotMapped]
         public bool InTest { get; set; } = false;
 
+        [Column("STATO_CONN")]
+        public string? StatoConn { get; set; } // OK | ERRORE
+
         public ICollection<CasellaAbilitazione> Abilitazioni { get; set; } = new List<CasellaAbilitazione>();
         public ICollection<EmailRicevuta> EmailRicevute { get; set; } = new List<EmailRicevuta>();
         public ICollection<EmailInviata> EmailInviate { get; set; } = new List<EmailInviata>();

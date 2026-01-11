@@ -35,6 +35,8 @@ namespace SCemail.Components.Data
         public int Id { get; set; }
         public string? Utente { get; set; }
         public string? Destinatari { get; set; }
+        public string? Cc { get; set; }
+        public string? Ccn { get; set; }
         public string? Oggetto { get; set; }
         public string? CorpoHtml { get; set; }
         public DateTime? LastSaved { get; set; }

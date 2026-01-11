@@ -19,19 +19,52 @@
         <!-- SINISTRA: THREAD EMAIL -->
         <section class="left-pane">
             <header class="email-head">
-                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Color="Color.Primary" OnClick="@GoBack" />
+                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                               Color="Color.Primary"
+                               OnClick="@GoBack" />
+
                 <div class="head-texts">
                     <h3 class="subj">@_email?.Oggetto</h3>
-                    <div class="meta">Thread di @_thread.Count messaggi</div>
+
+                    <div class="head-subrow">
+                        <div class="meta">Thread di @_thread.Count messaggi</div>
+
+                        <div class="head-actions">
+                            <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
+                                           Title="Segna da leggere"
+                                           Color="Color.Default"
+                                           OnClick="@MarkUnreadThread" />
+
+                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                           Title="Archivia"
+                                           Color="Color.Primary"
+                                           OnClick="@ArchiveThread" />
+                        </div>
+                    </div>
                 </div>
             </header>
 
-            <div class="email-thread">
-                @foreach (var mail in _thread.OrderBy(m => m.Data))
-                {
-                    <div class="gmail-msg">
 
-                        <!-- AVATAR STILE TEAMS -->
+            @if (_readFromIndex > 0)
+            {
+                <MudButton Variant="Variant.Text"
+                           StartIcon="@Icons.Material.Filled.UnfoldMore"
+                           OnClick="@ShowAllThread">
+                    Mostra tutto
+                </MudButton>
+            }
+
+
+            @{
+                var ordered = _thread.OrderBy(m => m.Data).ToList();
+            }
+
+            <div class="email-thread">
+                @for (int i = _readFromIndex; i < ordered.Count; i++)
+                {
+                    var mail = ordered[i];
+
+                    <div class="gmail-msg">
                         <div class="gmail-head">
                             <div class="avatar" style="background:@GetAvatarColor(mail.Mittente)">
                                 @GetInitials(mail.Mittente)
@@ -40,6 +73,25 @@
                             <div class="meta">
                                 <div class="from">@ExtractEmailOnly(mail.Mittente)</div>
                                 <div class="time">@mail.Data?.ToString("ddd d MMM yyyy HH:mm")</div>
+                            </div>
+
+                            <!-- ✅ AZIONI PER SINGOLO MESSAGGIO (a destra) -->
+                            <div class="msg-actions">
+                                <MudIconButton Icon="@Icons.Material.Filled.Reply"
+                                               Title="Rispondi"
+                                               OnClick="@(() => Reply(mail))" />
+
+                                <MudIconButton Icon="@Icons.Material.Filled.ReplyAll"
+                                               Title="Rispondi a tutti"
+                                               OnClick="@(() => ReplyAll(mail))" />
+
+                                <MudIconButton Icon="@Icons.Material.Filled.Send"
+               Title="Inoltra (esterno)"
+               OnClick="@(() => ForwardExternalFrom(mail))" />
+
+                                <MudIconButton Icon="@Icons.Material.Filled.MenuBook"
+                                               Title="Leggi da qui"
+                                               OnClick="@(() => ReadFromHere(mail))" />
                             </div>
                         </div>
 
@@ -51,7 +103,6 @@
                         {
                             <div class="gmail-attachments">
                                 <div class="attach-title">📎 Allegati:</div>
-
                                 @foreach (var a in mail.Allegati)
                                 {
                                     <a href="@GetDownloadUrl(a.Id)" target="_blank" class="attach-link">
@@ -61,17 +112,10 @@
                                 }
                             </div>
                         }
-
-                        <div class="gmail-actions">
-                            <MudButton Variant="Variant.Text"
-                                       StartIcon="@Icons.Material.Filled.Reply"
-                                       OnClick="@(() => Reply(mail))">
-                                Rispondi
-                            </MudButton>
-                        </div>
                     </div>
                 }
             </div>
+
 
         </section>
 
@@ -244,28 +288,17 @@
     {
         if (msg is null) return;
 
-        var replyInfo = await MailSvc1.GetReplyInfoAsync(
-            msg.ThreadKey,
-            msg.InReplyTo
-        );
+        var replyInfo = await MailSvc1.GetReplyInfoAsync(msg.ThreadKey, msg.InReplyTo);
 
+        var quoteText = BuildGmailReplyAsText(msg);
+        var quoteHtml = ToQuoteHtmlForQuill(quoteText);
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
             ["Oggetto"] = msg.Oggetto?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true
                 ? msg.Oggetto
-                : "Re: " + msg.Oggetto,
-
-            ["CorpoIniziale"] = $@"
-<br><br>
----- Messaggio originale ----<br>
-<b>Da:</b> {msg.Mittente}<br>
-<b>Inviato:</b> {msg.Data}<br>
-<b>Oggetto:</b> {msg.Oggetto}<br><br>
-<blockquote style='border-left:3px solid #ccc; margin-left:10px; padding-left:10px; color:#555;'>
-{msg.CorpoHtml ?? msg.CorpoTesto}
-</blockquote>",
-
+                : "Re: " + (msg.Oggetto ?? ""),
+            ["CorpoIniziale"] = quoteHtml,
             ["ReplyToMessageId"] = msg.MessageId,
             ["References"] = BuildReferencesChain(msg),
             ["ThreadKey"] = msg.ThreadKey
@@ -283,11 +316,18 @@
             parameters["Destinatari"] = ExtractEmailOnly(msg.Mittente);
         }
 
-        var dialog = DialogService.Show<ComposeDialog>(
-            "Rispondi",
-            parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
-        );
+        var dialog = await DialogService.ShowAsync<ComposeDialog>(
+     "Rispondi",
+     parameters,
+     new DialogOptions
+     {
+         MaxWidth = MaxWidth.Medium,
+         FullWidth = true,
+         BackdropClick = false,     // ✅ v7+ equivalente di DisableBackdropClick=true
+         CloseOnEscapeKey = false   // opzionale: evita chiusura con ESC
+     }
+ );
+
 
         var result = await dialog.Result;
         if (result.Data is true)
@@ -295,7 +335,507 @@
     }
 
 
-  
+
+    private EmailDetail_NEW? GetThreadLast()
+    {
+        if (_thread == null || _thread.Count == 0) return null;
+        return _thread.OrderBy(x => x.Data).LastOrDefault();
+    }
+
+    private async Task ArchiveThread()
+    {
+        var last = GetThreadLast();
+        if (last == null || string.IsNullOrWhiteSpace(_utente)) return;
+
+        await MailSvc1.ArchiveEmailAsync(last.Id, _utente);
+        Snackbar.Add("Conversazione archiviata ✔", Severity.Success);
+
+        // torna alla lista (o ricarica)
+        GoBack();
+    }
+
+    private async Task MoveToInboxThread()
+    {
+        var last = GetThreadLast();
+        if (last == null || string.IsNullOrWhiteSpace(_utente)) return;
+
+        await MailSvc1.UnarchiveEmailAsync(last.Id, _utente);
+
+        Snackbar.Add("Spostata in Posta in arrivo ✔", Severity.Success);
+        GoBack();
+    }
+
+    private async Task MarkUnreadThread()
+    {
+        var last = GetThreadLast();
+        if (last == null || string.IsNullOrWhiteSpace(_utente)) return;
+
+        // ✅ qui serve un metodo che marca NON letto (Aperto='N' o equivalente)
+        await MailSvc1.MarkUnreadAsync(last.Id);
+
+        Snackbar.Add("Segnata da leggere ✔", Severity.Success);
+        GoBack();
+    }
+
+    private async Task ReplyThread()
+    {
+        var last = GetThreadLast();
+        if (last == null) return;
+
+        await Reply(last);
+    }
+
+    private async Task ReplyAllThread()
+    {
+        var last = GetThreadLast();
+        if (last == null) return;
+
+        // se hai già ReplyAll in mail-new, replica qui o richiama quello
+        await ReplyAll(last); // <- implementalo come hai fatto nell’altra pagina (usa GetReplyInfoAsync)
+    }
+
+    private async Task AssignThread()
+    {
+        var last = GetThreadLast();
+        if (last == null) return;
+
+        // ✅ riuso il tuo dialog interno (ForwardDialog) che assegna a utenti interni
+        var parameters = new DialogParameters
+        {
+            ["Users"] = await MailSvc1.GetUserListAsync()
+        };
+
+        var dialog = DialogService.Show<ForwardDialog>(
+            "Assegna email",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+        );
+
+        var result = await dialog.Result;
+        if (!result.Canceled && result.Data is ForwardDialog.ForwardResult fr)
+        {
+            await MailSvc1.AssignEmailAsync(last.Id, fr.User, fr.SoloInvio, fr.Comment);
+            Snackbar.Add($"Assegnata a {fr.User} ✅", Severity.Success);
+        }
+    }
+
+   private async Task ForwardExternalThread()
+{
+    var last = GetThreadLast();
+    if (last == null) return;
+    await ForwardExternalFrom(last);
+}
+
+    private async Task ReplyAll(EmailDetail_NEW msg)
+    {
+        if (msg is null) return;
+
+        // 0) ✅ assicurati di avere IL MESSAGGIO GIUSTO e COMPLETO (body non vuoto)
+        async Task<EmailDetail_NEW> EnsureLoadedAsync(EmailDetail_NEW m)
+        {
+            bool hasBody = !string.IsNullOrWhiteSpace(m.CorpoHtml) || !string.IsNullOrWhiteSpace(m.CorpoTesto);
+            if (m.IsLoaded && hasBody) return m;
+
+            var full = await MailSvc1.GetEmailDetailAsync(m.Id, onlyMeta: false);
+            return full ?? m;
+        }
+
+        msg = await EnsureLoadedAsync(msg);
+
+        // 1) replyInfo può essere null (normale su mail ricevute): usalo se c'è, altrimenti vai di fallback
+        var replyInfo = await MailSvc1.GetReplyInfoAsync(msg.ThreadKey, msg.InReplyTo);
+
+        // ✅ FROM: preferisci SEMPRE la casella che ha ricevuto la mail (msg.CasellaEmail)
+        //    replyInfo.CasellaMittente esiste solo se trovi una tua inviata in EMAIL_INVIATE
+        var fromCasella = (msg.CasellaEmail ?? replyInfo?.CasellaMittente ?? "").Trim();
+
+        // "self" = la casella da cui invii (NON deve finire in TO/CC)
+        var self = ExtractEmailOnly(fromCasella);
+
+        // 2) TO/CC
+        var toList = new List<string>();
+        var ccList = new List<string>();
+
+        // Reply-All: include sempre il mittente del messaggio a cui stai rispondendo
+        var fromEmail = ExtractEmailOnly(msg.Mittente);
+        if (!string.IsNullOrWhiteSpace(fromEmail))
+            toList.Add(fromEmail);
+
+        // Aggiungi i destinatari originali (se presenti)
+        toList.AddRange(ParseEmailsSafe(msg.Destinatari));
+
+        // Se ho replyInfo (preso da EMAIL_INVIATE) posso aggiungere TO/CC “veri”
+        toList.AddRange(ParseEmailsSafe(replyInfo?.Destinatari));
+        ccList.AddRange(ParseEmailsSafe(replyInfo?.Cc));
+
+        // pulizia: rimuovi me stesso
+        RemoveEmail(toList, self);
+        RemoveEmail(ccList, self);
+
+        // normalizza + distinct
+        toList = NormalizeDistinct(toList);
+        ccList = NormalizeDistinct(ccList);
+
+        // niente in CC se già in TO
+        ccList.RemoveAll(x => toList.Any(t => string.Equals(t, x, StringComparison.OrdinalIgnoreCase)));
+
+        // safety: se TO è rimasto vuoto, fallback al mittente
+        if (toList.Count == 0 && !string.IsNullOrWhiteSpace(fromEmail) &&
+            !string.Equals(fromEmail, self, StringComparison.OrdinalIgnoreCase))
+        {
+            toList.Add(fromEmail);
+        }
+
+        // 3) ✅ QUOTA SEMPRE POPOLATA (safe per Quill): testo -> <pre>
+        //    Così vedi SEMPRE il contenuto del messaggio a cui stai rispondendo.
+        var quoteText = BuildGmailReplyAsText(msg);     // usa il body di msg (ora caricato)
+        var quoteHtml = ToQuoteHtmlForQuill(quoteText);
+
+        // 4) ✅ Reply headers: stai rispondendo a QUESTO msg
+        var parameters = new DialogParameters
+        {
+            ["Utente"] = _utente,
+
+            ["Oggetto"] = msg.Oggetto?.StartsWith("Re:", StringComparison.OrdinalIgnoreCase) == true
+                ? msg.Oggetto
+                : "Re: " + (msg.Oggetto ?? ""),
+
+            ["CorpoIniziale"] = quoteHtml,
+
+            // importantissimo: Reply-All al messaggio cliccato
+            ["ReplyToMessageId"] = msg.MessageId,
+            ["References"] = BuildReferencesChain(msg),
+            ["ThreadKey"] = msg.ThreadKey,
+
+            // invio
+            ["CasellaMittente"] = fromCasella,
+            ["Destinatari"] = JoinEmails(toList),
+            ["Cc"] = JoinEmails(ccList),
+            ["Bcc"] = replyInfo?.Bcc
+        };
+
+        var dialog = DialogService.Show<ComposeDialog>(
+            "Rispondi a tutti",
+            parameters,
+             new DialogOptions
+             {
+                 MaxWidth = MaxWidth.Medium,
+                 FullWidth = true,
+                 BackdropClick = false,     
+                 CloseOnEscapeKey = false   
+             });
+
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Risposta a tutti inviata ✅", Severity.Success);
+    }
+
+
+    private static List<string> NormalizeDistinct(IEnumerable<string> xs)
+    {
+        return xs
+            .Select(x => (x ?? "").Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+
+    // ======================
+    // FORWARD "GMAIL-LIKE" FULL CHAIN
+    // ======================
+
+    private static string Html(string? s) => System.Net.WebUtility.HtmlEncode(s ?? "");
+
+    private static string FormatDateLikeGmail(DateTime? dt)
+    {
+        if (dt == null) return "";
+        var it = new System.Globalization.CultureInfo("it-IT");
+        // ven 12 dic 2025 alle ore 20:39
+        return dt.Value.ToString("ddd d MMM yyyy", it) + " alle ore " + dt.Value.ToString("HH:mm", it);
+    }
+    private static string CleanQuotedPartHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return html;
+
+        // markers (come nel tuo CleanQuotedPart)
+        string[] markers = { "---- Messaggio originale ----", "Da:", "Inviato:", "Oggetto:" };
+
+        var idx = -1;
+        foreach (var m in markers)
+        {
+            var i = html.IndexOf(m, StringComparison.OrdinalIgnoreCase);
+            if (i > 0 && (idx < 0 || i < idx)) idx = i;
+        }
+
+        if (idx > 0)
+            return html[..idx].Trim();
+
+        return html.Trim();
+    }
+    private string GetBodyVisibleAsHtml(EmailDetail_NEW mail)
+    {
+        // ✅ se hai HTML, usalo
+        if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+            return CleanQuotedPartHtml(mail.CorpoHtml);
+
+        // fallback testo -> html
+        var txt = CleanQuotedPart(mail.CorpoTesto ?? "").Trim();
+        return $"<div style='white-space:pre-wrap;font-family:inherit;line-height:1.5'>{Html(txt)}</div>";
+    }
+    private static string FormatGmailReplyHeader(DateTime? dt, string? fromRaw)
+    {
+        var it = new System.Globalization.CultureInfo("it-IT");
+        var d = dt?.ToString("ddd d MMM yyyy", it) ?? "";
+        var t = dt?.ToString("HH:mm", it) ?? "";
+        var from = FormatNameEmailLikeGmail(fromRaw);
+        return $"Il giorno {d} alle ore {t} {from} ha scritto:";
+    }
+
+    private static string TextToHtmlLines(string text)
+    {
+        // encode + \n -> <br>
+        return Html(text).Replace("\r\n", "\n").Replace("\r", "\n").Replace("\n", "<br>");
+    }
+    private string BuildGmailQuoteBlockHtml(EmailDetail_NEW original)
+    {
+        var header = FormatGmailReplyHeader(original.Data, original.Mittente);
+        var bodyHtml = GetBodyVisibleAsHtml(original);
+
+        return $@"
+<br><br>
+{header}<br><br>
+<div style='margin-left:1ex;border-left:1px solid #ccc;padding-left:1ex;'>
+  {bodyHtml}
+</div>";
+    }
+    // Prende il corpo "come lo vedi" (taglia i quote già presenti)
+    private string GetBodyVisibleAsPlainText(EmailDetail_NEW mail)
+    {
+        var body = mail.CorpoTesto;
+
+        if (string.IsNullOrWhiteSpace(body) && !string.IsNullOrWhiteSpace(mail.CorpoHtml))
+            body = HtmlToText(mail.CorpoHtml);
+
+        body ??= "";
+        body = CleanQuotedPart(body);
+        return body.Trim();
+    }
+
+    private static string FormatDateSimple(DateTime? dt)
+    {
+        if (dt == null) return "";
+        var it = new System.Globalization.CultureInfo("it-IT");
+        // ven 12 dic 2025 19:37
+        return dt.Value.ToString("ddd d MMM yyyy HH:mm", it);
+    }
+
+    private static string FormatNameEmailLikeGmail(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var r = raw.Trim();
+
+        var m = Regex.Match(r, "\"?(?<name>[^\"]+?)\"?\\s*<(?<mail>[^>]+)>");
+        if (m.Success)
+            return $"{Html(m.Groups["name"].Value.Trim())} &lt;{Html(m.Groups["mail"].Value.Trim())}&gt;";
+
+        if (r.Contains("@") && !r.Contains("<")) return Html(r);
+        return Html(r);
+    }
+
+    private static string FormatToLikeGmail(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+
+        var r = raw.Trim();
+
+        // già contiene < >
+        if (r.Contains("<") && r.Contains(">"))
+            return FormatNameEmailLikeGmail(r);
+
+        // mail nuda -> <mail>
+        if (r.Contains("@"))
+            return $"<{r}>";
+
+        return r;
+    }
+    private static string HtmlToText(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return "";
+        var noTags = Regex.Replace(html, "<br\\s*/?>", "\n", RegexOptions.IgnoreCase);
+        noTags = Regex.Replace(noTags, "</p\\s*>", "\n\n", RegexOptions.IgnoreCase);
+        noTags = Regex.Replace(noTags, "<.*?>", " ");
+        noTags = System.Net.WebUtility.HtmlDecode(noTags);
+        return noTags;
+    }
+
+    private string GetBodyVisibleAsText(EmailDetail_NEW mail)
+    {
+        // vogliamo il testo "come lo vedi", quindi CleanQuotedPart
+        if (!string.IsNullOrWhiteSpace(mail.CorpoTesto))
+            return CleanQuotedPart(mail.CorpoTesto);
+
+        if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+            return CleanQuotedPart(HtmlToText(mail.CorpoHtml));
+
+        return "";
+    }
+
+    private string GetBodyHtmlVisible(EmailDetail_NEW mail)
+    {
+        var body = mail.CorpoHtml ?? mail.CorpoTesto ?? "";
+
+        // IMPORTANTISSIMO: stesso identico comportamento della UI (quello che “stai vedendo”)
+        var cleaned = CleanQuotedPart(body);
+
+        if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+            return cleaned; // già HTML
+
+        // testo -> HTML safe
+        return "<pre style='white-space:pre-wrap;font-family:inherit;margin:0'>" + Html(cleaned) + "</pre>";
+    }
+    private string BuildForwardChainAsText(EmailDetail_NEW selected)
+    {
+        var ordered = _thread?.OrderBy(x => x.Data).ToList() ?? new List<EmailDetail_NEW>();
+
+        // trova indice del messaggio selezionato in lista
+        var idx = ordered.FindIndex(x =>
+            (!string.IsNullOrWhiteSpace(selected.MessageId) && x.MessageId == selected.MessageId) || x.Id == selected.Id);
+
+        if (idx < 0) idx = ordered.Count - 1;
+
+        // da sopra fino a lì (incluso)
+        var chain = ordered.Take(idx + 1).ToList();
+        if (chain.Count == 0) chain.Add(selected);
+
+        var msg = chain.Last();
+
+        var sb = new System.Text.StringBuilder();
+
+        // HEADER forward (solo UNA volta)
+        sb.AppendLine("---------- Forwarded message ---------");
+        sb.AppendLine($"Da: {FormatNameEmailLikeGmail(msg.Mittente)}");
+        sb.AppendLine($"Date: {FormatDateLikeGmail(msg.Data)}");
+        sb.AppendLine($"Subject: {msg.Oggetto}");
+        sb.AppendLine($"To: {FormatToLikeGmail(ExtractEmailOnly(msg.Destinatari))}");
+        sb.AppendLine();
+        sb.AppendLine(GetBodyVisibleAsText(msg).Trim());
+        sb.AppendLine();
+
+        // catena precedente (stile gmail: "---- Messaggio originale ----")
+        for (int i = chain.Count - 2; i >= 0; i--)
+        {
+            var prev = chain[i];
+
+            sb.AppendLine("---- Messaggio originale ----");
+            sb.AppendLine($"Da: {FormatNameEmailLikeGmail(prev.Mittente)}");
+            sb.AppendLine($"Inviato: {FormatDateSimple(prev.Data)}");
+            sb.AppendLine($"Oggetto: {prev.Oggetto}");
+            sb.AppendLine($"A: {FormatToLikeGmail(ExtractEmailOnly(prev.Destinatari))}");
+            sb.AppendLine();
+            sb.AppendLine(GetBodyVisibleAsText(prev).Trim());
+            sb.AppendLine();
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+    private string BuildForwardChainHtml(EmailDetail_NEW selected)
+    {
+        var ordered = _thread?.OrderBy(x => x.Data).ToList() ?? new List<EmailDetail_NEW>();
+        var idx = ordered.FindIndex(x => x.MessageId == selected.MessageId);
+        if (idx < 0) idx = ordered.FindIndex(x => x.Id == selected.Id);
+        if (idx < 0) idx = ordered.Count - 1;
+
+        // "da sopra fino a lì" (incluso)
+        var chain = ordered.Take(idx + 1).ToList();
+        if (chain.Count == 0) chain.Add(selected);
+
+        // header "Forwarded message" (gmail-like) sul messaggio selezionato
+        var msg = chain.Last();
+
+        var from = FormatNameEmailLikeGmail(msg.Mittente);
+        var date = Html(FormatDateLikeGmail(msg.Data));
+        var subject = Html(msg.Oggetto);
+        var to = FormatToLikeGmail(ExtractEmailOnly(msg.Destinatari));
+
+        var html =
+            "<br><br>" +
+            "---------- Forwarded message ---------<br>" +
+            "<b>Da:</b> " + from + "<br>" +
+            "<b>Date:</b> " + date + "<br>" +
+            "<b>Subject:</b> " + subject + "<br>" +
+            "<b>To:</b> " + to + "<br><br>";
+
+        // corpo del messaggio selezionato (come in UI)
+        html += GetBodyHtmlVisible(msg);
+
+        // catena precedente (a cascata) -> "---- Messaggio originale ----"
+        for (int i = chain.Count - 2; i >= 0; i--)
+        {
+            var prev = chain[i];
+
+            var prevFrom = FormatNameEmailLikeGmail(prev.Mittente);
+            var prevDate = Html(prev.Data?.ToString("ddd d MMM yyyy HH:mm", new System.Globalization.CultureInfo("it-IT")) ?? "");
+            var prevSubj = Html(prev.Oggetto);
+            var prevTo = FormatToLikeGmail(ExtractEmailOnly(prev.Destinatari));
+
+            html +=
+                "<br><br>" +
+                "---- Messaggio originale ----<br>" +
+                "<b>Da:</b> " + prevFrom + "<br>" +
+                "<b>Inviato:</b> " + prevDate + "<br>" +
+                "<b>Oggetto:</b> " + prevSubj + "<br>" +
+                "<b>A:</b> " + prevTo + "<br><br>" +
+                "<blockquote style='border-left:3px solid #ccc;margin:0 0 0 10px;padding-left:10px;color:#555;'>" +
+                GetBodyHtmlVisible(prev) +
+                "</blockquote>";
+        }
+
+        return html;
+    }
+
+    private async Task ForwardExternalFrom(EmailDetail_NEW msg)
+    {
+        if (msg is null) return;
+
+        if (string.IsNullOrWhiteSpace(_utente))
+        {
+            Snackbar.Add("Utente non valorizzato (cp mancante).", Severity.Error);
+            return;
+        }
+
+        // testo Gmail-like
+        var forwardText = BuildForwardChainAsText(msg);
+
+        // lo impacchetto in <pre> così NON ti si impasta mai
+        var forwardHtml = ToForwardHtmlForQuill(forwardText);
+        var parameters = new DialogParameters
+        {
+            ["Utente"] = _utente,
+            ["Oggetto"] = (msg.Oggetto?.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase) == true)
+                ? msg.Oggetto
+                : "Fwd: " + (msg.Oggetto ?? ""),
+            ["CorpoIniziale"] = forwardHtml,
+            ["Destinatari"] = ""
+        };
+
+        var dialog = DialogService.Show<ComposeDialog>(
+            "Inoltra (esterno)",
+            parameters,
+             new DialogOptions
+             {
+                 MaxWidth = MaxWidth.Medium,
+                 FullWidth = true,
+                 BackdropClick = false,    
+                 CloseOnEscapeKey = false  
+             });
+
+        var result = await dialog.Result;
+        if (result.Data is true)
+            Snackbar.Add("Inoltro esterno inviato ✅", Severity.Success);
+    }
+
+   
 
     private static string BuildReferencesChain(EmailDetail_NEW msg)
     {
@@ -347,6 +887,43 @@
         }
 
         return normalized.Trim();
+    }
+    private static string ToPreHtml(string text)
+    {
+        return $"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.5'>{Html(text)}</pre>";
+    }
+    private static string ToQuoteHtmlForQuill(string text)
+    {
+        var safe = Html(text)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+
+        return $@"
+        <div style=""background:#fff;color:#222;font-family:inherit;font-size:14px;line-height:1.5;white-space:pre-wrap;"">
+          {safe}
+        </div>";
+    }
+
+
+    private string BuildGmailReplyAsText(EmailDetail_NEW original)
+    {
+        var it = new System.Globalization.CultureInfo("it-IT");
+        var d = original.Data?.ToString("ddd d MMM yyyy", it) ?? "";
+        var t = original.Data?.ToString("HH:mm", it) ?? "";
+        var from = ExtractEmailOnly(original.Mittente);
+
+        // ✅ testo visibile e ripulito (niente html spezzato)
+        var body = GetBodyVisibleAsText(original); // tu ce l’hai già
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine();
+        sb.AppendLine($"Il giorno {d} alle ore {t} {from} ha scritto:");
+        sb.AppendLine();
+        sb.AppendLine(body);
+
+        return sb.ToString();
     }
 
     private string GetInitials(string autore)
@@ -434,7 +1011,23 @@
         else if (e.Key == "Escape")
             _mentionOpen = false;
     }
+    private int _readFromIndex = 0;   // 0 = mostra tutto
 
+    private List<EmailDetail_NEW> GetThreadOrdered()
+        => _thread?.OrderBy(m => m.Data).ToList() ?? new();
+
+    private void ReadFromHere(EmailDetail_NEW mail)
+    {
+        var ordered = GetThreadOrdered();
+        var idx = ordered.FindIndex(x =>
+            (!string.IsNullOrWhiteSpace(mail.MessageId) && x.MessageId == mail.MessageId)
+            || x.Id == mail.Id
+        );
+
+        _readFromIndex = Math.Max(0, idx);
+    }
+
+    private void ShowAllThread() => _readFromIndex = 0;
     private void SelectMention(string user)
     {
         if (string.IsNullOrWhiteSpace(_newComment)) return;
@@ -454,6 +1047,93 @@
         var m = Regex.Match(raw, @"<(?<mail>[^>]+)>");
         return m.Success ? m.Groups["mail"].Value : raw;
     }
+    private string BuildGmailForwardUntil(EmailDetail_NEW target)
+    {
+        var ordered = GetThreadOrdered(); // tu già ce l’hai
+        var idx = ordered.FindIndex(x =>
+            (!string.IsNullOrWhiteSpace(x.MessageId) && x.MessageId == target.MessageId) || x.Id == target.Id);
+
+        if (idx < 0) idx = ordered.Count - 1;
+
+        // prendo dall'inizio fino a idx (in ordine cronologico)
+        var slice = ordered.Take(idx + 1).ToList();
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<br><br>");
+
+        foreach (var m in slice)
+        {
+            var date = m.Data?.ToString("ddd d MMM yyyy HH:mm") ?? "";
+            var from = m.Mittente ?? "";
+
+            // se nel DTO hai To/Cc, usali; se non li hai, lascia vuoto
+            var to = (m.Destinatari ?? "").Trim();
+
+            sb.AppendLine("---------- Forwarded message ---------<br>");
+            sb.AppendLine($"<b>Da:</b> {System.Net.WebUtility.HtmlEncode(from)}<br>");
+            sb.AppendLine($"<b>Date:</b> {System.Net.WebUtility.HtmlEncode(date)}<br>");
+            sb.AppendLine($"<b>Subject:</b> {System.Net.WebUtility.HtmlEncode(m.Oggetto ?? "")}<br>");
+
+            if (!string.IsNullOrWhiteSpace(to))
+                sb.AppendLine($"<b>To:</b> {System.Net.WebUtility.HtmlEncode(to)}<br>");
+
+            
+
+            sb.AppendLine("<br>");
+
+            // corpo originale (NON clean)
+            var bodyHtml = ToSafeHtmlBody(m);
+
+            sb.AppendLine("<blockquote style='border-left:3px solid #ccc; margin:0 0 16px 10px; padding-left:10px; color:#555;'>");
+            sb.AppendLine(bodyHtml);
+            sb.AppendLine("</blockquote>");
+            sb.AppendLine("<br>");
+        }
+
+        return sb.ToString();
+    }
+
+    private string ToSafeHtmlBody(EmailDetail_NEW msg)
+    {
+        if (!string.IsNullOrWhiteSpace(msg.CorpoHtml))
+            return msg.CorpoHtml;
+
+        var txt = msg.CorpoTesto ?? "";
+        return $"<pre style='white-space:pre-wrap;font-family:inherit;margin:0'>{System.Net.WebUtility.HtmlEncode(txt)}</pre>";
+    }
+    private static List<string> ParseEmailsSafe(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return new();
+
+        try
+        {
+            // MimeKit è già referenziato nel progetto (lo usi in mail-new)
+            var list = MimeKit.InternetAddressList.Parse(raw);
+            return list.Mailboxes
+                .Select(m => (m.Address ?? "").Trim().ToLowerInvariant())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .ToList();
+        }
+        catch
+        {
+            // fallback: separatori comuni
+            return raw.Split(';', ',', '\n', '\r')
+                      .Select(x => x.Trim().Trim('<', '>', ' '))
+                      .Where(x => x.Contains("@"))
+                      .Select(x => x.ToLowerInvariant())
+                      .ToList();
+        }
+    }
+
+    private static string JoinEmails(List<string> emails)
+        => string.Join("; ", emails.Distinct(StringComparer.OrdinalIgnoreCase));
+
+    private static void RemoveEmail(List<string> list, string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email)) return;
+        list.RemoveAll(x => string.Equals(x, email.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
 
     private static string ExtractEmailOnly(string? raw)
     {
@@ -470,6 +1150,20 @@
             return raw.Trim();
 
         return raw;
+    }
+    private static string ToForwardHtmlForQuill(string text)
+    {
+        var safe = Html(text)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+
+       
+
+        return $@"
+<div style=""background:#fff;color:#222;font-family:inherit;font-size:14px;line-height:1.5;white-space:pre-wrap;"">
+  {safe}
+</div>";
     }
 
     private async Task AddComment()
@@ -620,6 +1314,8 @@
             "<span class=\"mention-tag\">@$1</span>"
         );
     }
+
+
 }
 
 
@@ -636,7 +1332,12 @@
 .detail-shell{display:grid;grid-template-columns:2fr 1fr;gap:16px;height:calc(100vh - 90px);padding:16px;background:#f5f8ff}
 .left-pane{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow-y:auto}
 .email-head{display:flex;gap:10px;align-items:center;border-bottom:1px solid #e8eefc;padding-bottom:8px;margin-bottom:10px}
-.head-texts{display:flex;flex-direction:column}
+
+    .head-texts {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+    }
 .subj{margin:0;font-size:18px}
 .email-body{font-size:14px;line-height:1.4}
 .attachments{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
@@ -980,6 +1681,34 @@
         font-size: 13px;
         border: 1px solid #d6e4ff;
         margin-left: 8px;
+    }
+
+    .head-actions {
+        margin-left: auto; 
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap; 
+    }
+
+    .msg-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .gmail-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .head-subrow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
     }
 
 </style>

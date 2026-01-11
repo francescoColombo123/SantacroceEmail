@@ -100,8 +100,10 @@ namespace SCemail.Components.Data
     int? CasellaId = null,
     string? CasellaEmail = null,
          
-    string? AssegnatoA = null
-            
+    string? AssegnatoA = null,
+     string? Destinatari = null,   // TO
+    string? Cc = null,            // CC
+    string? Ccn = null            // BCC/CCN
 
  );
 
@@ -162,7 +164,39 @@ namespace SCemail.Components.Data
         [Column("DESTINATARIO")]
         public string Email { get; set; } = null!;
     }
+     [Table("POST_IT")]
+    public class PostIt
+    {
+        [Key]
+        [Column("ID")]
+        public long Id { get; set; }
 
+        [Required]
+        [Column("UTENTE")]
+        [MaxLength(100)]
+        public string Utente { get; set; } = string.Empty;
+
+        [Required]
+        [Column("TESTO", TypeName = "CLOB")]
+        public string Testo { get; set; } = string.Empty;
+
+        [Column("COLORE")]
+        [MaxLength(20)]
+        public string Colore { get; set; } = "yellow";
+
+        [Column("DATA_CREAZIONE")]
+        public DateTime DataCreazione { get; set; }
+
+        [Column("DATA_MODIFICA")]
+        public DateTime? DataModifica { get; set; }
+
+        [Column("ATTIVO")]
+        [MaxLength(1)]
+        public string Attivo { get; set; } = "Y";
+        [Column("TITOLO")]
+        [MaxLength(200)]
+        public string Titolo { get; set; } = "";
+    }
     public class EmailDetail_NEW
     {
         public int Id { get; set; }
@@ -174,14 +208,14 @@ namespace SCemail.Components.Data
         public string? CorpoTesto { get; set; }
         public List<AllegatoItem_NEW> Allegati { get; set; } = new(); public string? Aperto { get; set; }
         public string? CasellaEmail { get; set; }
-        public bool IsLoaded { get; set; }   // per lazy-load
-                                             // 🧩 NUOVI CAMPI PER THREAD E REPLY
-        public string? MessageId { get; set; }   // <459N1H84ERU4.Z2TJM829UU4G@grupposantacroce.com>
+        public bool IsLoaded { get; set; }   
+                                            
+        public string? MessageId { get; set; }   
         public string? ThreadKey { get; set; }
 
-        public string? InReplyTo { get; set; }   // Message-ID del messaggio a cui rispondi
-        public string? References { get; set; }  // lista di Message-ID precedenti nella catena
-        public string? Tipo { get; set; }  // "R" = ricevuta, "I" = inviata
+        public string? InReplyTo { get; set; }   
+        public string? References { get; set; }  
+        public string? Tipo { get; set; } 
 
     }
 

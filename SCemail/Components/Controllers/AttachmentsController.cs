@@ -11,6 +11,7 @@ namespace SCemail.Components.Controllers
     {
         private readonly MailService _mail;
         private readonly ILogger<AttachmentsController> _logger;
+        public record AttachmentMetaDto(int Id, string Filename, string Mime);
 
         public AttachmentsController(MailService mail, ILogger<AttachmentsController> logger)
         {
@@ -19,6 +20,20 @@ namespace SCemail.Components.Controllers
         }
 
         // === ALLEGATI EMAIL ===
+
+        [HttpGet("{id:int}/meta")]
+        public async Task<ActionResult<AttachmentMetaDto>> Meta(int id, CancellationToken ct)
+        {
+            try
+            {
+                var (_, mime, filename) = await _mail.GetAttachmentAsync(id, ct);
+                return new AttachmentMetaDto(id, filename, mime);
+            }
+            catch
+            {
+                return NotFound();
+            }
+        }
 
         // Anteprima inline -> /api/attachments/{id}/inline
         [HttpGet("{id:int}/inline")]
@@ -56,8 +71,11 @@ namespace SCemail.Components.Controllers
 
                 if (inline)
                 {
-                    Response.Headers["Content-Disposition"] = $"inline; filename=\"{filename}\"";
-                    return File(bytes, mime);
+                    var safeName = filename ?? "allegato";
+                    Response.Headers["Content-Disposition"] =
+                        $"inline; filename=\"{safeName}\"; filename*=UTF-8''{Uri.EscapeDataString(safeName)}";
+
+                    return File(bytes, mime ?? "application/octet-stream", enableRangeProcessing: true);
                 }
 
                 return File(bytes, mime, fileDownloadName: filename, enableRangeProcessing: true);
@@ -69,6 +87,14 @@ namespace SCemail.Components.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Errore nel recupero allegato Id={Id}", id);
+
+                var msg = ex.Message ?? "";
+                if (msg.Contains("Invalid credentials", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("Authentication", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Unauthorized("Credenziali casella non aggiornate. Aggiorna la password della casella e riprova.");
+                }
+
                 return NotFound($"Allegato {id} non disponibile: {ex.Message}");
             }
         }

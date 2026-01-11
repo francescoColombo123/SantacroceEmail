@@ -1,0 +1,43 @@
+﻿@using Microsoft.EntityFrameworkCore
+@using SCemail.Components.Data
+@inject IDbContextFactory<MailDbContext> DbFactory
+
+<MudDialog>
+    <DialogContent>
+        <MudTextField Label="Nome" @bind-Value="Model.FirstName" />
+        <MudTextField Label="Secondo nome" @bind-Value="Model.MiddleName" />
+        <MudTextField Label="Cognome" @bind-Value="Model.LastName" />
+        <MudTextField Label="Email" Value="Model.Email" Disabled="true" />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Annulla</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="Save">Salva</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public RubricaContatto Model { get; set; } = new();
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        var entity = await db.RubricaContatti.FirstOrDefaultAsync(x => x.Id == Model.Id);
+        if (entity == null)
+        {
+            MudDialog.Cancel();
+            return;
+        }
+
+        entity.FirstName = Model.FirstName;
+        entity.MiddleName = Model.MiddleName;
+        entity.LastName = Model.LastName;
+
+        await db.SaveChangesAsync();
+
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+}

@@ -31,6 +31,12 @@ else
                 <MudIcon Icon="@Icons.Material.Filled.ManageAccounts" Class="header-icon" />
                 <h1>Dashboard Amministrazione</h1>
             </div>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Secondary"
+                       StartIcon="@Icons.Material.Filled.Home"
+                       OnClick="ReturnToHome">
+                Home
+            </MudButton>
 
             <MudButton Variant="Variant.Filled"
                        Color="Color.Primary"
@@ -392,6 +398,17 @@ else
              || _emailConcluseFiltrate.Any(x => x.AssegnatoA == u))
             .ToList();
     }
+    private void ReturnToHome()
+    {
+        if (string.IsNullOrWhiteSpace(_cp))
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        Nav.NavigateTo($"/?cp={Uri.EscapeDataString(_cp)}");
+    }
+
 
      private void ResetFiltri()
     {

@@ -36,4 +36,35 @@ window.focusElementById = function (id) {
 
     const el = document.getElementById(id);
     if (el) setTimeout(() => el.focus(), 50);
+}; 
+
+// ==== Attachment popup helpers (Blazor) ====
+window.openInline = (url) => window.open(url, "_blank", "noopener,noreferrer");
+window._namedWins = window._namedWins || {};
+window.openNewTab = (url) => {
+    window.open(url, "_blank", "noopener,noreferrer");
 };
+window.openNamed = (name) => {
+    const w = window.open("about:blank", name);
+    if (!w) {
+        console.warn("❌ Popup bloccato: impossibile aprire la tab");
+        return false; // ✅ boolean
+    }
+    window._namedWins[name] = w;
+    try { w.document.title = "Caricamento allegato…"; } catch { }
+    return true; // ✅ boolean
+};
+
+window.navigateNamed = (name, url) => {
+    const abs = new URL(url, window.location.origin).href;
+    const w = window._namedWins[name] || window.open("", name);
+    if (!w) {
+        console.warn("❌ Finestra non disponibile (popup bloccato?)");
+        return false; // ✅ boolean (opzionale)
+    }
+    w.location.href = abs;
+    w.focus();
+    return true; // ✅ boolean (opzionale)
+};
+
+console.log("✅ openNamed loaded:", typeof window.openNamed);

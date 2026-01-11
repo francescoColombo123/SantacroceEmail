@@ -23,6 +23,7 @@ builder.Services.AddDbContextFactory<MailDbContext>(opt =>
 });
 
 builder.Services.AddScoped<MailService_NEW>();
+builder.Services.AddScoped<PostItService>();
 builder.Services.AddScoped<SCemail.Components.Shared.IEmailTasksClient_NEW, SCemail.Components.Shared.EmailTasksClient_NEW>();
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -42,6 +43,8 @@ builder.Services.AddScoped<AccessiService>();
 // stessa istanza sia HostedService che servizio iniettabile
 builder.Services.AddSingleton<EmailFetchService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<EmailFetchService>());
+builder.Services.AddHostedService<ImapHealthCheckService>();
+builder.Services.AddSingleton<RubricaImportService>();
 
 builder.Services.AddScoped<IEmailTasksRepository, EmailTasksRepository>();
 

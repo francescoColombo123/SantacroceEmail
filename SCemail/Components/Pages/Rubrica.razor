@@ -1,0 +1,656 @@
+﻿@page "/rubrica"
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Primitives
+@using Microsoft.JSInterop
+@using SCemail.Components.Data
+@using CsvHelper;
+@using CsvHelper.Configuration;
+@using System.Globalization;
+@inject RubricaImportService ImportService
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+
+<MudPaper Class="pa-4 mx-auto" MaxWidth="1200px" Elevation="3">
+
+    <MudStack Direction="Row" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.h5">📒 Rubrica Contatti</MudText>
+
+        <MudButton Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Home"
+                   OnClick="GoHome">
+            Home
+        </MudButton>
+    </MudStack>
+
+    <MudDivider Class="my-3" />
+    <InputFile id="rubricaFile"
+               OnChange="HandleFile"
+               accept=".csv"
+               class="offscreen-input" />
+
+    <div id="rubricaDropZone"
+         class="drop-zone mt-3 @(_dragOver ? "dragover" : "")"
+         @onclick="OpenFilePicker"
+         @ondragover="OnDragOver"
+         @ondragleave="OnDragLeave">
+        <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Large" Color="Color.Primary" />
+        <div class="mt-2">Trascina qui il CSV o clicca per selezionarlo</div>
+        <div class="mt-1">Poi premi “Importa”</div>
+    </div>
+
+
+
+
+    @if (_csvFileName != null)
+    {
+        <MudStack Direction="Row" Spacing="2" AlignItems="AlignItems.Center" Class="mt-2">
+            <MudText Typo="Typo.caption">📄 @_csvFileName</MudText>
+
+            <MudButton Color="Color.Success"
+                       Variant="Variant.Filled"
+                       Disabled="_isImporting"
+                       OnClick="ImportCsv">
+                Importa
+            </MudButton>
+
+            <MudButton Variant="Variant.Outlined"
+                       Disabled="_isImporting"
+                       OnClick="ClearSelectedFile">
+                Rimuovi
+            </MudButton>
+        </MudStack>
+    }
+    @if (_isImporting)
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-2">
+            ⏳ Importazione in corso: @_imported / @_total
+        </MudAlert>
+    }
+
+    <MudDivider Class="my-4" />
+
+    <MudTable T="RubricaContatto"
+          ServerData="LoadServerData"
+          Dense Hover Bordered
+          RowsPerPage="30"
+          RowsPerPageOptions="new int[]{20,30}"
+          Loading="_loading"
+          @ref="_table">
+
+        <ToolBarContent>
+            <MudTextField T="string"
+                          Value="_search"
+                          ValueChanged="OnSearchChanged"
+                          Placeholder="🔍 Cerca nome o email"
+                          Immediate="true"
+                          DebounceInterval="250"
+                          Adornment="Adornment.Start"
+                          AdornmentIcon="@Icons.Material.Filled.Search" />
+
+        </ToolBarContent>
+
+
+    <HeaderContent>
+        <MudTh>Nome</MudTh>
+        <MudTh>Email</MudTh>
+        <MudTh Align="Align.Right">Azioni</MudTh>
+    </HeaderContent>
+
+    <RowTemplate>
+        <MudTd>@context.FirstName @context.MiddleName @context.LastName</MudTd>
+        <MudTd>@context.Email</MudTd>
+        <MudTd Align="Align.Right">
+            <MudStack Direction="Row" Spacing="1" Justify="Justify.FlexEnd">
+                <MudButton Variant="Variant.Outlined" Size="Size.Small"
+                            StartIcon="@Icons.Material.Filled.Edit"
+                            OnClick="@(async()=>await OpenEdit(context))">
+                    Modifica
+                </MudButton>
+
+                <MudButton Variant="Variant.Outlined" Size="Size.Small" Color="Color.Error"
+                            StartIcon="@Icons.Material.Filled.Delete"
+                            OnClick="@(async()=>await Delete(context))">
+                    Elimina
+                </MudButton>
+            </MudStack>
+
+        </MudTd>
+    </RowTemplate>
+
+    <PagerContent>
+        <MudTablePager />
+    </PagerContent>
+</MudTable>
+
+<MudDialog @bind-IsVisible="_editOpen" MaxWidth="MaxWidth.Small" FullWidth>
+    <DialogContent>
+        <MudText Typo="Typo.h6">Modifica contatto</MudText>
+
+        <MudTextField Label="Nome" @bind-Value="_edit.FirstName" />
+        <MudTextField Label="Secondo nome" @bind-Value="_edit.MiddleName" />
+        <MudTextField Label="Cognome" @bind-Value="_edit.LastName" />
+        <MudTextField Label="Email" @bind-Value="_edit.Email" Disabled="true" />
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="CloseEdit">Annulla</MudButton>
+        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="SaveEdit">Salva</MudButton>
+    </DialogActions>
+</MudDialog>
+
+</MudPaper>
+<style>
+    .drop-zone {
+        display: block;
+        border: 2px dashed #1976d2;
+        padding: 0; /* padding lo metto nella surface */
+        border-radius: 10px;
+        background: #f5faff;
+        cursor: pointer;
+    }
+
+        .drop-zone.dragover {
+            background: #e3f2fd;
+        }
+
+    .drop-surface {
+        padding: 30px;
+        text-align: center;
+    }
+
+    .offscreen-input {
+        position: absolute;
+        left: -10000px;
+        top: auto;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+    }
+
+
+    .hidden-input {
+        /* NON display:none */
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        cursor: pointer;
+    }
+
+
+        .drop-zone:hover {
+            background: #e3f2fd;
+        }
+
+   
+</style>
+@code {
+
+    private const int BATCH_SIZE = 200;
+    private const int EMAIL1_INDEX = 18;
+
+    private List<RubricaContatto> _contatti = new();
+    private List<string>? _csvLines;
+    private string? _csvFileName;
+
+    private bool _isImporting;
+    private int _total;
+    private int _processed;
+    private int _added;
+    private int _skipped;
+
+    private string _search = "";
+    private string? _cp;
+
+    private int _imported;
+    private byte[]? _csvBytes;
+    private string? _csvName;
+    protected override Task OnInitializedAsync()
+    {
+        var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        _cp = q.TryGetValue("cp", out var v) && !StringValues.IsNullOrEmpty(v) ? v.ToString() : null;
+        return Task.CompletedTask;
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _dotNetRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("rubricaDrop.init", "rubricaDropZone", _dotNetRef);
+    }
+
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+    }
+    [JSInvokable]
+    public async Task OnFileDropped(string name, string base64)
+    {
+        _dragOver = false;
+
+        _csvFileName = name;
+        _csvBytes = Convert.FromBase64String(base64);
+        _file = null;
+
+        Snackbar.Add($"📄 CSV caricato via drop: {_csvFileName}", Severity.Info);
+        await InvokeAsync(StateHasChanged);
+    }
+
+
+    private double Progress =>
+       _total == 0 ? 0 : (double)_processed * 100 / _total;
+
+    private MudTable<RubricaContatto>? _table;
+    private bool _loading;
+
+    private bool _editOpen;
+    private RubricaContatto _edit = new();
+    private int _editId; // se hai Id PK
+    [Inject] IJSRuntime JS { get; set; } = default!;
+    private DotNetObjectReference<Rubrica>? _dotNetRef;
+
+    private bool _dragOver;
+
+    private void OnDragOver(DragEventArgs e) => _dragOver = true;
+    private void OnDragLeave(DragEventArgs e) => _dragOver = false;
+    public class DropFileResult
+    {
+        public string? Name { get; set; }
+        public string? Base64 { get; set; }
+    }
+    private async Task OnDrop(DragEventArgs e)
+    {
+        _dragOver = false;
+
+        // prende il file droppato e lo “inietta” nell’InputFile, così scatta HandleFile
+        await JS.InvokeVoidAsync("rubricaDrop.setDroppedFilesToInput", "rubricaFile");
+    }
+    private async Task HandleDropViaJs(DragEventArgs e)
+    {
+        _dragOver = false;
+
+        var res = await JS.InvokeAsync<DropFileResult>("rubricaDrop.readFirstFileFromDrop", e);
+        if (res == null || string.IsNullOrWhiteSpace(res.Name) || string.IsNullOrWhiteSpace(res.Base64))
+        {
+            Snackbar.Add("❌ Nessun file droppato letto", Severity.Error);
+            return;
+        }
+
+        _csvFileName = res.Name;
+        _csvBytes = Convert.FromBase64String(res.Base64);
+        _file = null;
+
+        Snackbar.Add($"📄 CSV caricato via drop: {_csvFileName}", Severity.Info);
+    }
+
+    private async Task OpenFilePicker()
+    {
+        await JS.InvokeVoidAsync("rubricaDrop.openPicker", "rubricaFile");
+    }
+
+
+    private void ClearSelectedFile()
+    {
+        _file = null;
+        _csvBytes = null;
+        _csvFileName = null;
+        _ = JS.InvokeVoidAsync("rubricaDrop.clearInput", "rubricaFile");
+    }
+
+    private async Task<TableData<RubricaContatto>> LoadServerData(TableState state, CancellationToken ct)
+    {
+        _loading = true;
+        try
+        {
+            await using var db = DbFactory.CreateDbContext();
+
+            var q = db.RubricaContatti.AsNoTracking();
+
+            if (!string.IsNullOrWhiteSpace(_search))
+            {
+                q = q.Where(c =>
+                    (c.FirstName ?? "").Contains(_search) ||
+                    (c.MiddleName ?? "").Contains(_search) ||
+                    (c.LastName ?? "").Contains(_search) ||
+                    (c.Email ?? "").Contains(_search));
+            }
+
+            // Ordinamento base
+            q = q.OrderBy(c => c.LastName).ThenBy(c => c.FirstName);
+
+            var total = await q.CountAsync(ct);
+
+            var items = await q
+                .Skip(state.Page * state.PageSize)
+                .Take(state.PageSize)
+                .ToListAsync(ct);
+
+            return new TableData<RubricaContatto> { TotalItems = total, Items = items };
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task OnSearchChanged(string? value)
+    {
+        _search = value ?? "";
+        if (_table != null)
+            await _table.ReloadServerData();
+    }
+
+
+
+    private async Task OpenEdit(RubricaContatto c)
+    {
+        var parameters = new DialogParameters
+        {
+            ["Model"] = new RubricaContatto
+            {
+                Id = c.Id,
+                FirstName = c.FirstName,
+                MiddleName = c.MiddleName,
+                LastName = c.LastName,
+                Email = c.Email,
+                CreatedAt = c.CreatedAt
+            }
+        };
+
+        var options = new DialogOptions { CloseButton = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+
+        var dialog = DialogService.Show<RubricaEditDialog>("Modifica contatto", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+        {
+            Snackbar.Add("✅ Contatto aggiornato", Severity.Success);
+            if (_table != null)
+                await _table.ReloadServerData();
+        }
+    }
+
+
+    private void CloseEdit() => _editOpen = false;
+
+    private async Task SaveEdit()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        var entity = await db.RubricaContatti.FirstOrDefaultAsync(x => x.Id == _editId);
+        if (entity == null) return;
+
+        entity.FirstName = _edit.FirstName;
+        entity.MiddleName = _edit.MiddleName;
+        entity.LastName = _edit.LastName;
+
+        await db.SaveChangesAsync();
+
+        _editOpen = false;
+        Snackbar.Add("✅ Contatto aggiornato", Severity.Success);
+
+        if (_table != null)
+            await _table.ReloadServerData();
+    }
+    private IBrowserFile? _file;
+
+    private void GoHome()
+    {
+        Nav.NavigateTo(string.IsNullOrWhiteSpace(_cp) ? "/" : $"/?cp={_cp}");
+    }
+
+    private Task HandleFile(InputFileChangeEventArgs e)
+    {
+        _file = e.File;
+        _csvBytes = null; 
+        _csvFileName = e.File.Name;
+
+        Snackbar.Add($"📄 CSV caricato: {_csvFileName}", Severity.Info);
+        return Task.CompletedTask;
+    }
+
+
+    private async Task ImportCsv()
+    {
+        if (_file == null && _csvBytes == null)
+        {
+            Snackbar.Add("❌ Seleziona o trascina un CSV prima di importare.", Severity.Warning);
+            return;
+        }
+
+        _isImporting = true;
+        _processed = 0;
+        _added = 0;
+        _skipped = 0;
+
+        try
+        {
+            await using var db = DbFactory.CreateDbContext();
+
+            // email già presenti a DB (case-insensitive)
+            var existingEmails = new HashSet<string>(
+                await db.RubricaContatti.AsNoTracking().Select(x => x.Email).ToListAsync(),
+                StringComparer.OrdinalIgnoreCase);
+
+            // dedup nel file
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            var cfg = new CsvConfiguration(CultureInfo.InvariantCulture)
+            {
+                HasHeaderRecord = true,
+                DetectDelimiter = true,
+                BadDataFound = null,
+                MissingFieldFound = null,
+                HeaderValidated = null,
+                TrimOptions = TrimOptions.Trim
+            };
+
+            // scegli stream: drop-bytes o InputFile
+            Stream stream;
+            if (_csvBytes != null)
+                stream = new MemoryStream(_csvBytes);
+            else
+                stream = _file!.OpenReadStream(50_000_000);
+
+            await using (stream)
+            using (var reader = new StreamReader(stream))
+            using (var csv = new CsvReader(reader, cfg))
+            {
+                // header
+                await csv.ReadAsync();
+                csv.ReadHeader();
+
+                var headers = csv.HeaderRecord ?? Array.Empty<string>();
+
+                // trova colonna email (Google Contacts)
+                string? emailHeader =
+                    headers.FirstOrDefault(h => h.Equals("E-mail 1 - Value", StringComparison.OrdinalIgnoreCase)) ??
+                    headers.FirstOrDefault(h => h.Equals("Email 1 - Value", StringComparison.OrdinalIgnoreCase)) ??
+                    headers.FirstOrDefault(h => h.Contains("E-mail", StringComparison.OrdinalIgnoreCase) && h.Contains("Value", StringComparison.OrdinalIgnoreCase)) ??
+                    headers.FirstOrDefault(h => h.Contains("Email", StringComparison.OrdinalIgnoreCase) && h.Contains("Value", StringComparison.OrdinalIgnoreCase));
+
+                if (emailHeader == null)
+                    throw new Exception("Colonna email non trovata nel CSV (es. 'E-mail 1 - Value').");
+
+                const int BATCH = 200;
+                var buffer = new List<RubricaContatto>(BATCH);
+
+                while (await csv.ReadAsync())
+                {
+                    _processed++;
+
+                    // prende email
+                    var email = NormalizeEmail(csv.GetField(emailHeader));
+                    if (string.IsNullOrWhiteSpace(email))
+                    {
+                        _skipped++;
+                        continue;
+                    }
+
+                    // dedup: file + db
+                    if (!seen.Add(email) || existingEmails.Contains(email))
+                    {
+                        _skipped++;
+                        continue;
+                    }
+
+                    // colonne 0/1/2 = First/Middle/Last nei CSV Google Contacts standard
+                    var first = (csv.GetField(0) ?? "").Trim();
+                    var middle = (csv.GetField(1) ?? "").Trim();
+                    var last = (csv.GetField(2) ?? "").Trim();
+
+                    buffer.Add(new RubricaContatto
+                    {
+                        FirstName = first,
+                        MiddleName = middle,
+                        LastName = last,
+                        Email = email,
+                        CreatedAt = DateTime.Now
+                    });
+
+                    existingEmails.Add(email);
+                    _added++;
+
+                    if (buffer.Count >= BATCH)
+                    {
+                        // insert batch
+                        db.RubricaContatti.AddRange(buffer);
+                        await db.SaveChangesAsync();
+
+                        buffer.Clear();
+                        db.ChangeTracker.Clear();
+
+                        // refresh UI ogni tot
+                        if (_processed % 200 == 0)
+                            await InvokeAsync(StateHasChanged);
+                    }
+                }
+
+                // ultimo batch
+                if (buffer.Count > 0)
+                {
+                    db.RubricaContatti.AddRange(buffer);
+                    await db.SaveChangesAsync();
+                    buffer.Clear();
+                    db.ChangeTracker.Clear();
+                }
+            }
+
+            Snackbar.Add(
+                $"✅ Import completato — Letti: {_processed}, Inseriti: {_added}, Skippati: {_skipped}",
+                Severity.Success);
+
+            if (_table != null)
+                await _table.ReloadServerData();
+        }
+        catch (DbUpdateException ex)
+        {
+            // se c'è unique su email e ti scappa qualche duplicato, lo vedi qui
+            Snackbar.Add($"❌ Errore DB (duplicati o vincoli): {ex.GetBaseException().Message}", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"❌ Import fallito: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _isImporting = false;
+
+            // reset selezione file
+            _file = null;
+            _csvBytes = null;
+            _csvFileName = null;
+        }
+    }
+
+    private static string NormalizeEmail(string? s)
+        => string.IsNullOrWhiteSpace(s)
+            ? ""
+            : s.Trim().Trim('"').ToLowerInvariant();
+
+    private static List<string> SplitCsv(string line)
+    {
+        var result = new List<string>();
+        bool inQuotes = false;
+        var sb = new System.Text.StringBuilder();
+
+        foreach (var ch in line)
+        {
+            if (ch == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (ch == ',' && !inQuotes)
+            {
+                result.Add(sb.ToString());
+                sb.Clear();
+            }
+            else
+                sb.Append(ch);
+        }
+
+        result.Add(sb.ToString());
+        return result;
+    }
+    private static async Task SaveBatch(MailDbContext db, List<RubricaContatto> batch)
+    {
+        try
+        {
+            db.RubricaContatti.AddRange(batch);
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            foreach (var c in batch)
+            {
+                try
+                {
+                    db.RubricaContatti.Add(c);
+                    await db.SaveChangesAsync();
+                }
+                catch { /* duplicato */ }
+            }
+        }
+        finally
+        {
+            db.ChangeTracker.Clear();
+        }
+    }
+    
+    private async Task Load()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        _contatti = await db.RubricaContatti
+            .AsNoTracking()
+            .OrderBy(c => c.LastName)
+            .ToListAsync();
+    }
+
+    private async Task Delete(RubricaContatto c)
+    {
+        await using var db = DbFactory.CreateDbContext();
+
+        // ATTENZIONE: se c viene da AsNoTracking, prima attach
+        db.RubricaContatti.Attach(c);
+        db.RubricaContatti.Remove(c);
+
+        await db.SaveChangesAsync();
+
+        Snackbar.Add("🗑️ Contatto eliminato", Severity.Success);
+
+        if (_table != null)
+            await _table.ReloadServerData();
+    }
+
+
+    private IEnumerable<RubricaContatto> _filtered =>
+        _contatti.Where(c =>
+            string.IsNullOrWhiteSpace(_search) ||
+            $"{c.FirstName} {c.LastName} {c.Email}"
+                .Contains(_search, StringComparison.OrdinalIgnoreCase));
+}

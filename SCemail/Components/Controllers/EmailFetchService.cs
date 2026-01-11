@@ -347,11 +347,11 @@ public class EmailFetchService : BackgroundService
         // ✅ Inserimento email
         const string sql = @"
         INSERT INTO SGAPP.EMAIL_RICEVUTE
-            (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, OGGETTO,
+            (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI,CC, CCN, OGGETTO,
              CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
              IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY)
         VALUES
-            (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_subj,
+            (:p_cid, :p_mid, :p_dt, :p_from, :p_to,:p_cc, :p_ccn, :p_subj,
              :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
              :p_inreply, :p_refs, :p_thread)
         RETURNING ID INTO :p_id";
@@ -363,6 +363,10 @@ public class EmailFetchService : BackgroundService
         cmd.Parameters.Add("p_dt", OracleDbType.Date).Value = (internalDateUtc ?? message.Date.UtcDateTime);
         cmd.Parameters.Add("p_from", OracleDbType.Varchar2, 500).Value = message.From?.ToString() ?? "";
         cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = message.To?.ToString() ?? "";
+        cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = message.To?.ToString() ?? "";
+        cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = message.Cc?.ToString() ?? "";
+        cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = message.Bcc?.ToString() ?? "";
+
         cmd.Parameters.Add("p_subj", OracleDbType.Varchar2, 1000).Value = message.Subject ?? "";
         cmd.Parameters.Add("p_html", OracleDbType.Clob).Value = (object?)message.HtmlBody ?? DBNull.Value;
         cmd.Parameters.Add("p_text", OracleDbType.Clob).Value = (object?)message.TextBody ?? DBNull.Value;

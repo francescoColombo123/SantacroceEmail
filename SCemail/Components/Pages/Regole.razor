@@ -1,9 +1,11 @@
 ﻿@page "/regole"
+@using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.EntityFrameworkCore
 @using SCemail.Components.Data
 @inject IDbContextFactory<MailDbContext> DbFactory
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject IDialogService DialogService
 
 <div class="container my-5">
     <div class="card shadow-sm">
@@ -13,6 +15,18 @@
         </div>
 
         <div class="card-body">
+            @if (IsEditing)
+            {
+                <div class="alert alert-warning d-flex justify-content-between align-items-center">
+                    <div>
+                        ✏️ <b>Stai modificando una regola esistente</b>
+                    </div>
+                    <button class="btn btn-sm btn-outline-dark" @onclick="CancelEdit">
+                        Annulla modifica
+                    </button>
+                </div>
+            }
+
             <EditForm Model="@form" OnValidSubmit="@SalvaRegola">
                 <DataAnnotationsValidator />
                 <ValidationSummary />
@@ -62,7 +76,11 @@
                     </div>
 
                     <div class="col-md-3 d-flex justify-content-end">
-                        <button type="submit" class="btn btn-success w-100">➕ Aggiungi Regola</button>
+                        <button type="submit"
+                                class="btn @(IsEditing ? "btn-primary" : "btn-success") w-100">
+                            @(IsEditing ? "💾 Salva modifiche" : "➕ Aggiungi Regola")
+                        </button>
+
                     </div>
                 </div>
             </EditForm>
@@ -80,30 +98,32 @@
                         <th>Assegnatari</th>
                         <th>Solo Invio</th>
                         <th>Attiva</th>
+                        <th class="text-end">Azioni</th>
                     </tr>
                 </thead>
                 <tbody>
-                    @if (_regole.Count == 0)
+                    @foreach (var r in _regole)
                     {
-                        <tr>
-                            <td colspan="6" class="text-center text-muted">Nessuna regola configurata</td>
+                        <tr class="@(r.Id == _editingId ? "table-warning" : "")">
+                            <td>@r.MittenteLike</td>
+                            <td>@r.DestLike</td>
+                            <td>@r.OggettoLike</td>
+                            <td>@r.AssegnaA</td>
+                            <td>@(r.SoloInvio ? "✅" : "❌")</td>
+                            <td>@(r.Attiva ? "🟢" : "🔴")</td>
+                            <td class="text-end">
+                                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                               Color="Color.Primary"
+                                               OnClick="@(() => EditRegola(r))" />
+                                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                               Color="Color.Error"
+                                               OnClick="@(() => DeleteRegola(r))" />
+                            </td>
                         </tr>
                     }
-                    else
-                    {
-                        @foreach (var r in _regole)
-                        {
-                            <tr>
-                                <td>@r.MittenteLike</td>
-                                <td>@r.DestLike</td>
-                                <td>@r.OggettoLike</td>
-                                <td>@r.AssegnaA</td>
-                                <td>@(r.SoloInvio ? "✅" : "❌")</td>
-                                <td>@(r.Attiva ? "🟢" : "🔴")</td>
-                            </tr>
-                        }
-                    }
+
                 </tbody>
+
             </table>
         </div>
     </div>
@@ -113,6 +133,10 @@
     private List<EmailRegola> _regole = new();
     private RegolaForm form = new();
     private List<string> _utenti = new();
+    private string? _cp;
+    private int? _editingId = null;
+    private bool IsEditing => _editingId.HasValue;
+
 
     protected override async Task OnInitializedAsync()
     {
@@ -126,45 +150,119 @@
         _regole = await db.EmailRegole.AsNoTracking()
             .OrderByDescending(r => r.Id)
             .ToListAsync();
+        var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        _cp = q.TryGetValue("cp", out var v) && !string.IsNullOrWhiteSpace(v)
+            ? v.ToString()
+            : null;
+    }
+
+    private void EditRegola(EmailRegola r)
+    {
+        form = new RegolaForm
+        {
+            MittenteLike = r.MittenteLike,
+            DestLike = r.DestLike,
+            OggettoLike = r.OggettoLike,
+            SoloInvio = r.SoloInvio,
+            Attiva = r.Attiva,
+            AssegnatariSelezionati = r.AssegnaA?
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .ToList() ?? new()
+        };
+
+        _editingId = r.Id;
     }
 
     private async Task SalvaRegola()
     {
-        try
+        if (form.AssegnatariSelezionati.Count == 0)
         {
-            if (form.AssegnatariSelezionati == null || form.AssegnatariSelezionati.Count == 0)
-            {
-                Snackbar.Add("⚠️ Devi selezionare almeno un assegnatario.", Severity.Warning);
-                return;
-            }
+            Snackbar.Add("⚠️ Seleziona almeno un assegnatario.", Severity.Warning);
+            return;
+        }
 
-            var entity = new EmailRegola
+        await using var db = DbFactory.CreateDbContext();
+
+        EmailRegola entity;
+
+        if (_editingId.HasValue)
+        {
+            entity = await db.EmailRegole.FindAsync(_editingId.Value);
+            if (entity == null) return;
+        }
+        else
+        {
+            entity = new EmailRegola
             {
-                MittenteLike = form.MittenteLike,
-                DestLike = form.DestLike,
-                OggettoLike = form.OggettoLike,
-                AssegnaA = string.Join(';', form.AssegnatariSelezionati),
-                SoloInvio = form.SoloInvio,
-                Attiva = form.Attiva,
                 CreatedAt = DateTime.Now,
                 CreatedBy = "admin"
             };
-
-            await using var db = DbFactory.CreateDbContext();
             db.EmailRegole.Add(entity);
-            await db.SaveChangesAsync();
+        }
 
-            _regole.Insert(0, entity);
-            form = new();
-            Snackbar.Add("✅ Regola salvata correttamente.", Severity.Success);
-        }
-        catch (Exception ex)
-        {
-            Snackbar.Add($"❌ Errore durante il salvataggio: {ex.Message}", Severity.Error);
-        }
+        entity.MittenteLike = form.MittenteLike;
+        entity.DestLike = form.DestLike;
+        entity.OggettoLike = form.OggettoLike;
+        entity.AssegnaA = string.Join(';', form.AssegnatariSelezionati);
+        entity.SoloInvio = form.SoloInvio;
+        entity.Attiva = form.Attiva;
+
+        await db.SaveChangesAsync();
+
+        _regole = await db.EmailRegole
+            .AsNoTracking()
+            .OrderByDescending(r => r.Id)
+            .ToListAsync();
+
+        form = new();
+        _editingId = null;
+
+        Snackbar.Add("✅ Regola salvata.", Severity.Success);
+    }
+    
+    private async Task DeleteRegola(EmailRegola r)
+    {
+        bool? confirm = await DialogService.ShowMessageBox(
+            title: "Conferma eliminazione",
+            message: "⚠️ Vuoi davvero eliminare definitivamente questa regola?",
+            yesText: "Elimina",
+            cancelText: "Annulla",
+            options: new DialogOptions
+            {
+                MaxWidth = MaxWidth.Small,
+                FullWidth = true,
+                CloseButton = true
+            });
+
+        if (confirm != true)
+            return;
+
+        await using var db = DbFactory.CreateDbContext();
+        var entity = await db.EmailRegole.FindAsync(r.Id);
+        if (entity == null)
+            return;
+
+        db.EmailRegole.Remove(entity);
+        await db.SaveChangesAsync();
+
+        _regole.Remove(r);
+
+        Snackbar.Add("🗑️ Regola eliminata definitivamente.", Severity.Success);
     }
 
-    private void TornaIndietro() => Nav.NavigateTo("/");
+    private void CancelEdit()
+    {
+        form = new RegolaForm();
+        _editingId = null;
+    }
+
+    private void TornaIndietro()
+    {
+        if (!string.IsNullOrWhiteSpace(_cp))
+            Nav.NavigateTo($"/?cp={Uri.EscapeDataString(_cp)}");
+        else
+            Nav.NavigateTo("/");
+    }
 
     private class RegolaForm
     {
