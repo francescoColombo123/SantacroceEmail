@@ -1,0 +1,213 @@
+﻿@using MudBlazor
+@using System.Globalization
+@using Microsoft.JSInterop
+
+@inject IJSRuntime JS
+
+<MudDialog Class="taskdlg">
+    <DialogContent>
+        <MudStack Spacing="2">
+
+            <div class="taskdlg__head">
+                <MudText Typo="Typo.h6">Nuovo task</MudText>
+                <MudText Typo="Typo.body2" Class="taskdlg__sub">
+                    Crea un task personale (assegnato a te).
+                </MudText>
+            </div>
+
+            <MudTextField Label="Titolo"
+                          @bind-Value="_titolo"
+                          Variant="Variant.Outlined"
+                          Dense="true"
+                          FullWidth="true"
+                          Immediate="true"
+                          Required="true" />
+
+            <div class="taskdlg__section-title">Descrizione</div>
+
+            <!-- Quill (toolbar + editor) -->
+            <div class="taskrte">
+                <div id="@_toolbarId" class="taskrte__toolbar">
+                    <span class="ql-formats">
+                        <button class="ql-bold"></button>
+                        <button class="ql-italic"></button>
+                        <button class="ql-underline"></button>
+                    </span>
+
+                    <span class="ql-formats">
+                        <button class="ql-list" value="ordered"></button>
+                        <button class="ql-list" value="bullet"></button>
+                    </span>
+
+                    <span class="ql-formats">
+                        <button class="ql-link"></button>
+                    </span>
+
+                    <span class="ql-formats">
+                        <button class="ql-clean"></button>
+                    </span>
+                </div>
+
+                <div id="@_editorId" class="taskrte__editor"></div>
+            </div>
+
+            <div class="taskdlg__section-title">Scadenza</div>
+
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="7">
+                    <MudDatePicker Label="Data"
+                                   @bind-Date="_dueDate"
+                                   Variant="Variant.Outlined"
+                                   Dense="true"
+                                   Clearable="true" />
+                </MudItem>
+
+                <MudItem xs="12" sm="5">
+                    <MudTextField Label="Ora"
+                                  @bind-Value="_dueTimeText"
+                                  Variant="Variant.Outlined"
+                                  Dense="true"
+                                  Placeholder="HH:mm"
+                                  Immediate="true"
+                                  Error="@_timeInvalid"
+                                  ErrorText="Formato non valido (es. 09:30)."
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@Icons.Material.Filled.Schedule" />
+                </MudItem>
+            </MudGrid>
+
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Annulla</MudButton>
+
+        <MudButton OnClick="Ok"
+                   Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@string.IsNullOrWhiteSpace(_titolo)">
+            Crea
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .taskdlg .mud-dialog-content {
+        padding-top: 18px;
+    }
+
+    .taskdlg__sub {
+        color: rgba(0,0,0,.6);
+        margin-top: 2px;
+    }
+
+    .taskdlg__section-title {
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: .2px;
+        color: rgba(0,0,0,.65);
+        margin-top: 6px;
+        margin-bottom: -6px;
+        text-transform: uppercase;
+    }
+
+    .taskrte {
+        border: 1px solid rgba(0,0,0,.18);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #fff;
+    }
+
+    .taskrte__toolbar {
+        border-bottom: 1px solid rgba(0,0,0,.10);
+        padding: 6px 8px;
+    }
+
+    /* spazio scrittura "bello grande" */
+    .taskrte__editor {
+        min-height: 180px;
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string? _titolo;
+
+    private DateTime? _dueDate;
+    private string? _dueTimeText;
+    private bool _timeInvalid;
+
+    private string _descrHtml = "";
+
+    // id unici (evita conflitti se dialog riaperto)
+    private readonly string _editorId = $"task_editor_{Guid.NewGuid():N}";
+    private readonly string _toolbarId = $"task_toolbar_{Guid.NewGuid():N}";
+
+    private DotNetObjectReference<CallbackProxy>? _dotnetRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _dotnetRef = DotNetObjectReference.Create(new CallbackProxy(html => _descrHtml = html ?? ""));
+        await JS.InvokeVoidAsync("initQuillTask", _editorId, _toolbarId, _dotnetRef, _descrHtml);
+    }
+
+
+    public void Dispose()
+    {
+        _dotnetRef?.Dispose();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Ok()
+    {
+        var titolo = (_titolo ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(titolo))
+            return;
+
+        _timeInvalid = false;
+
+        DateTime? scad = null;
+        if (_dueDate is DateTime d)
+        {
+            var time = ParseTime(_dueTimeText, out var invalid);
+            _timeInvalid = invalid;
+            if (_timeInvalid) return;
+
+            scad = d.Date + (time ?? TimeSpan.FromHours(18));
+        }
+
+        MudDialog.Close(DialogResult.Ok(new Result(
+            Titolo: titolo,
+            DescrizioneHtml: string.IsNullOrWhiteSpace(_descrHtml) ? null : _descrHtml.Trim(),
+            Scadenza: scad
+        )));
+    }
+
+    private static TimeSpan? ParseTime(string? s, out bool invalid)
+    {
+        invalid = false;
+        s = (s ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(s)) return null;
+
+        if (TimeSpan.TryParseExact(s, @"h\:mm", CultureInfo.InvariantCulture, out var t1)) return t1;
+        if (TimeSpan.TryParseExact(s, @"hh\:mm", CultureInfo.InvariantCulture, out var t2)) return t2;
+
+        invalid = true;
+        return null;
+    }
+
+    public record Result(string Titolo, string? DescrizioneHtml, DateTime? Scadenza);
+
+    // proxy semplicissimo per ricevere callback da JS (evita generics strani)
+    private sealed class CallbackProxy
+    {
+        private readonly Action<string?> _cb;
+        public CallbackProxy(Action<string?> cb) => _cb = cb;
+
+        [JSInvokable] public void UpdateTaskHtml(string html) => _cb(html);
+    }
+}

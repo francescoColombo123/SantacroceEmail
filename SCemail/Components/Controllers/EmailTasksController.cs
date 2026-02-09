@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using SCemail.Components.Data;
 using SCemail.Components.Shared;
+
 namespace SCemail.Components.Controllers;
 
 [ApiController]
@@ -10,56 +11,90 @@ public sealed class EmailTasksController : ControllerBase
     private readonly IEmailTasksRepository _repo;
     public EmailTasksController(IEmailTasksRepository repo) => _repo = repo;
 
-    [HttpGet("{username}")]
-    public async Task<ActionResult<IEnumerable<Data.UserTaskItem>>> GetByUser(string username)
-        => Ok(await _repo.GetForUserAsync(username));
+    // -------------------------
+    // LISTA TASK UTENTE
+    // -------------------------
+    [HttpGet("user/{username}")]
+    public async Task<ActionResult<List<TaskDto>>> GetByUser(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username))
+            return BadRequest("username mancante");
 
-    [HttpGet("by-id/{id:int}")]
-    public async Task<ActionResult<Data.UserTaskItem?>> GetById(int id)
+        var items = await _repo.GetForUserAsync(username);
+        return Ok(items);
+    }
+
+    // -------------------------
+    // DETTAGLIO TASK
+    // -------------------------
+    [HttpGet("{id:int}")]
+    public async Task<ActionResult<TaskDto?>> GetById(int id)
         => Ok(await _repo.GetByIdAsync(id));
 
-    [HttpPost("forward")]
-    public async Task<IActionResult> Forward([FromBody] ForwardDto dto)
+    // -------------------------
+    // CREA TASK (da zero)
+    // ✅ ritorna int (non {id})
+    // -------------------------
+    [HttpPost]
+    public async Task<ActionResult<int>> Create([FromBody] CreateTaskRequest req)
     {
-        if (dto is null || string.IsNullOrWhiteSpace(dto.Utente)) return BadRequest();
-        var id = await _repo.CreateFromEmailAsync(dto.EmailId, dto.Utente, dto.Commento, dto.Titolo);
-        return Ok(new { id });
+        if (req is null) return BadRequest();
+        if (string.IsNullOrWhiteSpace(req.CreatoDa)) return BadRequest("CreatoDa mancante");
+        if (string.IsNullOrWhiteSpace(req.Titolo)) return BadRequest("Titolo mancante");
+
+        var id = await _repo.CreateAsync(req);
+        return Ok(id);
     }
 
+    // -------------------------
+    // ASSEGNA / RIASSEGNA
+    // -------------------------
+    [HttpPut("{id:int}/assignees")]
+    public async Task<IActionResult> SetAssignees(int id, [FromBody] SetAssigneesDto dto)
+    {
+        if (dto is null) return BadRequest();
+        // Utente che fa l'azione (audit eventuale)
+        if (string.IsNullOrWhiteSpace(dto.By)) return BadRequest("By mancante");
+
+        await _repo.SetAssigneesAsync(id, dto.AssegnatiA ?? new());
+        return NoContent();
+    }
+
+    // -------------------------
+    // CHIUSURA TASK (completato)
+    // -------------------------
     [HttpPut("{id:int}/close")]
-    public async Task<IActionResult> Close(int id, [FromBody] CloseDto body)
+    public async Task<IActionResult> Close(int id, [FromBody] CloseTaskRequest req)
     {
-        await _repo.CloseAsync(id, body.Utente);
+        if (req is null) return BadRequest();
+        if (string.IsNullOrWhiteSpace(req.Utente)) return BadRequest("Utente mancante");
+
+        await _repo.CloseAsync(id, req);
         return NoContent();
     }
 
-    [HttpPut("{id:int}/comment")]
-    public async Task<IActionResult> UpdateComment(int id, [FromBody] CommentDto body)
-    {
-        await _repo.UpdateCommentAsync(id, body.Comment);
-        return NoContent();
-    }
-
-    [HttpDelete("{id:int}")]
-    public async Task<IActionResult> Delete(int id)
-    {
-        await _repo.DeleteAsync(id);
-        return NoContent();
-    }
-
-    // ----- Commenti -----
+    // -------------------------
+    // COMMENTI
+    // -------------------------
     [HttpGet("{taskId:int}/comments")]
-    public async Task<ActionResult<IEnumerable<Data.TaskComment>>> GetComments(int taskId)
+    public async Task<ActionResult<List<TaskCommentDto>>> GetComments(int taskId)
         => Ok(await _repo.GetCommentsAsync(taskId));
 
     [HttpPost("{taskId:int}/comments")]
-    public async Task<ActionResult<object>> AddComment(int taskId, [FromBody] NewCommentDto dto)
+    public async Task<ActionResult<int>> AddComment(int taskId, [FromBody] NewCommentDto dto)
     {
+        if (dto is null) return BadRequest();
+        if (string.IsNullOrWhiteSpace(dto.Utente)) return BadRequest("Utente mancante");
+        if (string.IsNullOrWhiteSpace(dto.Testo)) return BadRequest("Testo mancante");
+
         var id = await _repo.AddCommentAsync(taskId, dto.Utente, dto.Testo, dto.ReplyTo);
-        return Ok(new { id });
+        return Ok(id);
     }
-    public sealed record ForwardDto(int EmailId, string Utente, string? Commento, string? Titolo);
-    public sealed record CommentDto(string? Comment);
+
+    // =========================
+    // DTO INPUT API
+    // =========================
     public sealed record NewCommentDto(string Utente, string Testo, int? ReplyTo);
-    public sealed record CloseDto(string Utente);
+
+    public sealed record SetAssigneesDto(string By, List<string>? AssegnatiA);
 }

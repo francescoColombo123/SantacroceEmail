@@ -1,0 +1,248 @@
+﻿@using MudBlazor
+@using System.Globalization
+@using Microsoft.JSInterop
+
+@inject IJSRuntime JS
+
+<MudDialog Class="taskdlg">
+    <DialogContent>
+        <MudStack Spacing="2">
+
+            <div class="taskdlg__head">
+                <MudText Typo="Typo.h6">Nuovo task</MudText>
+                <MudText Typo="Typo.body2" Class="taskdlg__sub">
+                    Compila i campi principali e crea il task.
+                </MudText>
+            </div>
+
+            <MudTextField Label="Oggetto"
+                          @bind-Value="_titolo"
+                          Variant="Variant.Outlined"
+                          Dense="true"
+                          FullWidth="true"
+                          Immediate="true"
+                          Required="true" />
+
+            <div class="taskdlg__section-title">Descrizione</div>
+
+            <!-- Quill (toolbar + editor) -->
+            <div class="taskrte">
+                <div id="@_editorId" class="taskrte__editor"></div>
+            </div>
+
+            <div class="taskdlg__section-title">Scadenza</div>
+
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="7">
+                    <MudDatePicker Label="Data"
+                                   @bind-Date="_dueDate"
+                                   Variant="Variant.Outlined"
+                                   Dense="true"
+                                   Clearable="true" />
+                </MudItem>
+
+                <MudItem xs="12" sm="5">
+                    <MudTextField Label="Ora"
+                                  @bind-Value="_dueTimeText"
+                                  Variant="Variant.Outlined"
+                                  Dense="true"
+                                  Placeholder="HH:mm"
+                                  Immediate="true"
+                                  Error="@_timeInvalid"
+                                  ErrorText="Formato non valido (es. 09:30)."
+                                  Adornment="Adornment.End"
+                                  AdornmentIcon="@Icons.Material.Filled.Schedule" />
+                </MudItem>
+            </MudGrid>
+
+            <div class="taskdlg__section-title">Assegnazione</div>
+
+            <MudAutocomplete T="string"
+                             Label="Aggiungi assegnatario"
+                             Variant="Variant.Outlined"
+                             Dense="true"
+                             Clearable="true"
+                             SearchFunc="SearchUsers"
+                             ValueChanged="OnPickAssignee"
+                             Class="w-100" />
+
+            @if (_assegnati.Count > 0)
+            {
+                <MudStack Row="true" Spacing="1" Class="taskdlg__chips">
+                    @foreach (var a in _assegnati.OrderBy(x => x))
+                    {
+                        <MudChip T="string"
+                                 Size="Size.Small"
+                                 Variant="Variant.Outlined"
+                                 Closeable="true"
+                                 OnClose="@(() => _assegnati.Remove(a))">
+                            @a
+                        </MudChip>
+                    }
+                </MudStack>
+            }
+
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Annulla</MudButton>
+
+        <MudButton OnClick="Ok"
+                   Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@string.IsNullOrWhiteSpace(_titolo)">
+            Crea
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .taskdlg .mud-dialog-content {
+        padding-top: 18px;
+    }
+
+    .taskdlg__sub {
+        color: rgba(0,0,0,.6);
+        margin-top: 2px;
+    }
+
+    .taskdlg__section-title {
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: .2px;
+        color: rgba(0,0,0,.65);
+        margin-top: 6px;
+        margin-bottom: -6px;
+        text-transform: uppercase;
+    }
+
+    .taskdlg__chips {
+        flex-wrap: wrap;
+        margin-top: -4px;
+    }
+
+    .taskrte {
+        border: 1px solid rgba(0,0,0,.18);
+        border-radius: 10px;
+        overflow: hidden;
+        background: #fff;
+    }
+
+    .taskrte__toolbar {
+        border-bottom: 1px solid rgba(0,0,0,.10);
+        padding: 6px 8px;
+    }
+
+    .taskrte__editor {
+        min-height: 150px;
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string? _titolo;
+
+    private DateTime? _dueDate;
+    private string? _dueTimeText;
+    private bool _timeInvalid;
+
+    // HTML che arriva da Quill
+    private string _descrHtml = "";
+
+    // id unici (evita conflitti se dialog riaperto)
+    private readonly string _editorId = $"task_editor_{Guid.NewGuid():N}";
+    private readonly string _toolbarId = $"task_toolbar_{Guid.NewGuid():N}";
+
+    private readonly List<string> _allUsers = new()
+    {
+        "a.saldarella","a.tomaiuoli","admin","amministrazione","b.demilio",
+        "c.costa","c.diiorio","corsud","coseme","diagnosys","eurocereali",
+        "f.maulucci","generale","laboratorio","m.prencipe","raya"
+    };
+
+    private HashSet<string> _assegnati = new(StringComparer.OrdinalIgnoreCase);
+    private DotNetObjectReference<CreateTaskDialog>? _dotnetRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        _dotnetRef = DotNetObjectReference.Create(this);
+
+        await JS.InvokeVoidAsync("initQuillTask", _editorId, _dotnetRef, _descrHtml);
+
+    }
+
+    public void Dispose()
+    {
+        _dotnetRef?.Dispose();
+    }
+    [JSInvokable]
+    public void UpdateTaskHtml(string html)
+        => _descrHtml = html ?? "";
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Ok()
+    {
+        var titolo = (_titolo ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(titolo)) return;
+
+        _timeInvalid = false;
+
+        DateTime? scad = null;
+        if (_dueDate is DateTime d)
+        {
+            var time = ParseTime(_dueTimeText, out var invalid);
+            _timeInvalid = invalid;
+
+            if (_timeInvalid) return;
+
+            scad = d.Date + (time ?? TimeSpan.Zero);
+        }
+
+        MudDialog.Close(DialogResult.Ok(new CreateTaskDialogResult(
+            Titolo: titolo,
+            DescrizioneHtml: string.IsNullOrWhiteSpace(_descrHtml) ? null : _descrHtml.Trim(),
+            DataScadenza: scad,
+            AssegnatiA: _assegnati.Select(x => x.Trim().ToLowerInvariant()).Distinct().OrderBy(x => x).ToList()
+        )));
+    }
+
+    private static TimeSpan? ParseTime(string? s, out bool invalid)
+    {
+        invalid = false;
+        s = (s ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(s)) return null;
+
+        if (TimeSpan.TryParseExact(s, @"h\:mm", CultureInfo.InvariantCulture, out var t1)) return t1;
+        if (TimeSpan.TryParseExact(s, @"hh\:mm", CultureInfo.InvariantCulture, out var t2)) return t2;
+
+        invalid = true;
+        return null;
+    }
+
+    private Task<IEnumerable<string>> SearchUsers(string s, CancellationToken ct)
+    {
+        s = (s ?? "").Trim();
+        IEnumerable<string> q = _allUsers;
+        if (!string.IsNullOrWhiteSpace(s))
+            q = q.Where(x => x.Contains(s, StringComparison.OrdinalIgnoreCase));
+        return Task.FromResult(q.Take(12));
+    }
+
+    private void OnPickAssignee(string u)
+    {
+        if (!string.IsNullOrWhiteSpace(u))
+            _assegnati.Add(u);
+    }
+
+    public sealed record CreateTaskDialogResult(
+        string Titolo,
+        string? DescrizioneHtml,
+        DateTime? DataScadenza,
+        List<string> AssegnatiA
+    );
+}

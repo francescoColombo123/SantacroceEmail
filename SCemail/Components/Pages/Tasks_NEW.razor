@@ -2,33 +2,34 @@
 @using System.Text.RegularExpressions
 @using MudBlazor
 @using SCemail.Components.Data
-@using Microsoft.AspNetCore.Components.Web
-@inject SCemail.Components.Shared.IEmailTasksClient TaskClient
-@inject MailService_NEW MailSvc
+@using SCemail.Components.Pages
+
+@inject IEmailTasksClient TaskClient
 @inject NavigationManager Nav
 @inject SCemail.Components.Data.AccessiService AccessiSrv
+@inject IDialogService DialogService
+@inject MailService_NEW MailSvc
 
 <PageTitle>GS – Task (NEW)</PageTitle>
 
 <div class="page-wrapper">
-    <!-- 🔹 Barra superiore -->
     <div class="task-topbar">
-        <MudButton Variant="Variant.Filled"
-                   Color="Color.Info"
-                   StartIcon="@Icons.Material.Filled.Home"
-                   OnClick="@GoHome">
+        <MudButton Variant="Variant.Filled" Color="Color.Info" StartIcon="@Icons.Material.Filled.Home" OnClick="@GoHome">
             Home
         </MudButton>
 
-        <MudButton Variant="Variant.Filled"
-                   Color="Color.Error"
-                   StartIcon="@Icons.Material.Filled.Mail"
-                   OnClick="@GoToMail">
+        <MudButton Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.Mail" OnClick="@GoToMail">
             Vai alle Mail
+        </MudButton>
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.AddTask"
+                   OnClick="@OpenCreateTask"
+                   Disabled="@(!_loaded || string.IsNullOrWhiteSpace(_utente))">
+            Nuovo task
         </MudButton>
     </div>
 
-    <!-- 🔹 Layout principale -->
     <div class="task-layout">
         <!-- LISTA -->
         <MudPaper Class="task-panel">
@@ -38,11 +39,34 @@
             </div>
 
             <div class="filters">
-                <MudChip T="string" OnClick="@(() => SetFilter(null))" Color="@(_filter == null ? Color.Primary : Color.Default)">Tutti</MudChip>
-                <MudChip T="string" OnClick="@(() => SetFilter(StatoAperto))" Color="@(_filter == StatoAperto ? Color.Primary : Color.Default)">Aperti</MudChip>
-                <MudChip T="string" OnClick="@(() => SetFilter(StatoChiuso))" Color="@(_filter == StatoChiuso ? Color.Primary : Color.Default)">Chiusi</MudChip>
-                <MudChip T="string" OnClick="@(() => _onlyMentions = !_onlyMentions)" Color="@(_onlyMentions? Color.Primary: Color.Default)">Solo menzioni</MudChip>
+                <MudTextField T="string"
+                              @bind-Value="_q"
+                              Placeholder="Cerca titolo / descrizione…"
+                              Variant="Variant.Outlined"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Search"
+                              Dense="true"
+                              Class="filter-search" />
+
+                <MudToggleGroup T="TaskView"
+                                @bind-Value="_view"
+                                Exclusive="true"
+                                Color="Color.Primary"
+                                Dense="true"
+                                Class="filter-toggle"
+                                Size="Size.Small">
+                    <MudToggleItem Value="TaskView.Open" Text="Aperti" />
+                    <MudToggleItem Value="TaskView.Closed" Text="Chiusi" />
+                    <MudToggleItem Value="TaskView.Mentioned" Text="Menzionati" />
+                    <MudToggleItem Value="TaskView.OpenByMe" Text="Aperti da me" />
+                </MudToggleGroup>
+
+                <div class="filter-right">
+                    <MudSwitch T="bool" @bind-Checked="_onlyMentions" Color="Color.Primary" Dense="true" />
+                    <MudText Typo="Typo.caption" Class="filter-right-text">Solo menzioni</MudText>
+                </div>
             </div>
+
 
             <div class="task-list">
                 @if (!_loaded)
@@ -56,34 +80,56 @@
                 else
                 {
                     @foreach (var t in Filtered())
-                    {
-                        var tagged = _taggedTaskIds.Contains(t.Id);
+{
+    var tagged = _taggedTaskIds.Contains(t.Id);
+    var selected = _sel?.Id == t.Id;
 
-                        <MudCard Class="@GetTaskItemClass(tagged)" @onclick="@(() => SelectTask(t))">
-                            <MudCardContent>
-                                <div class="title" title="@t.Titolo">@t.Titolo</div>
-                                <div class="meta">@t.DataCreazione.ToString("dd/MM/yyyy HH:mm")</div>
-                                @if (!string.IsNullOrWhiteSpace(t.Commento))
-                                {
-                                    <div class="comment-preview" title="@t.Commento">@t.Commento</div>
-                                }
-                            </MudCardContent>
-                            <MudCardActions>
-                                @if (tagged)
-                                {
-                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">
-                                        &#64;@_utente
-                                    </MudChip>
-                                }
-                                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Chat">
-                                    @(_commentCounts.TryGetValue(t.Id, out var c) ? c : 0)
-                                </MudChip>
-                                <MudChip T="string" Size="Size.Small" Color="@(t.Stato == StatoChiuso ? Color.Success : Color.Info)">
-                                    @t.Stato
-                                </MudChip>
-                            </MudCardActions>
-                        </MudCard>
-                    }
+    <MudPaper Class="@($"task-row {(selected ? "sel" : "")} {(tagged ? "tag" : "")}")"
+              Elevation="0"
+              @onclick="@(() => SelectTask(t))">
+
+        <div class="row-main">
+            <div class="row-title" title="@t.Titolo">@t.Titolo</div>
+
+            <div class="row-badges">
+                @if (tagged)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Filled" Class="chip">
+                        &#64;@_utente
+                    </MudChip>
+                }
+
+                <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Chat" Class="chip">
+                    @(_commentCounts.TryGetValue(t.Id, out var c) ? c : 0)
+                </MudChip>
+
+                <MudChip T="string" Size="Size.Small"
+                            Color="@(t.Stato == TaskStati.Chiuso ? Color.Success : Color.Info)"
+                            Variant="Variant.Filled"
+                            Class="chip">
+                    @t.Stato
+                </MudChip>
+            </div>
+        </div>
+
+        <div class="row-meta">
+            <span>@t.DataCreazione.ToString("dd/MM/yyyy HH:mm")</span>
+            @if (t.DataScadenza is not null)
+            {
+                <span class="due"> • Scad: @t.DataScadenza.Value.ToString("dd/MM/yyyy HH:mm")</span>
+            }
+            @if (string.Equals(t.CreatoDa?.Trim(), _utente?.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                <span> • Creato da te</span>
+            }
+            else if (t.AssegnatiA?.Any(a => string.Equals(a?.Trim(), _utente?.Trim(), StringComparison.OrdinalIgnoreCase)) == true)
+            {
+                <span> • Assegnato a te</span>
+            }
+        </div>
+    </MudPaper>
+}
+
                 }
             </div>
         </MudPaper>
@@ -92,29 +138,113 @@
         <MudPaper Class="task-panel">
             <div class="panel-header">Dettaglio</div>
             <div class="panel-body">
-                @if (_mail is null)
+                @if (_sel is null)
                 {
                     <MudText Typo="Typo.caption">Seleziona un task</MudText>
                 }
                 else
                 {
                     <div class="detail-header">
-                        <MudText Typo="Typo.h6">@(_mail.Oggetto ?? "(nessun oggetto)")</MudText>
+                        <MudText Typo="Typo.h6">@(_sel.Titolo ?? "(senza titolo)")</MudText>
                         <MudSpacer />
-                        @if (_sel is not null && _sel.Stato != StatoChiuso)
+
+                        @if (_sel.Stato != TaskStati.Chiuso)
                         {
-                            <MudButton Color="Color.Success" StartIcon="@Icons.Material.Filled.Done" OnClick="@MarkClosed">
-                                Chiudi
-                            </MudButton>
+                            var doneBy = GetAssigneeWhoMarkedDone(_sel);
+
+                            @if (IsCreator(_sel))
+                            {
+                                @if (!string.IsNullOrWhiteSpace(doneBy))
+                                {
+                                    <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Class="me-2">
+                                        ✅ Completato da @doneBy
+                                    </MudChip>
+                                }
+
+                                <MudButton Color="Color.Success"
+                                           StartIcon="@Icons.Material.Filled.DoneAll"
+                                           OnClick="@TryCloseTask"
+                                           Disabled="@(!_canCloseCreator)">
+                                    Chiudi task
+                                </MudButton>
+                            }
+                            else if (IsAssigned(_sel))
+                            {
+                                if (string.IsNullOrWhiteSpace(doneBy))
+                                {
+                                    <MudButton Color="Color.Success"
+                                               Variant="Variant.Filled"
+                                               StartIcon="@Icons.Material.Filled.CheckCircle"
+                                               OnClick="@OpenDoneDialog">
+                                        Fatto ✅
+                                    </MudButton>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Color="Color.Info" Variant="Variant.Filled" Class="me-2">
+                                        ⏳ In attesa di chiusura
+                                    </MudChip>
+                                    <MudButton Variant="Variant.Outlined"
+                                               Color="Color.Info"
+                                               StartIcon="@Icons.Material.Filled.NotificationsActive"
+                                               OnClick="@OpenNudgeCreatorDialog">
+                                        Avvisa creatore
+                                    </MudButton>
+                                }
+                            }
                         }
                     </div>
 
+                    @if (_sel.Stato != TaskStati.Chiuso && IsAssigned(_sel) && !IsCreator(_sel))
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-1" Style="color:#6a82b7;">
+                            Premi <b>Fatto ✅</b> quando hai completato: il creatore potrà chiudere il task.
+                        </MudText>
+                    }
                     <MudText Typo="Typo.caption">
-                        Da: @_mail.Mittente | A: @_mail.Destinatari | Data: @_mail.Data?.ToString("dd/MM/yyyy HH:mm")
+                        Creato da: @_sel.CreatoDa • Creato: @_sel.DataCreazione.ToString("dd/MM/yyyy HH:mm")
+                        @if (_sel.DataScadenza is not null)
+                        {
+                            <span> • Scadenza: @_sel.DataScadenza.Value.ToString("dd/MM/yyyy HH:mm")</span>
+                        }
                     </MudText>
 
+                    @if (_sel.Stato == TaskStati.Chiuso && _sel.DataChiusura is not null)
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-1">
+                            Completato da: @_sel.ChiusoDa • alle: @_sel.DataChiusura.Value.ToString("dd/MM/yyyy HH:mm")
+                        </MudText>
+                    }
+
+
+                    @if (_sel.AssegnatiA?.Any() == true)
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-1">
+                            Assegnato a: @string.Join(", ", _sel.AssegnatiA)
+                        </MudText>
+                    }
+
+                    @if (_sel.EmailId is int emailId && emailId > 0)
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-1">
+                            EmailId: @emailId
+                            <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="@(() => GoToMailWithEmail(emailId))">
+                                Apri mail
+                            </MudButton>
+                        </MudText>
+                    }
+
                     <MudDivider Class="my-2" />
-                    @((MarkupString)(_mail.CorpoHtml ?? _mail.CorpoTesto ?? ""))
+                    @if (!string.IsNullOrWhiteSpace(_sel.DescrizioneMarkdown))
+                    {
+                        <div class="task-desc rte">
+                            @RenderTaskHtml(_sel.DescrizioneMarkdown)
+                        </div>
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption">Nessuna descrizione.</MudText>
+                    }
                 }
             </div>
         </MudPaper>
@@ -140,7 +270,7 @@
                             {
                                 <div class="comment">
                                     <div class="meta"><b>@c.Utente</b> • @c.DataCreazione.ToString("dd/MM HH:mm")</div>
-                                    <div>@RenderMentionsHtml(c.Testo)</div>
+                                    <div>@RenderCommentPretty(c.Testo)</div>
                                 </div>
                             }
                         }
@@ -154,7 +284,7 @@
                                       ValueChanged="OnCommentChanged"
                                       Lines="3"
                                       Variant="Variant.Outlined"
-                                      Placeholder="Scrivi un commento (usa  &#64s per menzionare)"
+                                      Placeholder=@("Scrivi un commento… usa @ per menzionare")
                                       Immediate="true" />
                     </div>
 
@@ -176,7 +306,12 @@
                         </div>
                     </MudPopover>
 
-                    <MudButton OnClick="PostComment" Color="Color.Primary" Variant="Variant.Filled" StartIcon="@Icons.Material.Filled.Send">
+                    <MudButton ButtonType="ButtonType.Button"
+                               OnClick="@PostComment"
+                               Color="Color.Primary"
+                               Variant="Variant.Filled"
+                               StartIcon="@Icons.Material.Filled.Send"
+                               Disabled="@(_sel is null || string.IsNullOrWhiteSpace(_newText) || string.IsNullOrWhiteSpace(_utente))">
                         Invia
                     </MudButton>
                 }
@@ -186,7 +321,6 @@
 </div>
 
 <style>
-    /* --- Layout generale --- */
     .page-wrapper {
         display: flex;
         flex-direction: column;
@@ -200,7 +334,7 @@
         display: flex;
         gap: 12px;
         align-items: center;
-        background: #ffffff;
+        background: #fff;
         border: 1px solid #e8eef7;
         border-radius: 10px;
         padding: 8px 14px;
@@ -214,7 +348,6 @@
         gap: 12px;
     }
 
-    /* --- Pannelli --- */
     .task-panel {
         display: flex;
         flex-direction: column;
@@ -239,6 +372,11 @@
         color: #0b3a82;
     }
 
+    .panel-body {
+        padding: 12px 14px;
+        overflow: auto;
+    }
+
     .task-list {
         flex: 1;
         overflow-y: auto;
@@ -246,6 +384,71 @@
         display: flex;
         flex-direction: column;
         gap: 10px;
+    }
+
+    .title {
+        font-weight: 700;
+    }
+
+    .meta {
+        font-size: 12px;
+        color: #6a82b7;
+        margin-top: 2px;
+    }
+
+    .mention {
+        background: #eef4ff;
+        color: #1a73e8;
+        padding: 0 6px;
+        border-radius: 999px;
+        font-weight: 700;
+    }
+
+    .mud-list-item.active {
+        background: #e6f0ff;
+        font-weight: bold;
+    }
+
+    .assignees {
+        margin-top: 6px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .ass-chip {
+        background: #edf3ff;
+        color: #0b3a82;
+        border: 1px solid #dbe7ff;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+
+        .ass-chip.more {
+            background: #f1f2f4;
+            color: #444;
+            border-color: #e4e6ea;
+        }
+
+    .due {
+        color: #8a5a00;
+        font-weight: 600;
+    }
+
+    .task-desc {
+        padding: 8px 2px;
+        color: #1a2240;
+        line-height: 1.4;
+    }
+
+    .task-item.tagged {
+        border-left: 6px solid #1a73e8;
+    }
+
+    .task-item.closed {
+        opacity: .75;
     }
 
     .comment-list {
@@ -266,60 +469,436 @@
             margin-bottom: 4px;
         }
 
-    .mention {
-        background: #eef4ff;
-        color: #1a73e8;
-        padding: 0 6px;
+    .filters {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #eef3ff;
+        flex-wrap: wrap;
+    }
+
+    .filter-search {
+        min-width: 220px;
+        flex: 1;
+    }
+
+    .filter-toggle {
         border-radius: 999px;
+        background: #f3f7ff;
+        padding: 4px;
+    }
+
+    .filter-switch {
+        margin-left: auto;
+    }
+
+    .task-row {
+        padding: 10px 12px;
+        border: 1px solid #eef3ff;
+        border-radius: 12px;
+        cursor: pointer;
+        transition: .12s ease-in-out;
+    }
+
+        .task-row:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 18px rgba(27,78,163,.08);
+        }
+
+        .task-row.sel {
+            outline: 2px solid rgba(26,115,232,.35);
+        }
+
+        .task-row.tag {
+            border-left: 6px solid #1a73e8;
+        }
+
+    .row-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+    }
+
+    .row-title {
+        font-weight: 800;
+        font-size: 14px;
+        color: #142047;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .row-badges {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .chip {
         font-weight: 700;
     }
 
-    .mud-list-item.active {
-        background: #e6f0ff;
-        font-weight: bold;
+    .done-badge {
+        display: inline-block;
+        font-weight: 800;
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #e9f7ef;
+        color: #137333;
+        border: 1px solid #ccebd9;
+        margin-right: 6px;
+        vertical-align: middle;
+    }
+
+
+    .row-meta {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #6a82b7;
+    }
+
+    .due {
+        color: #8a5a00;
+        font-weight: 700;
+    }
+
+    /* Contenuto Quill/HTML “professionale” */
+    .rte {
+        color: #1a2240;
+        line-height: 1.5;
+        font-size: 14px;
+    }
+
+        /* grassetto davvero evidente */
+        .rte strong, .rte b {
+            font-weight: 800;
+        }
+
+        /* paragrafi con spacing */
+        .rte p {
+            margin: 0 0 10px 0;
+        }
+
+        /* liste VISIVE (punti, numeri, indent) */
+        .rte ul, .rte ol {
+            margin: 8px 0 12px 0;
+            padding-left: 22px; /* indent reale */
+        }
+
+        .rte ul {
+            list-style-type: disc;
+        }
+
+        .rte ol {
+            list-style-type: decimal;
+        }
+
+        .rte li {
+            margin: 4px 0;
+        }
+
+        /* link leggibili */
+        .rte a {
+            color: #1a73e8;
+            text-decoration: underline;
+            font-weight: 700;
+        }
+
+        /* quote / block */
+        .rte blockquote {
+            margin: 10px 0;
+            padding: 8px 12px;
+            border-left: 4px solid #dbe7ff;
+            background: #f6f9ff;
+            border-radius: 10px;
+        }
+
+        /* codice inline */
+        .rte code {
+            background: #f1f3f6;
+            border: 1px solid #e4e6ea;
+            padding: 1px 6px;
+            border-radius: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 13px;
+        }
+
+        /* separatore (se ti capita di metterlo) */
+        .rte hr {
+            border: none;
+            border-top: 1px solid #e6eefc;
+            margin: 12px 0;
+        }
+
+    .filters {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px;
+        border-bottom: 1px solid #eef3ff;
+    }
+
+    .filter-search {
+        width: 100%;
+    }
+
+    .filter-toggle {
+        width: 100%;
+        display: flex;
+        gap: 6px;
+        padding: 6px;
+        border-radius: 14px;
+        background: #f3f7ff;
+        border: 1px solid #e6eefc;
+        overflow: auto; /* se stringe, scroll orizzontale */
+        white-space: nowrap;
+    }
+
+        .filter-toggle .mud-toggle-button {
+            border-radius: 999px !important;
+            font-weight: 800;
+            font-size: 12px;
+            padding: 6px 10px;
+        }
+
+    .filter-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .filter-right-text {
+        color: #6a82b7;
+        font-weight: 700;
     }
 </style>
 
 @code {
-    private const string StatoAperto = "APERTO";
-    private const string StatoChiuso = "CHIUSO";
     private bool _showMention;
     private ElementReference _anchorRef;
     private List<string> _mentionOptions = new();
     private string? _mentionActive;
 
-    private readonly List<string> _allUsers = new()
-    {
-        "a.saldarella","a.tomaiuoli","admin","amministrazione","b.demilio",
-        "c.costa","c.diiorio","corsud","coseme","diagnosys","eurocereali",
-        "f.maulucci","generale","laboratorio","m.prencipe","raya"
-    };
+    private List<string> _allUsers = new();
 
     [Parameter, SupplyParameterFromQuery] public string? Cp { get; set; }
     private string? _utente;
-    private List<UserTaskItem_NEW> _items = new();
-    private UserTaskItem_NEW? _sel;
-    private EmailDetail_NEW? _mail;
-    private List<TaskComment_NEW> _comments = new();
+
+    private List<TaskDto> _items = new();
+    private TaskDto? _sel;
+    private string? _q;
+
+    private List<TaskCommentDto> _comments = new();
     private Dictionary<int, int> _commentCounts = new();
     private HashSet<int> _taggedTaskIds = new();
+
     private string? _filter;
     private bool _onlyMentions;
     private string? _newText;
     private bool _loaded;
+    private string _scope = "mine";
+    private int _tabIndex = 0;
+    private enum TaskView
+    {
+        Open,       // aperti che mi riguardano (assegnati a me OR creati da me)
+        Closed,     // chiusi che mi riguardano (assegnati a me OR creati da me)
+        Mentioned,  // task dove sono menzionato (indipendente da creatore/assegnatari)
+        OpenByMe    // aperti creati da me
+    }
 
+    private TaskView _view = TaskView.Open;
+    private void OnTabChanged(int idx)
+    {
+        _tabIndex = idx;
+
+        _filter = idx switch
+        {
+            1 => TaskStati.Aperto,
+            2 => TaskStati.Chiuso,
+            _ => null
+        };
+    }
     private void OnCommentChanged(string value)
     {
         _newText = value;
         UpdateMentionState();
     }
 
-    private async Task MarkClosed()
+    private void SetView(TaskView v)
     {
-        if (_sel is null || string.IsNullOrWhiteSpace(_utente)) return;
+        _view = v;
+        _sel = null;
+        _comments.Clear();
 
-        await TaskClient.CloseAsync(_sel.Id, _utente!);
-        _sel = _sel with { Stato = StatoChiuso };
+        StateHasChanged();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loaded = false;
+        _items.Clear();
+        _commentCounts.Clear();
+        _taggedTaskIds.Clear();
+        _sel = null;
+        _comments.Clear();
+
+        if (!string.IsNullOrWhiteSpace(Cp))
+        {
+            _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp);
+            if (!string.IsNullOrWhiteSpace(_utente))
+            {
+                _allUsers = (await MailSvc.GetUserListAsync()) ?? new List<string>();
+
+                await ReloadTasksAndBadgesAsync();
+            }
+        }
+
+        _loaded = true;
+    }
+
+
+    private string GetTaskItemClass(bool tagged, TaskDto t)
+    {
+        var cls = "task-item";
+        if (tagged) cls += " tagged";
+        if (string.Equals(t.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase)) cls += " closed";
+        return cls;
+    }
+    private IEnumerable<TaskDto> Filtered()
+    {
+        if (string.IsNullOrWhiteSpace(_utente))
+            return Enumerable.Empty<TaskDto>();
+
+        var me = _utente.Trim().ToLowerInvariant();
+        IEnumerable<TaskDto> q = _items;
+
+        bool IsMeCreator(TaskDto t)
+            => string.Equals(t.CreatoDa?.Trim(), me, StringComparison.OrdinalIgnoreCase);
+
+        bool IsMeAssignee(TaskDto t)
+            => t.AssegnatiA?.Any(a => string.Equals(a?.Trim(), me, StringComparison.OrdinalIgnoreCase)) == true;
+
+        bool IsOpen(TaskDto t)
+            => !string.Equals(t.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase);
+
+        bool IsClosed(TaskDto t)
+            => string.Equals(t.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase);
+
+        // ✅ 1) Applico la VISTA
+        q = _view switch
+        {
+            TaskView.Open =>
+                q.Where(t => (IsMeAssignee(t) || IsMeCreator(t)) && IsOpen(t)),
+
+            TaskView.Closed =>
+                q.Where(t => (IsMeAssignee(t) || IsMeCreator(t)) && IsClosed(t)),
+
+            TaskView.Mentioned =>
+                q.Where(t => _taggedTaskIds.Contains(t.Id)), // menzionati (da commenti)
+
+            TaskView.OpenByMe =>
+                q.Where(t => IsMeCreator(t) && IsOpen(t)),
+
+            _ => q
+        };
+
+        // ✅ 2) Filtro “Solo menzioni” (ha senso SOLO se NON sei già in vista Mentioned)
+        if (_onlyMentions && _view != TaskView.Mentioned)
+            q = q.Where(t => _taggedTaskIds.Contains(t.Id));
+
+        // ✅ 3) Ordinamento
+        if (_view == TaskView.Closed)
+        {
+            q = q.OrderByDescending(x => x.DataChiusura ?? DateTime.MinValue)
+                 .ThenByDescending(x => x.DataCreazione);
+        }
+        else
+        {
+            q = q.OrderBy(x => x.DataScadenza.HasValue ? 0 : 1)
+                 .ThenBy(x => x.DataScadenza ?? DateTime.MaxValue)
+                 .ThenByDescending(x => x.DataCreazione);
+        }
+        if (!string.IsNullOrWhiteSpace(_q))
+        {
+            var term = _q.Trim();
+            q = q.Where(t =>
+                (!string.IsNullOrWhiteSpace(t.Titolo) && t.Titolo.Contains(term, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrWhiteSpace(t.DescrizioneMarkdown) && t.DescrizioneMarkdown.Contains(term, StringComparison.OrdinalIgnoreCase))
+            );
+        }
+        return q;
+    }
+
+    private MarkupString RenderCommentPretty(string? txt)
+    {
+        if (string.IsNullOrWhiteSpace(txt)) return (MarkupString)"";
+
+        var safe = System.Net.WebUtility.HtmlEncode(txt);
+
+        // evidenzia @user (anche se arrivasse come &#64;)
+        safe = Regex.Replace(
+            safe,
+            @"(?:&#64;|@)([a-zA-Z0-9_.-]+)",
+            m => $"<span class=\"mention\">@{m.Groups[1].Value}</span>"
+        );
+
+        if (IsDoneComment(txt))
+            safe = $"<span class=\"done-badge\">✅ FATTO</span> {safe}";
+
+        return (MarkupString)safe;
+    }
+
+    private void SetFilter(string? s) => _filter = s;
+
+    private async Task SelectTask(TaskDto t)
+    {
+        _sel = t;
+
+        var cs = await TaskClient.GetCommentsAsync(t.Id);
+        _comments = cs ?? new();
+
+        // ricalcolo permesso chiusura creatore in base ai commenti
+        _canCloseCreator = _sel is not null && IsCreator(_sel) && CreatorHasAssigneeDoneComment(_sel);
+    }
+
+    private async Task TryCloseTask()
+    {
+        if (_sel is null || string.IsNullOrWhiteSpace(_utente))
+            return;
+
+        if (!IsCreator(_sel))
+            return; // solo creatore
+
+        // se è assegnato a qualcuno, richiedo che ci sia almeno 1 commento di un assegnatario
+        if (!CreatorHasAssigneeDoneComment(_sel))
+            return;
+
+        var me = _utente.Trim().ToLowerInvariant();
+
+        await TaskClient.CloseAsync(_sel.Id, new CloseTaskRequest(Utente: me, Commento: null));
+        ApplyLocalClosed(me);
+    }
+    private void QuickDoneComment()
+    {
+        if (_sel is null) return;
+
+        var creator = _sel.CreatoDa?.Trim();
+        _newText = string.IsNullOrWhiteSpace(creator)
+            ? "Fatto ✅"
+            : $"Fatto ✅ @{creator}";
+
+        UpdateMentionState();
+        StateHasChanged();
+    }
+
+    private void ApplyLocalClosed(string chiusoDa)
+    {
+        if (_sel is null) return;
+
+        _sel = _sel with { Stato = TaskStati.Chiuso, DataChiusura = DateTime.Now, ChiusoDa = chiusoDa };
 
         var idx = _items.FindIndex(x => x.Id == _sel.Id);
         if (idx >= 0) _items[idx] = _sel;
@@ -327,108 +906,51 @@
         StateHasChanged();
     }
 
-    protected override async Task OnParametersSetAsync()
+    private async Task<string?> PromptCloseCommentAsync()
     {
-        _loaded = false; _items.Clear(); _commentCounts.Clear(); _taggedTaskIds.Clear();
-
-        if (!string.IsNullOrWhiteSpace(Cp))
-        {
-        _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp); 
-            if (!string.IsNullOrWhiteSpace(_utente))
-            {
-                var raw = await TaskClient.GetForUserAsync(_utente);
-                _items = raw.Select(r => new UserTaskItem_NEW(
-                    Id: r.Id, Utente: _utente!, EmailId: r.EmailId.ToString(),
-                    Titolo: r.Titolo ?? "(senza titolo)", Commento: r.Commento,
-                    Stato: string.IsNullOrWhiteSpace(r.Stato) ? StatoAperto : r.Stato,
-                    DataCreazione: r.DataCreazione
-                )).ToList();
-
-                foreach (var t in _items)
-                {
-                    var cs = await TaskClient.GetCommentsAsync(t.Id);
-                    _commentCounts[t.Id] = cs?.Count ?? 0;
-                    var rx = new Regex(@$"(?<=^|\s)@{Regex.Escape(_utente!)}\b", RegexOptions.IgnoreCase);
-                    if (cs != null && cs.Any(c => rx.IsMatch(c.Testo ?? ""))) _taggedTaskIds.Add(t.Id);
-                }
-            }
-        }
-        _loaded = true;
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<CloseCommentDialog>("Chiudi task", options);
+        var res = await dialog.Result;
+        if (res.Canceled) return null;
+        return res.Data as string;
     }
 
-    private string GetTaskItemClass(bool tagged) => tagged ? "task-item tagged" : "task-item";
-
-    private IEnumerable<UserTaskItem_NEW> Filtered()
+    private async Task PostComment()
     {
-        IEnumerable<UserTaskItem_NEW> q = _items;
-        if (!string.IsNullOrWhiteSpace(_filter))
-            q = q.Where(x => string.Equals(x.Stato, _filter, StringComparison.OrdinalIgnoreCase));
-        if (_onlyMentions)
-            q = q.Where(x => _taggedTaskIds.Contains(x.Id));
-        return q;
-    }
+        if (_sel is null || string.IsNullOrWhiteSpace(_newText) || string.IsNullOrWhiteSpace(_utente))
+            return;
 
-    private void SetFilter(string? s) => _filter = s;
+        var me = _utente.Trim().ToLowerInvariant();
 
-    private async Task SelectTask(UserTaskItem_NEW t)
-    {
-        _sel = t;
-        if (int.TryParse(t.EmailId, out var emailId) && emailId > 0)
-            _mail = await MailSvc.GetEmailDetailAsync(emailId, false);
-        else
-            _mail = null;
+        var id = await TaskClient.AddCommentAsync(_sel.Id, me, _newText);
+        _comments.Add(new TaskCommentDto(id, _sel.Id, me, _newText!, DateTime.Now, null));
+        _newText = "";
 
-        var cs = await TaskClient.GetCommentsAsync(t.Id);
-        _comments = (cs ?? new()).Select(c => new TaskComment_NEW(
-            Id: c.Id, TaskId: c.TaskId, Utente: c.Utente ?? "(sconosciuto)",
-            Testo: c.Testo ?? "", DataCreazione: c.DataCreazione
-        )).ToList();
+        _commentCounts[_sel.Id] = (_commentCounts.TryGetValue(_sel.Id, out var ct) ? ct : 0) + 1;
+
+        var meRx = new Regex(@$"(?<=^|\s)@{Regex.Escape(me)}\b", RegexOptions.IgnoreCase);
+        if (meRx.IsMatch((_comments.LastOrDefault()?.Testo) ?? "")) _taggedTaskIds.Add(_sel.Id);
+        if (_sel is not null)
+            _canCloseCreator = IsCreator(_sel) && CreatorHasAssigneeDoneComment(_sel);
+
+        StateHasChanged();
     }
 
     private MarkupString RenderMentionsHtml(string? txt)
     {
         if (string.IsNullOrEmpty(txt)) return (MarkupString)"";
         var safe = System.Net.WebUtility.HtmlEncode(txt);
-        var html = Regex.Replace(
-            safe,
-            @"&#64;([a-zA-Z0-9_.-]+)",
-            m => $"<span class=\"mention\">@{m.Groups[1].Value}</span>"
-        );
+        var html = Regex.Replace(safe, @"&#64;([a-zA-Z0-9_.-]+)", m => $"<span class=\"mention\">@{m.Groups[1].Value}</span>");
         return (MarkupString)html;
-    }
-
-    private async Task PostComment()
-    {
-        if (_sel is null || string.IsNullOrWhiteSpace(_newText) || string.IsNullOrWhiteSpace(_utente)) return;
-
-        var id = await TaskClient.AddCommentAsync(_sel.Id, _utente!, _newText);
-        _comments.Add(new TaskComment_NEW(id, _sel.Id, _utente!, _newText, DateTime.Now));
-        _newText = "";
-        _commentCounts[_sel.Id] = (_commentCounts.TryGetValue(_sel.Id, out var ct) ? ct : 0) + 1;
-
-        var meRx = new Regex(@$"(?<=^|\s)@{Regex.Escape(_utente!)}\b", RegexOptions.IgnoreCase);
-        if (meRx.IsMatch((_comments.LastOrDefault()?.Testo) ?? "")) _taggedTaskIds.Add(_sel.Id);
-
-        StateHasChanged();
     }
 
     private void UpdateMentionState()
     {
         var txt = _newText ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(txt))
-        {
-            _showMention = false;
-            StateHasChanged();
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(txt)) { _showMention = false; StateHasChanged(); return; }
 
         var last = txt.Split(' ').LastOrDefault() ?? string.Empty;
-        if (!last.StartsWith("@"))
-        {
-            _showMention = false;
-            StateHasChanged();
-            return;
-        }
+        if (!last.StartsWith("@")) { _showMention = false; StateHasChanged(); return; }
 
         var term = last.Length > 1 ? last[1..] : string.Empty;
         _mentionOptions = string.IsNullOrWhiteSpace(term)
@@ -445,17 +967,227 @@
         var parts = (_newText ?? "").TrimEnd().Split(' ').ToList();
         for (int i = parts.Count - 1; i >= 0; i--)
         {
-            if (parts[i].StartsWith("@"))
-            {
-                parts[i] = "@" + user;
-                break;
-            }
+            if (parts[i].StartsWith("@")) { parts[i] = "@" + user; break; }
         }
         _newText = string.Join(' ', parts) + " ";
         _showMention = false;
         InvokeAsync(StateHasChanged);
     }
+    private void SetScope(string s)
+    {
+        _scope = s;
+        _sel = null;
+        _comments.Clear();
+        StateHasChanged();
+    }
+
+    private static string MarkdownToHtml(string md)
+    {
+        if (string.IsNullOrWhiteSpace(md)) return "";
+        var html = System.Net.WebUtility.HtmlEncode(md);
+        html = Regex.Replace(html, @"\*\*(.+?)\*\*", "<b>$1</b>");
+        html = html.Replace("\r\n", "\n").Replace("\n", "<br>");
+        return html;
+    }
+    private async Task OpenCreateTask()
+    {
+        if (string.IsNullOrWhiteSpace(_utente))
+            return;
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+
+        // NIENTE parameters (come il tuo dialog "Firma")
+        var dialog = DialogService.Show<CreateTaskDialog>("Nuovo task", options);
+        var res = await dialog.Result;
+
+        if (res.Canceled || res.Data is null)
+            return;
+
+        // il dialog ritorna CreateTaskDialogResult, NON CreateTaskRequest
+        var data = (CreateTaskDialog.CreateTaskDialogResult)res.Data;
+
+        var req = new CreateTaskRequest(
+            CreatoDa: _utente.Trim().ToLowerInvariant(),
+            Titolo: data.Titolo,
+            DescrizioneMarkdown: data.DescrizioneHtml,
+            DataScadenza: data.DataScadenza,
+            AssegnatiA: data.AssegnatiA ?? new List<string>(),
+            EmailId: null
+        );
+
+        var newId = await TaskClient.CreateAsync(req);
+
+        await ReloadTasksAndBadgesAsync(selectTaskId: newId);
+    }
+
+
+    private async Task ReloadTasksAndBadgesAsync(int? selectTaskId = null)
+    {
+        _loaded = false;
+
+        _items = await TaskClient.GetForUserAsync(_utente!) ?? new();
+        _commentCounts.Clear();
+        _taggedTaskIds.Clear();
+        _comments.Clear();
+        _sel = null;
+
+        foreach (var t in _items)
+        {
+            var cs = await TaskClient.GetCommentsAsync(t.Id);
+            _commentCounts[t.Id] = cs?.Count ?? 0;
+
+            var rx = new Regex(@$"(?<=^|\s)@{Regex.Escape(_utente!)}\b", RegexOptions.IgnoreCase);
+            if (cs != null && cs.Any(c => rx.IsMatch(c.Testo ?? "")))
+                _taggedTaskIds.Add(t.Id);
+        }
+
+        if (selectTaskId is int id && id > 0)
+        {
+            var found = _items.FirstOrDefault(x => x.Id == id);
+            if (found is not null)
+                await SelectTask(found);
+        }
+
+        _loaded = true;
+        StateHasChanged();
+    }
+
+    private bool _canCloseCreator;
+
+    private bool IsCreator(TaskDto t)
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return false;
+        var me = _utente.Trim();
+        return string.Equals(t.CreatoDa?.Trim(), me, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private bool IsAssigned(TaskDto t)
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return false;
+        var me = _utente.Trim();
+        return t.AssegnatiA?.Any(a => string.Equals(a?.Trim(), me, StringComparison.OrdinalIgnoreCase)) == true;
+    }
+
+    // il creatore può chiudere SOLO se almeno un assegnatario ha commentato
+    private bool CreatorHasAssigneeDoneComment(TaskDto t)
+    {
+        if (t.AssegnatiA?.Any() != true) return true; // se non è assegnato a nessuno, può chiudere liberamente
+
+        var assignees = new HashSet<string>(
+            t.AssegnatiA.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x.Trim().ToLowerInvariant()), 
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        return _comments.Any(c =>
+                !string.IsNullOrWhiteSpace(c.Utente) &&
+                assignees.Contains(c.Utente.Trim().ToLowerInvariant()) &&
+                IsDoneComment(c.Testo)
+            );
+    }
 
     private void GoHome() => Nav.NavigateTo($"/?cp={Uri.EscapeDataString(Cp ?? "")}");
     private void GoToMail() => Nav.NavigateTo($"/mail-new?cp={Uri.EscapeDataString(Cp ?? "")}");
+    private void GoToMailWithEmail(int emailId) => Nav.NavigateTo($"/mail-new?cp={Uri.EscapeDataString(Cp ?? "")}&openEmailId={emailId}");
+
+    private static MarkupString RenderTaskHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return (MarkupString)"";
+        return (MarkupString)html;
+    }
+
+    private static bool IsDoneComment(string? txt)
+    {
+        if (string.IsNullOrWhiteSpace(txt)) return false;
+
+        var t = txt.Trim();
+
+        // NON dipendere dalla ✅ (spesso si rompe nel DB e diventa un carattere strano)
+        if (t.StartsWith("Fatto", StringComparison.OrdinalIgnoreCase)) return true;
+        if (t.StartsWith("Done", StringComparison.OrdinalIgnoreCase)) return true;
+
+        return Regex.IsMatch(t, @"\b(fatto|done|completato|completata)\b", RegexOptions.IgnoreCase);
+    }
+
+    private string? GetAssigneeWhoMarkedDone(TaskDto task)
+    {
+        if (task.AssegnatiA?.Any() != true) return null;
+
+        var ass = new HashSet<string>(
+            task.AssegnatiA.Where(x => !string.IsNullOrWhiteSpace(x))
+                           .Select(x => x.Trim().ToLowerInvariant()),
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        var done = _comments
+            .Where(c => c is not null
+                && !string.IsNullOrWhiteSpace(c.Utente)
+                && ass.Contains(c.Utente.Trim().ToLowerInvariant())
+                && IsDoneComment(c.Testo))
+            .OrderByDescending(c => c.DataCreazione)
+            .FirstOrDefault();
+
+        return done?.Utente?.Trim();
+    }
+
+    private async Task OpenDoneDialog()
+    {
+        if (_sel is null || string.IsNullOrWhiteSpace(_utente)) return;
+
+        var creator = _sel.CreatoDa?.Trim();
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+
+        var dialog = DialogService.Show<CloseCommentDialog>("Fatto ✅", new DialogParameters
+        {
+            ["Title"] = "Fatto ✅",
+            ["Message"] = string.IsNullOrWhiteSpace(creator)
+                ? "Confermi di aver completato? (Puoi aggiungere una nota facoltativa)"
+                : $"Confermi di aver completato? (nota facoltativa, avviserà @{creator})"
+        }, options);
+
+        var res = await dialog.Result;
+        if (res.Canceled) return;
+
+        var note = (res.Data as string)?.Trim();
+
+        _newText = string.IsNullOrWhiteSpace(note)
+     ? (string.IsNullOrWhiteSpace(creator) ? "Fatto" : $"Fatto @{creator}")
+     : (string.IsNullOrWhiteSpace(creator) ? $"Fatto — {note}" : $"Fatto @{creator} — {note}");
+
+
+        await PostComment();
+    }
+
+    private async Task OpenNudgeCreatorDialog()
+    {
+        if (_sel is null) return;
+
+        var creator = _sel.CreatoDa?.Trim();
+        if (string.IsNullOrWhiteSpace(creator)) return;
+
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+
+        var dialog = DialogService.Show<CloseCommentDialog>("Avvisa creatore", new DialogParameters
+        {
+            ["Title"] = "Avvisa creatore",
+            ["Message"] = $"Scrivi un messaggio per @{creator} (es: “Ho completato, puoi chiuderlo tu?”)."
+        }, options);
+
+        var res = await dialog.Result;
+        if (res.Canceled) return;
+
+        var note = (res.Data as string)?.Trim();
+
+        _newText = string.IsNullOrWhiteSpace(note)
+            ? $"@{creator} Ho completato ✅ puoi chiuderlo tu?"
+            : $"@{creator} {note}";
+
+        await PostComment();
+    }
+
+
 }

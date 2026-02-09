@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using Oracle.EntityFrameworkCore;
+using SCemail;
 using SCemail.Components.Data;
 using SCemail.Components.Shared;
 
@@ -62,6 +63,8 @@ builder.Services.AddHttpClient("server", (sp, client) =>
 
 // quando qualcuno chiede HttpClient, usa il named client "server"
 builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("server"));
+builder.Services.Configure<AttachmentsOptions>(builder.Configuration.GetSection("Attachments"));
+builder.Services.AddScoped<IEmailAttachmentsRepository, EmailAttachmentsRepository>();
 
 // ---------- Blazor / MVC ----------
 builder.Services.AddRazorPages();
@@ -76,8 +79,9 @@ var app = builder.Build();
 // ---------- Endpoint extra ----------
 app.MapPost("/api/mail/fetch-now", async (EmailFetchService svc, CancellationToken ct) =>
 {
-    await svc.ProcessAllMailboxes(ct);
-    return Results.Ok();
+    var night = svc.IsNightNow();
+    await svc.ProcessAllMailboxes(ct, night);
+    return Results.Ok(new { night });
 });
 
 // ---------- Error handling ----------

@@ -28,7 +28,17 @@
 
         <!-- ==========================  A  ========================== -->
         <div class="recipient-container" @ref="_toBoxRef">
-            <label class="mud-input-label">A</label>
+            <div class="recipient-head">
+                <label class="rcpt-label">A</label>
+
+                <div class="rcpt-actions">
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Class="rcpt-link"
+                               OnClick="@(() => _showCc = true)">Cc</MudButton>
+
+                    <MudButton Variant="Variant.Text" Size="Size.Small" Class="rcpt-link"
+                               OnClick="@(() => _showBcc = true)">Ccn</MudButton>
+                </div>
+            </div>
             <div class="recipient-box">
                 @foreach (var chip in _toList)
                 {
@@ -77,6 +87,8 @@
 
 
         <!-- ==========================  CC  ========================== -->
+        @if (_showCc || _ccList.Any())
+        {
         <div class="recipient-container" @ref="_ccBoxRef">
             <label class="mud-input-label">CC</label>
             <div class="recipient-box">
@@ -122,6 +134,8 @@
                 </MudPaper>
             }
         </div>
+        }
+        @if (_showBcc || _bccList.Any()){
 
         <!-- ==========================  CCN  ========================== -->
         <div class="recipient-container" @ref="_bccBoxRef">
@@ -170,17 +184,18 @@
             }
         </div>
 
-
+        }
 
         <!-- Oggetto -->
-        <MudTextField T="string" Label="Oggetto"
-                      Dense="true"
+        <MudTextField T="string"
+                      Label="Oggetto"
+                      Dense="false"
                       FullWidth="true"
+                      Class="subject-big"
                       @bind-Value="_composeSubject" />
-
         <!-- Editor -->
         <div style="margin-top: 12px;">
-            <label class="mud-input-label">Messaggio</label>
+            <label class="msg-label">Messaggio</label>
             <div id="editor"></div>
         </div>
       
@@ -241,21 +256,25 @@
         border-radius: 8px;
     }
 
-        /* toolbar e container devono avere font coerente */
-        #editor .ql-toolbar,
-        #editor .ql-container {
-            font-family: "Courier New", Courier, monospace !important;
-        }
+    /* forza l’altezza reale dell’area di scrittura */
+    #editor .ql-container {
+        min-height: 260px !important;
+        height: 260px !important; /* oppure 40vh */
+        border: none !important;
+    }
+
 
         /* area testo scrollabile */
-        #editor .ql-container {
-            height: 280px;
-            border: none;
-        }
+    .mud-dialog-content {
+        max-height: 75vh;
+    }
 
-        #editor .ql-editor {
+
+       #editor .ql-editor {
             font-family: "Courier New", Courier, monospace !important;
             font-size: 14px;
+            min-height: 260px !important;
+            height: 100% !important;
             line-height: 1.5;
             color: #222;
         }
@@ -318,6 +337,11 @@
         color: #666;
     }
 
+    .subject-big .mud-input-slot {
+        font-size: 18px !important;
+        font-weight: 700 !important;
+        padding: 14px 12px !important;
+    }
     .chip-x {
         margin-left: 6px;
     }
@@ -408,7 +432,45 @@
         cursor: pointer;
     }
 
+    .msg-label {
+        font-size: 14px; /* uguale alle altre label */
+        font-weight: 400; /* normale */
+        color: rgba(0,0,0,.6); /* stile Mud */
+        display: block;
+        margin: 0 0 6px 2px;
+    }
+    .recipient-container {
+        margin-bottom: 6px;
+    }
 
+    .recipient-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 6px 2px 4px 2px;
+    }
+
+    .rcpt-label {
+        font-size: 12px;
+        font-weight: 800;
+        color: #6a82b7;
+    }
+
+    .rcpt-actions {
+        display: flex;
+        gap: 4px;
+    }
+
+    .rcpt-link {
+        min-width: unset !important;
+        padding: 0 6px !important;
+        font-weight: 800;
+        text-transform: none;
+    }
+
+    .rcpt-close {
+        margin-left: auto;
+    }
 </style>
 
 @code {
@@ -424,7 +486,8 @@
     [Parameter] public string? Cc { get; set; }
     [Parameter] public string? Bcc { get; set; }
     [Parameter] public long? DraftId { get; set; }   // ✅ ID bozza se esistente
-
+    private bool _showCc;
+    private bool _showBcc;
     private async Task FocusBackToField(string id)
     {
         // Chiamata diretta JS: focus su un input specifico
@@ -460,6 +523,7 @@
     protected override async Task OnInitializedAsync()
     {
         _draftId = DraftId;
+
         var ids = await AccessiSrv.GetCaselleAbilitateAsync(Utente);
         _caselleDisponibili = await MailSvc.GetEmailAddressesByIdsAsync(ids);
 
@@ -468,40 +532,22 @@
         else if (_caselleDisponibili.Any())
             _selectedCasella = _caselleDisponibili.First();
 
-        if (!string.IsNullOrWhiteSpace(Destinatari))
-            _toList = SplitAddresses(Destinatari)
-                      .Select(ParseAddressToChip)
-                      .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
-                      .ToList();
-
-        if (!string.IsNullOrWhiteSpace(Cc))
-        {
-            _ccList = SplitAddresses(Cc)
-                .Select(ParseAddressToChip)
-                .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-
-        if (!string.IsNullOrWhiteSpace(Bcc))
-        {
-            _bccList = SplitAddresses(Bcc)
-                .Select(ParseAddressToChip)
-                .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
+        // ✅ QUI: set TO/CC/BCC per reply
+        InitReplyRecipients();
+        _showCc = _ccList.Any();
+        _showBcc = _bccList.Any();
         _composeSubject = Oggetto ?? string.Empty;
         _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente);
-        _bodyHtml = ""; // oppure contenuto bozza se la carichi
+        _bodyHtml = "";
         _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
-        // Precarica i 10 più recenti
+
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
         _allRecipients = recenti
             .Select(ParseAddressToChip)
             .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
-
-        Logger.LogInformation("✅ ComposeDialog inizializzato. Destinatari recenti: {count}", _allRecipients.Count);
     }
+
 
     private string? _toInput;
     private string? _ccInput;
@@ -1071,4 +1117,31 @@
     {
         Snackbar.Add($"Hai cliccato su {chip.Email}", Severity.Info);
     }
+
+    private void InitReplyRecipients()
+    {
+        // 1) ricavo indirizzo "mio" (casella selezionata o utente)
+        var myAddr = (_selectedCasella ?? "").Trim().ToLowerInvariant();
+
+        // 2) TO: usa Destinatari come "reply-to target" (idealmente From o ReplyTo che passi dal chiamante)
+        var to = SplitAddresses(Destinatari)
+            .Select(ParseAddressToChip)
+            .Where(c => !string.IsNullOrWhiteSpace(c.Email))
+            .Where(c => !c.Email.Equals(myAddr, StringComparison.OrdinalIgnoreCase))
+            .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // 3) CC: prendi Cc originale (se lo passi) e togli me + già in TO
+        var cc = SplitAddresses(Cc)
+            .Select(ParseAddressToChip)
+            .Where(c => !string.IsNullOrWhiteSpace(c.Email))
+            .Where(c => !c.Email.Equals(myAddr, StringComparison.OrdinalIgnoreCase))
+            .Where(c => !to.Any(t => t.Email.Equals(c.Email, StringComparison.OrdinalIgnoreCase)))
+            .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _toList = to;
+        _ccList = cc;
+    }
+
 }

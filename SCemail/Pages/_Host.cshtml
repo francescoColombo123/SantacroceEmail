@@ -35,17 +35,28 @@
         <component type="typeof(App)" render-mode="ServerPrerendered" />
     </app>
 
+    <script src="/lib/pdfjs/pdf.min.js"></script>
+    <script>
+        window.pdfjsWorkerSrc = "/lib/pdfjs/pdf.worker.min.js";
+    </script>
+    <script src="/js/pdf-preview.js"></script>
+
+    <!-- Blazor UNA SOLA VOLTA -->
     <script src="_framework/blazor.server.js"></script>
+
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 
     <link href="https://cdn.quilljs.com/1.3.6/quill.snow.css" rel="stylesheet">
     <script src="https://cdn.quilljs.com/1.3.6/quill.js"></script>
+    <script src="js/task-editor.js"></script>
+    <script src="js/quill-task.js"></script>
 
     <script src="js/site.js"></script>
     <script src="js/quill-init.js"></script>
     <script src="js/mailHelpers.js"></script>
     <script src="js/rubricaDrop.js"></script>
+
 
 </body>
 </html>

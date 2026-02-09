@@ -163,3 +163,36 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, quoteHtml) => {
     handler();
 };
 
+window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {
+    const editorEl = document.getElementById(editorId);
+    if (!editorEl) return;
+
+    // opzionale: evita doppio init se riapri il dialog
+    if (editorEl.__quillTask) return;
+
+    const q = new Quill(editorEl, {
+        theme: "snow",
+        modules: {
+            toolbar: toolbarId ? `#${toolbarId}` : [
+                ["bold", "italic", "underline"],
+                [{ list: "ordered" }, { list: "bullet" }],
+                ["link"],
+                ["clean"]
+            ]
+        }
+    });
+
+    editorEl.__quillTask = q;
+
+    // init contenuto
+    if (initialHtml) q.clipboard.dangerouslyPasteHTML(initialHtml, "api");
+
+    const handler = () => {
+        try {
+            dotnetRef.invokeMethodAsync("UpdateTaskHtml", (q.root.innerHTML || "").trim());
+        } catch (e) { }
+    };
+
+    q.on("text-change", handler);
+    handler();
+};

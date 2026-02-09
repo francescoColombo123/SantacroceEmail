@@ -23,6 +23,7 @@
     <Folder Include="Components\Nuova cartella1\" />
     <Folder Include="Components\Nuova cartella\" />
     <Folder Include="Nuova cartella\" />
+    <Folder Include="wwwroot\Nuova cartella1\" />
     <Folder Include="wwwroot\Nuova cartella\" />
   </ItemGroup>
 

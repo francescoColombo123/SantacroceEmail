@@ -6,149 +6,551 @@ using System.Text.RegularExpressions;
 
 namespace SCemail.Components.Data;
 
-public interface IEmailTasksRepository
-{
-    Task<IEnumerable<UserTaskItem>> GetForUserAsync(string username);
-    Task<UserTaskItem?> GetByIdAsync(int id);
-    Task<int> CreateFromEmailAsync(int emailId, string utente, string? commento, string? titolo);
-    Task UpdateCommentAsync(int id, string? commento);
-    Task DeleteAsync(int id);
-    Task CloseAsync(int id, string utente);
-
-    // Commenti
-    Task<IEnumerable<TaskComment>> GetCommentsAsync(int taskId);
-    Task<int> AddCommentAsync(int taskId, string utente, string testo, int? replyTo);
-}
-
 public sealed class EmailTasksRepository : IEmailTasksRepository
 {
     private readonly string _connStr;
-
     public EmailTasksRepository(IConfiguration cfg) => _connStr = cfg.GetConnectionString("OracleDb")!;
 
-    // Task dell'utente: assegnati a lui OPPURE dove è partecipante (menzionato)
-    public async Task<IEnumerable<UserTaskItem>> GetForUserAsync(string username)
+    private OracleConnection Open() => new(_connStr);
+
+    // POCO: Dapper con Oracle lo materializza sempre (meglio del record positional)
+    private sealed class TaskRow
     {
-        const string sql = @"
-            select t.ID,
-                   t.EMAIL_ID        as EmailId,
-                   t.TITOLO          as Titolo,
-                   t.STATO           as Stato,
-                   t.COMMENTO        as Commento,
-                   t.DATA_CREAZIONE  as DataCreazione
-              from SGAPP.EMAIL_TASKS t
-             where upper(t.UTENTE) = upper(:u)
-                or exists (select 1
-                             from SGAPP.EMAIL_TASK_PARTICIPANTS p
-                            where p.TASK_ID = t.ID
-                              and upper(p.UTENTE) = upper(:u))
-             order by t.DATA_CREAZIONE desc";
-        await using var con = new OracleConnection(_connStr);
-        return (await con.QueryAsync<UserTaskItem>(sql, new { u = username })).ToList();
+        public decimal Id { get; set; }
+        public string Titolo { get; set; } = "";
+        public string? DescrizioneMarkdown { get; set; }
+        public string CreatoDa { get; set; } = "";
+        public DateTime DataCreazione { get; set; }
+        public DateTime? DataScadenza { get; set; }
+        public string Stato { get; set; } = "";
+        public DateTime? DataChiusura { get; set; }
+        public string? ChiusoDa { get; set; }
     }
 
-    public async Task<UserTaskItem?> GetByIdAsync(int id)
+    private sealed class TaskCommentRow
     {
-        const string sql = @"
-            select ID, EMAIL_ID as EmailId, UTENTE, COMMENTO, DATA_CREAZIONE as DataCreazione,
-                   TITOLO, STATO, DATA_CHIUSURA as DataChiusura
-              from SGAPP.EMAIL_TASKS
-             where ID = :id";
-        await using var con = new OracleConnection(_connStr);
-        return await con.QueryFirstOrDefaultAsync<UserTaskItem>(sql, new { id });
+        public decimal Id { get; set; }
+        public decimal TaskId { get; set; }
+        public string Utente { get; set; } = "";
+        public string Testo { get; set; } = "";
+        public DateTime DataCreazione { get; set; }
+        public decimal? ReplyTo { get; set; }
     }
 
-    public async Task<int> CreateFromEmailAsync(int emailId, string utente, string? commento, string? titolo)
+
+    // -----------------------
+    // LISTA TASK PER UTENTE
+    // -----------------------
+    public async Task<List<TaskDto>> GetForUserAsync(string username)
     {
+        var u = (username ?? "").Trim();
+
         const string sql = @"
-            insert into SGAPP.EMAIL_TASKS(EMAIL_ID, UTENTE, COMMENTO, TITOLO)
-            values (:e, :u, :c, :t)
-            returning ID into :newid";
-        await using var con = new OracleConnection(_connStr);
-        var p = new DynamicParameters();
-        p.Add("e", emailId);
-        p.Add("u", utente);
-        p.Add("c", commento, DbType.String);
-        p.Add("t", titolo);
-        p.Add("newid", dbType: DbType.Int32, direction: ParameterDirection.Output);
-        await con.ExecuteAsync(sql, p);
-        return p.Get<int>("newid");
+SELECT
+       t.ID               AS Id,
+       t.TITOLO           AS Titolo,
+       t.DESCRIZIONE_MD   AS DescrizioneMarkdown,
+       LOWER(t.CREATO_DA) AS CreatoDa,
+       t.DATA_CREAZIONE   AS DataCreazione,
+       t.DATA_SCADENZA    AS DataScadenza,
+       t.STATO            AS Stato,
+       t.DATA_CHIUSURA    AS DataChiusura,
+       LOWER(t.CHIUSO_DA) AS ChiusoDa
+FROM SGAPP.EMAIL_TASKS t
+WHERE LOWER(t.CREATO_DA) = LOWER(:u)
+   OR EXISTS (
+       SELECT 1
+       FROM SGAPP.EMAIL_TASK_PARTICIPANTS p
+       WHERE p.TASK_ID = t.ID
+         AND LOWER(p.UTENTE) = LOWER(:u)
+   )
+ORDER BY t.DATA_CREAZIONE DESC";
+
+        await using var con = Open();
+        var rows = (await con.QueryAsync<TaskRow>(sql, new { u })).ToList();
+        if (rows.Count == 0) return new();
+
+        // base list
+        var tasks = rows.Select(r => new TaskDto(
+            Id: (int)r.Id,
+            EmailId: null, // non esiste in tabella
+            Titolo: r.Titolo,
+            DescrizioneMarkdown: r.DescrizioneMarkdown,
+            CreatoDa: r.CreatoDa,
+            DataCreazione: r.DataCreazione,
+            DataScadenza: r.DataScadenza,
+            Stato: r.Stato,
+            DataChiusura: r.DataChiusura,
+            ChiusoDa: r.ChiusoDa,
+            AssegnatiA: new List<string>()
+        )).ToList();
+
+        // partecipanti ASSEGNATO
+        var ids = tasks.Select(t => t.Id).Distinct().ToArray();
+        if (ids.Length == 0) return tasks;
+
+        var inClause = string.Join(",", ids); // safe: solo numeri
+
+        var map = tasks.ToDictionary(t => t.Id, _ => new List<string>());
+
+        var sqlP = $@"
+SELECT TASK_ID AS TaskId,
+       LOWER(UTENTE) AS Utente
+FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID IN ({inClause})
+  AND RUOLO = 'ASSEGNATO'";
+
+        var rowsP = await con.QueryAsync<(decimal TaskId, string Utente)>(sqlP);
+        foreach (var r in rowsP)
+        {
+            var tid = (int)r.TaskId;
+            if (map.TryGetValue(tid, out var list))
+                list.Add(r.Utente);
+        }
+
+        return tasks
+            .Select(t => t with
+            {
+                AssegnatiA = map[t.Id]
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(x => x)
+                    .ToList()
+            })
+            .ToList();
     }
 
-    public async Task UpdateCommentAsync(int id, string? commento)
-    {
-        const string sql = @"update SGAPP.EMAIL_TASKS set COMMENTO = :c where ID = :id";
-        await using var con = new OracleConnection(_connStr);
-        await con.ExecuteAsync(sql, new { c = commento, id });
-    }
-
-    public async Task CloseAsync(int id, string utente)
+    // -----------------------
+    // DETTAGLIO TASK
+    // -----------------------
+    public async Task<TaskDto?> GetByIdAsync(int id)
     {
         const string sql = @"
-            update SGAPP.EMAIL_TASKS
-               set STATO = 'CHIUSO', DATA_CHIUSURA = SYSTIMESTAMP
-             where ID = :id and UTENTE = :u";
-        await using var con = new OracleConnection(_connStr);
-        await con.ExecuteAsync(sql, new { id, u = utente });
+SELECT
+       t.ID               AS Id,
+       t.TITOLO           AS Titolo,
+       t.DESCRIZIONE_MD   AS DescrizioneMarkdown,
+       LOWER(t.CREATO_DA) AS CreatoDa,
+       t.DATA_CREAZIONE   AS DataCreazione,
+       t.DATA_SCADENZA    AS DataScadenza,
+       t.STATO            AS Stato,
+       t.DATA_CHIUSURA    AS DataChiusura,
+       LOWER(t.CHIUSO_DA) AS ChiusoDa
+FROM SGAPP.EMAIL_TASKS t
+WHERE t.ID = :id";
+
+        await using var con = Open();
+        var row = await con.QueryFirstOrDefaultAsync<TaskRow>(sql, new { id });
+        if (row is null) return null;
+
+        const string sqlAss = @"
+SELECT LOWER(UTENTE)
+FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID = :id AND RUOLO = 'ASSEGNATO'
+ORDER BY LOWER(UTENTE)";
+
+        var ass = (await con.QueryAsync<string>(sqlAss, new { id })).ToList();
+
+        return new TaskDto(
+            Id: (int)row.Id,
+            EmailId: null,
+            Titolo: row.Titolo,
+            DescrizioneMarkdown: row.DescrizioneMarkdown,
+            CreatoDa: row.CreatoDa,
+            DataCreazione: row.DataCreazione,
+            DataScadenza: row.DataScadenza,
+            Stato: row.Stato,
+            DataChiusura: row.DataChiusura,
+            ChiusoDa: row.ChiusoDa,
+            AssegnatiA: ass
+        );
+    }
+
+    // -----------------------
+    // CREA TASK DA ZERO
+    // -----------------------
+    public async Task<int> CreateAsync(CreateTaskRequest req)
+    {
+        if (req is null) throw new ArgumentNullException(nameof(req));
+
+        var creatoDa = (req.CreatoDa ?? "").Trim().ToLowerInvariant();
+        var titolo = (req.Titolo ?? "").Trim();
+        var descr = string.IsNullOrWhiteSpace(req.DescrizioneMarkdown) ? null : req.DescrizioneMarkdown.Trim();
+        var scad = req.DataScadenza;
+
+        if (string.IsNullOrWhiteSpace(creatoDa)) throw new ArgumentException("CreatoDa mancante.");
+        if (string.IsNullOrWhiteSpace(titolo)) throw new ArgumentException("Titolo mancante.");
+
+        var assegnati = CleanUsers(req.AssegnatiA);
+
+        await using var con = Open();
+        await con.OpenAsync();
+        using var tx = con.BeginTransaction();
+
+        try
+        {
+            // ✅ NO SEQUENCE: ID generato lato app con lock tabella
+            var newId = await NextIdWithTableLockAsync(con, tx, "SGAPP.EMAIL_TASKS");
+
+            const string insTask = @"
+INSERT INTO SGAPP.EMAIL_TASKS
+  (ID, TITOLO, DESCRIZIONE_MD, CREATO_DA, DATA_CREAZIONE, DATA_SCADENZA, STATO)
+VALUES
+  (:Id, :Titolo, :Descr, :CreatoDa, SYSTIMESTAMP, :Scad, 'APERTO')";
+
+            await con.ExecuteAsync(insTask, new
+            {
+                Id = newId,
+                Titolo = titolo,
+                Descr = descr,
+                CreatoDa = creatoDa,
+                Scad = scad
+            }, tx);
+
+            if (assegnati.Count > 0)
+                await UpsertAssigneesInternalAsync(con, tx, newId, assegnati);
+
+            tx.Commit();
+            return newId;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+
+    private async Task UpsertAssigneesInternalAsync(
+    OracleConnection con,
+    IDbTransaction tx,
+    int taskId,
+    List<string> assigneesLower)
+    {
+        // Lock una volta sola per batch (evita rallentamenti)
+        await con.ExecuteAsync("LOCK TABLE SGAPP.EMAIL_TASK_PARTICIPANTS IN EXCLUSIVE MODE", transaction: tx);
+
+        const string existsSql = @"
+SELECT COUNT(1)
+FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID = :TaskId
+  AND LOWER(UTENTE) = LOWER(:Utente)
+  AND RUOLO = :Ruolo";
+
+        const string ins = @"
+INSERT INTO SGAPP.EMAIL_TASK_PARTICIPANTS (ID, TASK_ID, UTENTE, RUOLO)
+VALUES (:Id, :TaskId, :Utente, :Ruolo)";
+
+        foreach (var u in assigneesLower)
+        {
+            var exists = await con.ExecuteScalarAsync<int>(
+                existsSql,
+                new { TaskId = taskId, Utente = u, Ruolo = "ASSEGNATO" },
+                tx
+            );
+
+            if (exists > 0) continue;
+
+            // max+1 (tabella già lockata)
+            var newPid = await con.ExecuteScalarAsync<decimal>(
+                "SELECT NVL(MAX(ID),0) + 1 FROM SGAPP.EMAIL_TASK_PARTICIPANTS",
+                transaction: tx
+            );
+
+            await con.ExecuteAsync(ins, new
+            {
+                Id = (int)newPid,
+                TaskId = taskId,
+                Utente = u,
+                Ruolo = "ASSEGNATO"
+            }, tx);
+        }
+    }
+
+
+    public async Task SetAssigneesAsync(int taskId, List<string> assignees)
+    {
+        var clean = (assignees ?? new())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        await using var con = Open();
+        await con.OpenAsync();
+        using var tx = con.BeginTransaction();
+
+        try
+        {
+            // 1) elimino tutti gli ASSEGNATO attuali
+            const string del = @"
+DELETE FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID = :Id AND RUOLO = 'ASSEGNATO'";
+            await con.ExecuteAsync(del, new { Id = taskId }, tx);
+
+            // 2) reinserisco quelli nuovi
+            if (clean.Count > 0)
+                await UpsertAssigneesInternalAsync(con, tx, taskId, clean);
+
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    // compat (se non hai EmailId nel DB)
+    public Task<int> CreateFromEmailAsync(
+        int emailId,
+        string creatoDa,
+        string? titolo,
+        string? descrizioneMarkdown,
+        DateTime? dataScadenza,
+        List<string> assegnatiA)
+    {
+        var req = new CreateTaskRequest(
+            CreatoDa: creatoDa,
+            Titolo: string.IsNullOrWhiteSpace(titolo) ? "(senza titolo)" : titolo!,
+            DescrizioneMarkdown: descrizioneMarkdown,
+            DataScadenza: dataScadenza,
+            AssegnatiA: assegnatiA ?? new(),
+            EmailId: null
+        );
+
+        return CreateAsync(req);
+    }
+
+    // -----------------------
+    // CHIUSURA TASK
+    // -----------------------
+    public async Task CloseAsync(int taskId, CloseTaskRequest req)
+    {
+        if (req is null) throw new ArgumentNullException(nameof(req));
+
+        var user = (req.Utente ?? "").Trim().ToLowerInvariant();
+        var comment = req.Commento?.Trim();
+
+        if (string.IsNullOrWhiteSpace(user))
+            throw new ArgumentException("Utente mancante.");
+
+        await using var con = Open();
+        await con.OpenAsync();
+        using var tx = con.BeginTransaction();
+
+        try
+        {
+            const string q = @"SELECT LOWER(CREATO_DA) AS CreatoDa, STATO AS Stato
+                               FROM SGAPP.EMAIL_TASKS WHERE ID = :Id";
+            var row = await con.QueryFirstOrDefaultAsync<(string CreatoDa, string Stato)>(q, new { Id = taskId }, tx);
+
+            if (string.IsNullOrWhiteSpace(row.CreatoDa))
+                throw new InvalidOperationException("Task non trovato.");
+
+            if (string.Equals(row.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase))
+            {
+                tx.Commit();
+                return;
+            }
+
+            var isCreator = string.Equals(row.CreatoDa, user, StringComparison.OrdinalIgnoreCase);
+
+            const string qAss = @"
+SELECT COUNT(1)
+FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID = :Id AND LOWER(UTENTE) = LOWER(:U) AND RUOLO = 'ASSEGNATO'";
+            var cnt = await con.ExecuteScalarAsync<int>(qAss, new { Id = taskId, U = user }, tx);
+            var isAssigned = cnt > 0;
+
+            if (!isCreator && !isAssigned)
+                throw new UnauthorizedAccessException("Non sei autorizzato a chiudere questo task.");
+
+            if (!isCreator && isAssigned && string.IsNullOrWhiteSpace(comment))
+                throw new InvalidOperationException("Per chiudere il task devi inserire un commento.");
+
+            const string upd = @"
+UPDATE SGAPP.EMAIL_TASKS
+SET STATO = 'CHIUSO',
+    DATA_CHIUSURA = SYSTIMESTAMP,
+    CHIUSO_DA = :U
+WHERE ID = :Id AND STATO <> 'CHIUSO'";
+            await con.ExecuteAsync(upd, new { Id = taskId, U = user }, tx);
+
+            if (!string.IsNullOrWhiteSpace(comment))
+                await AddCommentInternalAsync(con, tx, taskId, user, comment!, replyTo: null);
+
+            tx.Commit();
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     public async Task DeleteAsync(int id)
     {
-        const string sql = @"delete from SGAPP.EMAIL_TASKS where ID = :id";
-        await using var con = new OracleConnection(_connStr);
+        const string sql = @"DELETE FROM SGAPP.EMAIL_TASKS WHERE ID = :id";
+        await using var con = Open();
         await con.ExecuteAsync(sql, new { id });
     }
 
-    // ----- Commenti -----
-    public async Task<IEnumerable<TaskComment>> GetCommentsAsync(int taskId)
+    // -----------------------
+    // COMMENTI
+    // -----------------------
+    public async Task<List<TaskCommentDto>> GetCommentsAsync(int taskId)
     {
         const string sql = @"
-            select ID, TASK_ID as TaskId, UTENTE, TESTO,
-                   DATA_CREAZIONE as DataCreazione, REPLY_TO as ReplyTo
-              from SGAPP.EMAIL_TASK_COMMENTS
-             where TASK_ID = :t
-             order by DATA_CREAZIONE asc";
-        await using var con = new OracleConnection(_connStr);
-        return (await con.QueryAsync<TaskComment>(sql, new { t = taskId })).ToList();
+SELECT ID             AS Id,
+       TASK_ID        AS TaskId,
+       LOWER(UTENTE)  AS Utente,
+       TESTO          AS Testo,
+       DATA_CREAZIONE AS DataCreazione,
+       REPLY_TO       AS ReplyTo
+FROM SGAPP.EMAIL_TASK_COMMENTS
+WHERE TASK_ID = :t
+ORDER BY DATA_CREAZIONE ASC";
+
+        await using var con = Open();
+
+        var rows = (await con.QueryAsync<TaskCommentRow>(sql, new { t = taskId })).ToList();
+
+        return rows.Select(r => new TaskCommentDto(
+            Id: (int)r.Id,
+            TaskId: (int)r.TaskId,
+            Utente: r.Utente,
+            Testo: r.Testo,
+            DataCreazione: r.DataCreazione,
+            ReplyTo: r.ReplyTo is null ? null : (int?)r.ReplyTo
+        )).ToList();
     }
 
-    // Salva commento e aggiunge i menzionati come PARTECIPANTI (non cambia l'assegnazione)
+
     public async Task<int> AddCommentAsync(int taskId, string utente, string testo, int? replyTo)
     {
-        // 1) inserisco il commento
-        const string ins = @"
-            insert into SGAPP.EMAIL_TASK_COMMENTS(TASK_ID, UTENTE, TESTO, REPLY_TO)
-            values (:t, :u, :txt, :r)
-            returning ID into :newid";
-        await using var con = new OracleConnection(_connStr);
-        var p = new DynamicParameters();
-        p.Add("t", taskId);
-        p.Add("u", utente);
-        p.Add("txt", testo);
-        p.Add("r", replyTo, DbType.Int32);
-        p.Add("newid", dbType: DbType.Int32, direction: ParameterDirection.Output);
-        await con.ExecuteAsync(ins, p);
-        var newId = p.Get<int>("newid");
+        var user = (utente ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(user)) throw new ArgumentException("Utente mancante.");
+        if (string.IsNullOrWhiteSpace(testo)) throw new ArgumentException("Testo mancante.");
 
-        // 2) estraggo le menzioni e faccio upsert nei partecipanti
-        var rx = new Regex(@"(?<=^|\s)@([a-zA-Z0-9_.-]+)\b", RegexOptions.Compiled);
-        var mentions = rx.Matches(testo ?? "")
-                         .Select(m => m.Groups[1].Value.Trim())
-                         .Where(s => !string.IsNullOrWhiteSpace(s))
-                         .Distinct(StringComparer.OrdinalIgnoreCase)
-                         .ToArray();
+        await using var con = Open();
+        await con.OpenAsync();
+        using var tx = con.BeginTransaction();
 
-        if (mentions.Length > 0)
+        try
         {
-            const string merge = @"
-                MERGE INTO SGAPP.EMAIL_TASK_PARTICIPANTS p
-                USING (SELECT :t TASK_ID, :m UTENTE FROM dual) s
-                ON (p.TASK_ID = s.TASK_ID AND upper(p.UTENTE) = upper(s.UTENTE))
-                WHEN NOT MATCHED THEN INSERT (TASK_ID, UTENTE) VALUES (s.TASK_ID, s.UTENTE)";
-            foreach (var m in mentions)
-                await con.ExecuteAsync(merge, new { t = taskId, m });
+            var newId = await AddCommentInternalAsync(con, tx, taskId, user, testo, replyTo);
+
+            await UpsertMentionedParticipantsAsync(con, tx, taskId, testo);
+
+            tx.Commit();
+            return newId;
         }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    private static readonly Regex MentionRx =
+        new(@"(?<=^|\s)@([a-zA-Z0-9_.-]+)\b", RegexOptions.Compiled);
+
+    private async Task UpsertMentionedParticipantsAsync(OracleConnection con, IDbTransaction tx, int taskId, string testo)
+    {
+        var mentions = MentionRx.Matches(testo ?? "")
+            .Select(m => m.Groups[1].Value.Trim().ToLowerInvariant())
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (mentions.Length == 0) return;
+
+        await con.ExecuteAsync("LOCK TABLE SGAPP.EMAIL_TASK_PARTICIPANTS IN EXCLUSIVE MODE", transaction: tx);
+
+        const string existsSql = @"
+SELECT COUNT(1)
+FROM SGAPP.EMAIL_TASK_PARTICIPANTS
+WHERE TASK_ID = :TaskId
+  AND LOWER(UTENTE) = LOWER(:Utente)
+  AND RUOLO = :Ruolo";
+
+        const string ins = @"
+INSERT INTO SGAPP.EMAIL_TASK_PARTICIPANTS (ID, TASK_ID, UTENTE, RUOLO)
+VALUES (:Id, :TaskId, :Utente, :Ruolo)";
+
+        foreach (var m in mentions)
+        {
+            var exists = await con.ExecuteScalarAsync<int>(
+                existsSql,
+                new { TaskId = taskId, Utente = m, Ruolo = "OSSERVATORE" },
+                tx
+            );
+
+            if (exists > 0) continue;
+
+            var newPid = await con.ExecuteScalarAsync<decimal>(
+                "SELECT NVL(MAX(ID),0) + 1 FROM SGAPP.EMAIL_TASK_PARTICIPANTS",
+                transaction: tx
+            );
+
+            await con.ExecuteAsync(ins, new
+            {
+                Id = (int)newPid,
+                TaskId = taskId,
+                Utente = m,
+                Ruolo = "OSSERVATORE"
+            }, tx);
+        }
+    }
+
+
+    private async Task<int> AddCommentInternalAsync(
+      OracleConnection con,
+      IDbTransaction tx,
+      int taskId,
+      string utente,
+      string testo,
+      int? replyTo)
+    {
+        var newId = await NextIdWithTableLockAsync(con, tx, "SGAPP.EMAIL_TASK_COMMENTS");
+
+        const string ins = @"
+INSERT INTO SGAPP.EMAIL_TASK_COMMENTS (ID, TASK_ID, UTENTE, TESTO, REPLY_TO, DATA_CREAZIONE)
+VALUES (:Id, :t, :u, :txt, :r, SYSTIMESTAMP)";
+
+        await con.ExecuteAsync(ins, new
+        {
+            Id = newId,
+            t = taskId,
+            u = utente,
+            txt = testo,
+            r = replyTo
+        }, tx);
 
         return newId;
     }
+
+    private static async Task<int> NextIdWithTableLockAsync(
+    OracleConnection con,
+    IDbTransaction tx,
+    string fullTableName)
+    {
+        // Serializza la generazione ID: evita collisioni (MAX+1)
+        await con.ExecuteAsync($"LOCK TABLE {fullTableName} IN EXCLUSIVE MODE", transaction: tx);
+
+        var next = await con.ExecuteScalarAsync<decimal>(
+            $"SELECT NVL(MAX(ID),0) + 1 FROM {fullTableName}",
+            transaction: tx
+        );
+
+        return (int)next;
+    }
+
+    private static List<string> CleanUsers(IEnumerable<string>? users)
+        => (users ?? Enumerable.Empty<string>())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
 }

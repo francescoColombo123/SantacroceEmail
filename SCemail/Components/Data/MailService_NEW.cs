@@ -159,8 +159,8 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 list.Add(new EmailListItem_NEW(
                     Id: reader.GetInt32("ID"),
                     Data: reader.GetDateTime("DATA_RICEZIONE"),
-                    Mittente: reader.GetString("MITTENTE"),
-                    Oggetto: reader.GetString("OGGETTO"),
+                    Mittente: GetStr(reader, "MITTENTE") ?? "",
+                    Oggetto: GetStr(reader, "OGGETTO") ?? "(senza oggetto)",
                     Aperto: reader.IsDBNull("APERTO") ? "" : reader.GetString("APERTO"),
                     HasAttachments: reader.GetInt32("HAS_ATTACH") == 1,
                     ThreadLen: 1,
@@ -985,8 +985,7 @@ END;";
             const string sql = @"
         SELECT LOWER(UTENTE)
         FROM INFOUSER
-        WHERE UTENTE LIKE '_._%'
-        ORDER BY UTENTE";
+";
 
             await using var cmd = new OracleCommand(sql, conn);
             await using var reader = await cmd.ExecuteReaderAsync();

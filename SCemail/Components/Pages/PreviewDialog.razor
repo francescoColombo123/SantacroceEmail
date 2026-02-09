@@ -1,0 +1,57 @@
+﻿@using Microsoft.JSInterop
+@using MudBlazor
+@using Microsoft.AspNetCore.Components
+@inject IJSRuntime JS
+
+@inject NavigationManager Navigation
+
+<MudDialog MaxWidth="MaxWidth.Large" FullWidth="true">
+    <DialogContent>
+        @if (IsImage)
+        {
+            <img src="@Url" style="max-width:100%; height:auto;" />
+        }
+        else if (IsPdf)
+        {
+            <canvas id="@CanvasId" style="width:100%"></canvas>
+        }
+        else
+        {
+            <MudText>Anteprima non disponibile</MudText>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Filled" OnClick="Download">Scarica</MudButton>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Chiudi</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] public IMudDialogInstance? MudDialog { get; set; }
+
+    [Parameter] public string Url { get; set; } = "";
+    [Parameter] public string Mime { get; set; } = "";
+    [Parameter] public int AllegatoId { get; set; }
+    private string CanvasId = $"pdf_{Guid.NewGuid():N}";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && IsPdf)
+        {
+            await JS.InvokeVoidAsync("pdfPreview.render", CanvasId, Url);
+        }
+    }
+
+
+    private bool IsPdf =>
+        (Mime ?? "").Trim().StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase);
+
+    private bool IsImage =>
+        (Mime ?? "").Trim().StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private void Cancel() => MudDialog?.Cancel();
+
+    private void Download()
+        => Navigation.NavigateTo($"/api/attachments/{AllegatoId}/download", forceLoad: true);
+}

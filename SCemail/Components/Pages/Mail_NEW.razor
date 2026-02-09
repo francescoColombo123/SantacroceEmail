@@ -10,6 +10,7 @@
 @using MudBlazor
 @using MimeKit;
 @using System.Text.RegularExpressions
+@using System.Net
 @using static SCemail.Components.Data.MailService_NEW
 @inject NavigationManager Nav
 @inject MailService_NEW MailSvc
@@ -20,6 +21,8 @@
 @inject IJSRuntime JS
 @inject SCemail.Components.Shared.IEmailTasksClient TaskClient
 @inject IDbContextFactory<MailDbContext> DbFactory
+@inject HttpClient Http
+
 @if (_isLoading)
 {
     <div class="loading-screen">
@@ -40,7 +43,7 @@ else
                            StartIcon="@Icons.Material.Filled.Edit"
                            OnClick="NewEmail"
                            Class="sidebar-btn">
-                    
+
                 </MudButton>
 
                 <ul class="folder-list">
@@ -84,7 +87,7 @@ else
 
         <!-- ===== MAIN ===== -->
         <main class="mail-container">
-             <div class="postit-wrapper">
+            <div class="postit-wrapper">
                 <div class="postit-board">
 
                     @foreach (var p in _postIts)
@@ -114,7 +117,7 @@ else
                     </div>
                 </div>
             </div>
-           
+
 
             @if (_folder != "admin")
             {
@@ -136,42 +139,42 @@ else
             }
             @if (_folder == "admin" && _isAdmin)
             {
-        <MudPaper Class="redirect-admin">
-            <MudText Typo="Typo.h6">Reindirizzamento alla dashboard amministrativa…</MudText>
-            <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
-        </MudPaper>
-    }
+                <MudPaper Class="redirect-admin">
+                    <MudText Typo="Typo.h6">Reindirizzamento alla dashboard amministrativa…</MudText>
+                    <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+                </MudPaper>
+            }
 
-    else
-    {
-            <section class="mail-grid @( _selectedId != null ? "detail-view" : "full-list")">
+            else
+            {
+                <section class="mail-grid @( _selectedId != null ? "detail-view" : "full-list")">
 
-        @* ============================
+                    @* ============================
            LISTA NORMALE
            ============================ *@
-        <div class="mail-list">
-            <div class="list-header">
-                <div class="title">
-                    <MudIcon Icon="@Icons.Material.Filled.Mail" />
-                    <span>@Title</span>
-                </div>
+                    <div class="mail-list">
+                        <div class="list-header">
+                            <div class="title">
+                                <MudIcon Icon="@Icons.Material.Filled.Mail" />
+                                <span>@Title</span>
+                            </div>
 
-                <MudTextField T="string"
-                              Value="_searchText"
-                              ValueChanged="async v => await OnSearchChanged(v)"
-                              Placeholder="Cerca..."
-                              Adornment="Adornment.Start"
-                              AdornmentIcon="@Icons.Material.Filled.Search"
-                              DebounceInterval="400"
-                              Immediate="true"
-                              Class="search-box" />
+                            <MudTextField T="string"
+                                          Value="_searchText"
+                                          ValueChanged="async v => await OnSearchChanged(v)"
+                                          Placeholder="Cerca..."
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.Search"
+                                          DebounceInterval="400"
+                                          Immediate="true"
+                                          Class="search-box" />
 
-                <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                               OnClick="Reload"
-                               Color="Color.Primary" />
-            </div>
+                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                           OnClick="Reload"
+                                           Color="Color.Primary" />
+                        </div>
 
-            <div id="mailScroll" class="list-scroll" @ref="_scrollDiv">
+                        <div id="mailScroll" class="list-scroll" @ref="_scrollDiv">
                             @if (_folder == "drafts")
                             {
                                 <ul class="mail-ul">
@@ -237,206 +240,207 @@ else
                                     </div>
                                 }
                             }
-                            else{
+                            else
+                            {
 
-                <ul class="mail-ul">
-                    @foreach (var item in _emails)
-                    {
-                                    <li @key="item.Id"
-                                        class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
-                                        @onclick="@(() => OpenEmailAndMarkRead(item))">
+                                <ul class="mail-ul">
+                                    @foreach (var item in _emails)
+                                    {
+                                        <li @key="item.Id"
+                                            class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
+                                            @onclick="@(() => OpenEmailAndMarkRead(item))">
 
-                                        <div class="status-strip"></div>
+                                            <div class="status-strip"></div>
 
-                                        <!-- LEFT: mittente + destinatari -->
-                                        <div class="ml-left">
-                                            <MudTooltip Text="@item.Mittente">
-                                                <div class="ml-from">@ExtractEmail(item.Mittente)</div>
-                                            </MudTooltip>
+                                            <!-- LEFT: mittente + destinatari -->
+                                            <div class="ml-left">
+                                                <MudTooltip Text="@item.Mittente">
+                                                    <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                </MudTooltip>
 
-                                            @* destinatari: nostra casella + eventuali extra *@
-                                            <MudTooltip Text="@BuildRecipientsTooltip(item)">
-                                                <div class="ml-to">
-                                                    <span class="ml-to-label">A:</span>
-                                                    <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
-                                                    @if (GetRecipientsExtraCount(item) > 0)
-                                                    {
-                                                        <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
-                                                    }
-                                                </div>
-                                            </MudTooltip>
-                                        </div>
-
-                                        <!-- CENTER: 2 righe -->
-                                        <div class="ml-center">
-                                            <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
-                                            <div class="ml-line1">
-                                                <div class="ml-subject" title="@item.Oggetto">
-                                                    <strong>@(item.Oggetto ?? "")</strong>
-                                                </div>
-
-                                                @{
-                                                    var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
-                                                    var shortList = assList.Take(2).ToList();
-                                                    var extra = assList.Count - shortList.Count;
-                                                }
-
-                                                <MudTooltip Text="@string.Join("\n", assList)">
-                                                    <div class="ml-assigned">
-                                                        @foreach (var a in shortList)
+                                                @* destinatari: nostra casella + eventuali extra *@
+                                                <MudTooltip Text="@BuildRecipientsTooltip(item)">
+                                                    <div class="ml-to">
+                                                        <span class="ml-to-label">A:</span>
+                                                        <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
+                                                        @if (GetRecipientsExtraCount(item) > 0)
                                                         {
-                                                            <span class="chip">@a</span>
-                                                        }
-                                                        @if (extra > 0)
-                                                        {
-                                                            <span class="chip more">+@extra</span>
+                                                            <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
                                                         }
                                                     </div>
                                                 </MudTooltip>
-
-                                                <div class="ml-date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</div>
                                             </div>
 
-                                            <!-- Riga 2: preview + pulsanti + allegati -->
-                                            <div class="ml-line2">
-                                                <div class="ml-preview" title="@item.Preview">
-                                                    @item.Preview
-                                                </div>
+                                            <!-- CENTER: 2 righe -->
+                                            <div class="ml-center">
+                                                <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
+                                                <div class="ml-line1">
+                                                    <div class="ml-subject" title="@item.Oggetto">
+                                                        <strong>@(item.Oggetto ?? "")</strong>
+                                                    </div>
 
-                                                <div class="ml-tools" @onclick:stopPropagation="true">
-                                                    <!-- Pulsanti (assegna / archivia) -->
-                                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                   Color="Color.Primary"
-                                                                   Size="Size.Small"
-                                                                   Title="Assegna"
-                                                                   OnClick="@(() => Forward(item))" />
-
-                                                    @if (_folder is "inbox" or "mentions")
-                                                    {
-                                                        <MudIconButton Icon="@Icons.Material.Filled.Archive"
-                                                                       Color="Color.Success"
-                                                                       Size="Size.Small"
-                                                                       Title="Archivia"
-                                                                       OnClick="@(() => Archive(item))" />
+                                                    @{
+                                                        var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
+                                                        var shortList = assList.Take(2).ToList();
+                                                        var extra = assList.Count - shortList.Count;
                                                     }
 
-                                                    @if (_folder == "myarchive")
-                                                    {
-                                                        <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
-                                                                        Color="Color.Primary"
-                                                                        Size="Size.Small"
-                                                                        Title="Ripristina in Posta in arrivo"
-                                                                        OnClick="@(() => Unarchive(item))" />
-                                                    }
-                                                    <!-- Allegati: 1 icona per file -->
-                                                    @if (item.Allegati?.Any() == true)
-                                                    {
-                                                        <div class="ml-att">
-                                                            @foreach (var a in item.Allegati)
+                                                    <MudTooltip Text="@string.Join("\n", assList)">
+                                                        <div class="ml-assigned">
+                                                            @foreach (var a in shortList)
                                                             {
-                                                                <MudTooltip Text="@a.NomeFile">
-                                                                    <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
-                                                                                   Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
-                                                                                   Size="Size.Small"
-                                                                                   OnClick="@(async () => await OpenAttachmentAsync(a.Id))" />
-
-                                                                </MudTooltip>
-
+                                                                <span class="chip">@a</span>
+                                                            }
+                                                            @if (extra > 0)
+                                                            {
+                                                                <span class="chip more">+@extra</span>
                                                             }
                                                         </div>
-                                                    }
+                                                    </MudTooltip>
+
+                                                    <div class="ml-date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</div>
+                                                </div>
+
+                                                <!-- Riga 2: preview + pulsanti + allegati -->
+                                                <div class="ml-line2">
+                                                    <div class="ml-preview" title="@item.Preview">
+                                                        @item.Preview
+                                                    </div>
+
+                                                    <div class="ml-tools" @onclick:stopPropagation="true">
+                                                        <!-- Pulsanti (assegna / archivia) -->
+                                                        <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                       Color="Color.Primary"
+                                                                       Size="Size.Small"
+                                                                       Title="Assegna"
+                                                                       OnClick="@(() => Forward(item))" />
+
+                                                        @if (_folder is "inbox" or "mentions")
+                                                        {
+                                                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                           Color="Color.Success"
+                                                                           Size="Size.Small"
+                                                                           Title="Archivia"
+                                                                           OnClick="@(() => Archive(item))" />
+                                                        }
+
+                                                        @if (_folder == "myarchive")
+                                                        {
+                                                            <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                                           Color="Color.Primary"
+                                                                           Size="Size.Small"
+                                                                           Title="Ripristina in Posta in arrivo"
+                                                                           OnClick="@(() => Unarchive(item))" />
+                                                        }
+                                                        <!-- Allegati: 1 icona per file -->
+                                                        @if (item.Allegati?.Any() == true)
+                                                        {
+                                                            <div class="ml-att">
+                                                                @foreach (var a in item.Allegati)
+                                                                {
+                                                                    <MudTooltip Text="@a.NomeFile">
+                                                                        <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                       Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                       Size="Size.Small"
+                                                                                       OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType))" />
+
+                                                                    </MudTooltip>
+
+                                                                }
+                                                            </div>
+                                                        }
+                                                    </div>
                                                 </div>
                                             </div>
+                                        </li>
+
+                                    }
+                                </ul>
+
+                                @if (_loadingList)
+                                {
+                                    <div class="load-more">
+                                        <div class="dots-loader small">
+                                            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                                         </div>
-                                    </li>
-
-                    }
-                </ul>
-                
-                @if (_loadingList)
-                {
-                    <div class="load-more">
-                        <div class="dots-loader small">
-                            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                        </div>
-                        <span class="load-text">Carico…</span>
-                    </div>
-                }
+                                        <span class="load-text">Carico…</span>
+                                    </div>
+                                }
                             }
-            </div>
-        </div>
+                        </div>
+                    </div>
 
-        @* ============================
+                    @* ============================
            DETTAGLIO EMAIL
            ============================ *@
-        <div class="mail-detail">
-            @if (_loadingDetail)
-            {
-                <div class="detail-loader">
-                    <div class="dots-loader small">
-                        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-                    </div>
-                    <span class="load-text">Carico email…</span>
-                </div>
-            }
-            else if (_thread?.Any() == true)
-            {
-                var msg = _thread.Last();
+                    <div class="mail-detail">
+                        @if (_loadingDetail)
+                        {
+                            <div class="detail-loader">
+                                <div class="dots-loader small">
+                                    <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                </div>
+                                <span class="load-text">Carico email…</span>
+                            </div>
+                        }
+                        else if (_thread?.Any() == true)
+                        {
+                            var msg = _thread.Last();
 
-                <div class="detail-header">
-                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                                   Color="Color.Primary"
-                                   OnClick="@BackToList"
-                                   Title="Torna alla lista" />
-                    <div class="head-titles">
-                        <div class="head-subject">@msg.Oggetto</div>
-                        <div class="head-meta">@msg.Mittente • @msg.Data?.ToString("dd/MM/yyyy HH:mm")</div>
-                    </div>
-                </div>
+                            <div class="detail-header">
+                                <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                               Color="Color.Primary"
+                                               OnClick="@BackToList"
+                                               Title="Torna alla lista" />
+                                <div class="head-titles">
+                                    <div class="head-subject">@msg.Oggetto</div>
+                                    <div class="head-meta">@msg.Mittente • @msg.Data?.ToString("dd/MM/yyyy HH:mm")</div>
+                                </div>
+                            </div>
 
-                <div class="mail-actions" style="margin: 10px 16px; display:flex; gap:10px;">
-                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
-                               StartIcon="@Icons.Material.Filled.Reply"
-                               OnClick="@(() => Reply(msg))">
-                        Rispondi
-                    </MudButton>
+                            <div class="mail-actions" style="margin: 10px 16px; display:flex; gap:10px;">
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.Reply"
+                                           OnClick="@(() => Reply(msg))">
+                                    Rispondi
+                                </MudButton>
 
-                    <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
-                               StartIcon="@Icons.Material.Filled.ReplyAll"
-                               OnClick="@(() => ReplyAll(msg))">
-                        Rispondi a tutti
-                    </MudButton>
-                </div>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
+                                           StartIcon="@Icons.Material.Filled.ReplyAll"
+                                           OnClick="@(() => ReplyAll(msg))">
+                                    Rispondi a tutti
+                                </MudButton>
+                            </div>
 
-                <div class="mail-body">
-                    @((MarkupString)(msg.CorpoHtml ?? msg.CorpoTesto ?? ""))
+                            <div class="mail-body">
+                                @((MarkupString)(msg.CorpoHtml ?? msg.CorpoTesto ?? ""))
 
-                    @if (msg.Allegati?.Any() == true)
-                    {
-                        <div class="attachments-grid">
-                            @foreach (var a in msg.Allegati)
-                            {
+                                @if (msg.Allegati?.Any() == true)
+                                {
+                                    <div class="attachments-grid">
+                                        @foreach (var a in msg.Allegati)
+                                        {
                                             <a class="attach-chip"
                                                href="#"
-                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id))"
+                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType))"
                                                @onclick:preventDefault="true"
                                                @onclick:stopPropagation="true">
                                                 <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
                                                 <span>@a.NomeFile</span>
                                             </a>
 
-                            }
-                        </div>
-                    }
-                </div>
-            }
-        </div>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
                 </section>
 
-    }
+            }
 
 
-           
+
         </main>
         @if (_showPostItPopup)
         {
@@ -484,14 +488,104 @@ else
             </div>
         }
 
-     <aside class="tasks-panel">
-            <div class="tasks-header">Attività</div>
-            <div class="tasks-empty">Nessuna attività</div>
+        <aside class="tasks-panel">
+            <div class="tasks-header">
+                <div class="th-title">Attività</div>
+
+                <div class="th-actions">
+                    <MudIconButton Icon="@Icons.Material.Filled.Add"
+                                   Size="Size.Small"
+                                   Color="Color.Primary"
+                                   Title="Crea task per me"
+                                   OnClick="@OpenCreateMyTaskDialog" />
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                                   Size="Size.Small"
+                                   Title="Ricarica"
+                                   OnClick="@ReloadMyTasks" />
+                </div>
+            </div>
+
+            @if (_loadingTasks)
+            {
+                <div class="tasks-empty">Caricamento…</div>
+            }
+            else
+            {
+                var items = MyTodosSorted().Take(30).ToList();
+
+                if (items.Count == 0)
+                {
+                    <div class="tasks-empty">Nessuna attività</div>
+                }
+                else
+                {
+                    <div class="tasks-list">
+                        @foreach (var t in items)
+                        {
+                            var descPlain = ToPlainText(t.DescrizioneMarkdown);
+                            var descPreview = Truncate(descPlain, 90);
+
+                            <div class="task-mini" @key="t.Id">
+                                <div class="task-mini-left">
+                                    <MudIconButton Icon="@Icons.Material.Filled.RadioButtonUnchecked"
+                                                   Size="Size.Small"
+                                                   Title="Chiudi / Fatto"
+                                                   OnClick="@(() => CloseFromPanel(t))" />
+                                </div>
+
+                                <MudTooltip Placement="Placement.Right" Delay="250">
+                                    <ChildContent>
+                                        <div class="task-mini-body" @onclick="@(() => GoToTask(t.Id))">
+                                            <div class="task-mini-title">@t.Titolo</div>
+
+                                            @if (!string.IsNullOrWhiteSpace(descPlain))
+                                            {
+                                                <div class="task-mini-desc">@descPreview</div>
+                                            }
+
+                                            <div class="task-mini-meta">
+                                                @if (t.DataScadenza is not null)
+                                                {
+                                                    <span class="due">Scad: @t.DataScadenza.Value.ToString("dd/MM HH:mm")</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="nodue">Senza scadenza</span>
+                                                }
+
+                                                @if (IsMeCreator(t))
+                                                {
+                                                    <span> • (mio)</span>
+                                                }
+                                                else
+                                                {
+                                                    <span> • (assegnato)</span>
+                                                }
+                                            </div>
+                                        </div>
+                                    </ChildContent>
+
+                                    <TooltipContent>
+                                        <div class="tt-title">@t.Titolo</div>
+                                        @if (!string.IsNullOrWhiteSpace(descPlain))
+                                        {
+                                            <div class="tt-body">@descPlain</div>
+                                        }
+                                    </TooltipContent>
+                                </MudTooltip>
+                            </div>
+                        }
+                    </div>
+
+                }
+            }
         </aside>
 
+
     </div>
-   
-    }
+
+}
 }
 
 @code {
@@ -512,7 +606,8 @@ else
     private List<AdminEmailDto> _emailInLavorazione = new();
     private bool _isAdmin;
     private int _mentionsCount = 0;
-
+    private List<TaskDto> _myTasks = new();
+    private bool _loadingTasks;
     private List<AdminEmailDto> _emailConcluse = new();
     private List<AdminEmailDto> _emailInLavorazioneFiltrate = new();
     private List<AdminEmailDto> _emailConcluseFiltrate = new();
@@ -961,6 +1056,8 @@ else
         _allUsers = await MailSvc.GetUserListAsync();
 
         _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+        await ReloadMyTasks();
+
         _postIts = await postItService.GetByUtenteAsync(_utente!);
 
         _isAdmin = await AccessiSrv.IsAdminAsync(_utente);
@@ -1027,6 +1124,38 @@ else
 
         _isLoading = false;
     }
+
+    private static string ToPlainText(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return "";
+
+        // rimuove tag HTML (semplice ma efficace per preview)
+        var s = System.Text.RegularExpressions.Regex.Replace(html, "<.*?>", " ");
+        s = WebUtility.HtmlDecode(s);
+        s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
+        return s;
+    }
+
+    private static string Truncate(string s, int max)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        if (s.Length <= max) return s;
+        return s.Substring(0, max).Trim() + "…";
+    }
+
+    private static string BuildTooltip(string? title, string? desc, int maxDesc)
+    {
+        title ??= "";
+        desc ??= "";
+        desc = Truncate(desc, maxDesc);
+
+        if (string.IsNullOrWhiteSpace(desc))
+            return title;
+
+        // newline nel tooltip (MudTooltip lo supporta come testo)
+        return $"{title}\n\n{desc}";
+    }
+
 
     private async Task NuovoPostIt()
     {
@@ -1404,15 +1533,49 @@ else
 
         return await q.Select(x => (int?)x.Id).FirstOrDefaultAsync();
     }
-    private async Task OpenAttachmentAsync(int allegatoId)
+
+
+    private async Task OpenAttachmentAsync(int allegatoId, string mime)
     {
-        // Usa l’endpoint che scarica (scegline UNO):
-        // var url = $"/api/attachments/{allegatoId}";
-        var url = $"/api/attachments/{allegatoId}/download";
+        // 1) provo a “materializzare” il file lato server (se manca)
+        try
+        {
+            var resp = await Http.PostAsync($"/api/attachments/{allegatoId}/ensure", content: null);
 
-        await JS.InvokeVoidAsync("openNewTab", url);
+            if (!resp.IsSuccessStatusCode)
+            {
+                Snackbar.Add("⚠️ Allegato non disponibile (non riesco a scaricarlo).", Severity.Warning);
+                await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+                return;
+            }
+        }
+        catch
+        {
+            Snackbar.Add("⚠️ Errore durante il recupero allegato.", Severity.Error);
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+            return;
+        }
+
+        // 2) dopo ensure, scelgo preview o download
+        var previewable =
+            mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+            mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+        if (!previewable)
+        {
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["Url"] = $"/api/attachments/{allegatoId}/preview",
+            ["Mime"] = mime,
+            ["AllegatoId"] = allegatoId
+        };
+
+        DialogService.Show<PreviewDialog>("Anteprima", parameters);
     }
-
 
     private async Task SelectEmail(int id)
     {
@@ -1585,7 +1748,7 @@ else
         _popupText = "";
         _showPostItPopup = true;
     }
-    
+
 
     private void ApriPostIt(PostItDto p)
     {
@@ -1655,6 +1818,103 @@ else
         Nav.NavigateTo($"/tasks-new?cp={Uri.EscapeDataString(_cp ?? "")}");
     }
 
+    private string MeNorm => (_utente ?? "").Trim().ToLowerInvariant();
+
+    private bool IsMeCreator(TaskDto t)
+        => string.Equals(t.CreatoDa?.Trim(), MeNorm, StringComparison.OrdinalIgnoreCase);
+
+    private bool IsMeAssignee(TaskDto t)
+        => t.AssegnatiA?.Any(a => string.Equals(a?.Trim(), MeNorm, StringComparison.OrdinalIgnoreCase)) == true;
+
+    private bool IsOpen(TaskDto t)
+        => !string.Equals(t.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase);
+
+    private IEnumerable<TaskDto> MyTodosSorted()
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return Enumerable.Empty<TaskDto>();
+
+        var q = _myTasks.Where(t => (IsMeAssignee(t) || IsMeCreator(t)) && IsOpen(t));
+
+        q = q.OrderBy(t => t.DataScadenza.HasValue ? 0 : 1)
+             .ThenBy(t => t.DataScadenza ?? DateTime.MaxValue)
+             .ThenByDescending(t => t.DataCreazione);
+
+        return q;
+    }
+
+    private async Task ReloadMyTasks()
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        _loadingTasks = true;
+        StateHasChanged();
+        try
+        {
+            // ✅ NON MeNorm qui
+            _myTasks = await TaskClient.GetForUserAsync(_utente!) ?? new();
+        }
+        finally
+        {
+            _loadingTasks = false;
+            StateHasChanged();
+        }
+    }
+
+
+    private async Task OpenCreateMyTaskDialog()
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        var dlg = DialogService.Show<CreateMyTaskDialog>(
+            "Nuovo task",
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseOnEscapeKey = true }
+        );
+
+        var res = await dlg.Result;
+        if (res.Canceled || res.Data is not CreateMyTaskDialog.Result r) return;
+
+        // ✅ creato da me, assegnato a me (auto-task)
+        var req = new CreateTaskRequest(
+              CreatoDa: _utente!,                 // ✅ non MeNorm
+              Titolo: r.Titolo,
+              DescrizioneMarkdown: r.DescrizioneHtml ?? "",
+              DataScadenza: r.Scadenza,
+              AssegnatiA: new List<string> { _utente! }, // ✅ non MeNorm
+              EmailId: null
+          );
+
+        await TaskClient.CreateAsync(req);
+
+        await ReloadMyTasks();
+    }
+
+    private async Task CloseFromPanel(TaskDto t)
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        var me = _utente!;
+        var creator = t.CreatoDa?.Trim();
+
+        if (IsMeCreator(t))
+        {
+            // ✅ chiusura diretta
+            await TaskClient.CloseAsync(t.Id, new CloseTaskRequest(Utente: me, Commento: null));
+
+            await ReloadMyTasks();
+            return;
+        }
+
+        // ✅ non sono creatore: metto "Fatto" + mention creatore
+        var text = string.IsNullOrWhiteSpace(creator)
+            ? "Fatto"
+            : $"Fatto @{creator}";
+
+        await TaskClient.AddCommentAsync(t.Id, me, text);
+        await ReloadMyTasks();
+    }
+    private void GoToTask(int taskId)
+    => Nav.NavigateTo($"/tasks-new?cp={Uri.EscapeDataString(_cp ?? "")}");
+
 }
 
 <style>
@@ -1718,18 +1978,15 @@ else
     }
 
     @@keyframes dot-bounce {
-        0%, 80%, 100%
+        0%, 80%, 100% {
+            transform: scale(0.6);
+            opacity: 0.6;
+        }
 
-    {
-        transform: scale(0.6);
-        opacity: 0.6;
-    }
-
-    40% {
-        transform: scale(1);
-        opacity: 1;
-    }
-
+        40% {
+            transform: scale(1);
+            opacity: 1;
+        }
     }
 
     .loading-text, .load-text {
@@ -1766,7 +2023,7 @@ else
         z-index: 10;
     }
 
-     
+
         .sidebar.open {
             width: 240px;
             box-shadow: 4px 0 12px rgba(0, 0, 0, 0.08);
@@ -1779,6 +2036,20 @@ else
         gap: 10px;
         overflow: auto;
     }
+
+    .tt-title {
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+
+    .tt-body {
+        max-width: 360px;
+        max-height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+    }
+
+
 
     .sidebar-btn {
         justify-content: flex-start !important;
@@ -1887,13 +2158,81 @@ else
         padding: 0;
     }
     /* =========================================================
-       LISTA EMAIL — STILE GMAIL-LIKE 2025
-       ========================================================= */
+           LISTA EMAIL — STILE GMAIL-LIKE 2025
+           ========================================================= */
 
     .mail-ul {
         list-style: none;
         margin: 0;
         padding: 0;
+    }
+
+    .tasks-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px;
+        font-weight: 600;
+        border-bottom: 1px solid #eee;
+    }
+
+    .th-actions {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .tasks-list {
+        padding: 8px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow: auto;
+    }
+
+    .task-mini {
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        border: 1px solid #eef3ff;
+        border-radius: 10px;
+        background: #fff;
+    }
+
+        .task-mini:hover {
+            background: #f5f8ff;
+        }
+
+    .task-mini-body {
+        flex: 1;
+        min-width: 0;
+        cursor: pointer;
+    }
+
+    .task-mini-title {
+        font-weight: 700;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .task-mini-meta {
+        font-size: 12px;
+        color: #6b7ba3;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .due {
+        color: #8a5a00;
+        font-weight: 600;
+    }
+
+    .nodue {
+        color: #6b7ba3;
     }
 
     /* Riga principale */
@@ -1908,9 +2247,20 @@ else
         align-items: center;
     }
 
-    .mail-row:hover {
-        background: #f5f8ff;
-    }
+    .task-mini-desc{
+    font-size: 12px;
+    color: rgba(0,0,0,.60);
+    margin-top: 2px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;         /* max 2 righe */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+
+        .mail-row:hover {
+            background: #f5f8ff;
+        }
 
     .status-strip {
         width: 6px;
@@ -1939,21 +2289,22 @@ else
         overflow: hidden;
         text-overflow: ellipsis;
     }
-        .mail-row.unread {
-            background: #eef4ff;
-            font-weight: 600;
-        }
 
-        .mail-row .status {
-            width: 6px;
-            height: 100%;
-            border-radius: 2px;
-            background: transparent;
-        }
+    .mail-row.unread {
+        background: #eef4ff;
+        font-weight: 600;
+    }
 
-        .mail-row.unread .status {
-            background: var(--primary);
-        }
+    .mail-row .status {
+        width: 6px;
+        height: 100%;
+        border-radius: 2px;
+        background: transparent;
+    }
+
+    .mail-row.unread .status {
+        background: var(--primary);
+    }
 
     /* Contenuto principale */
     .main {
@@ -2054,21 +2405,18 @@ else
 
     /* Migliorie mobile */
     @@media (max-width: 800px) {
-        .mail-row
+        .mail-row {
+            grid-template-columns: 4px 1fr;
+            padding: 10px 12px;
+        }
 
-    {
-        grid-template-columns: 4px 1fr;
-        padding: 10px 12px;
-    }
+        .right {
+            display: none;
+        }
 
-    .right {
-        display: none;
-    }
-
-    .mittente {
-        max-width: 140px;
-    }
-
+        .mittente {
+            max-width: 140px;
+        }
     }
 
     .unread-strip {
@@ -2095,6 +2443,7 @@ else
         flex-direction: column;
         overflow: hidden;
     }
+
     .row-top {
         display: grid;
         grid-template-columns: 1fr auto auto auto auto;
@@ -2140,13 +2489,14 @@ else
         align-items: center;
         gap: 12px;
     }
+
     .chip {
-    background: #e9f5e9;
-    color: #1d7034;
-    padding: 2px 6px;
-    border-radius: 6px;
-    font-size: 11px;
-}
+        background: #e9f5e9;
+        color: #1d7034;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 11px;
+    }
 
         .chip.more {
             background: #dce5ff;
@@ -2277,8 +2627,9 @@ else
         min-width: 90px;
         text-align: right;
     }
+
     .empty-detail {
-        height: 100%;   
+        height: 100%;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -2331,357 +2682,359 @@ else
         }
     }
 
-        .mailbox {
-            background: #d9eaff;
-            color: #003a80;
-            padding: 2px 6px;
-            border-radius: 6px;
-            font-size: 11px;
-            font-weight: 600;
+    .mailbox {
+        background: #d9eaff;
+        color: #003a80;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+
+    .assigned-chip {
+        background: #e9f5e9;
+        color: #1d7034;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 11px;
+    }
+
+    .assigned-more {
+        background: #dce5ff;
+        color: #2540a1;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 11px;
+    }
+
+    .col-date {
+        font-size: 12px;
+        color: #6b7ba3;
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    .col-actions {
+        display: flex;
+        gap: 4px;
+        justify-content: flex-end;
+    }
+
+    .actions {
+        display: flex;
+        gap: 6px;
+    }
+
+    .attach-icons {
+        display: flex;
+        gap: 6px;
+    }
+
+    .att-ico {
+        font-size: 18px;
+        color: #6b7ba3;
+    }
+
+        .att-ico.pdf {
+            color: #c12d2d;
         }
 
-        .assigned-chip {
-            background: #e9f5e9;
-            color: #1d7034;
-            padding: 2px 6px;
-            border-radius: 6px;
-            font-size: 11px;
-        }
+    .right {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+    }
 
-        .assigned-more {
-            background: #dce5ff;
-            color: #2540a1;
-            padding: 2px 6px;
-            border-radius: 6px;
-            font-size: 11px;
-        }
-        .col-date {
+        .right .date {
             font-size: 12px;
             color: #6b7ba3;
-            text-align: right;
-            white-space: nowrap;
         }
 
-        .col-actions {
-            display: flex;
-            gap: 4px;
-            justify-content: flex-end;
-        }
-        .actions {
-            display: flex;
-            gap: 6px;
-        }
+    .col-assigned {
+        display: flex;
+        gap: 4px;
+        overflow: hidden;
+    }
 
-        .attach-icons {
-            display: flex;
-            gap: 6px;
-        }
+    .col-from, .col-dest, .col-assigned {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        font-size: 13px;
+        max-width: 180px;
+    }
 
-        .att-ico {
-            font-size: 18px;
-            color: #6b7ba3;
-        }
+    .badge-more {
+        background: #dce5ff;
+        color: #2540a1;
+        padding: 1px 6px;
+        border-radius: 6px;
+        font-size: 10px;
+        margin-left: 4px;
+    }
 
-            .att-ico.pdf {
-                color: #c12d2d;
-            }
+    .admin-dashboard {
+        padding: 20px;
+    }
 
-        .right {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 4px;
-        }
+    .dash-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 20px;
+        color: #183a72;
+    }
 
-            .right .date {
-                font-size: 12px;
-                color: #6b7ba3;
-            }
+    .filter-bar {
+        padding: 16px;
+        margin-bottom: 20px;
+        border-radius: 12px;
+    }
 
-        .col-assigned {
-            display: flex;
-            gap: 4px;
-            overflow: hidden;
-        }
+    .chart-card {
+        padding: 20px;
+        margin-bottom: 25px;
+        border-radius: 12px;
+    }
 
-        .col-from, .col-dest, .col-assigned {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            font-size: 13px;
-            max-width: 180px;
-        }
+    .user-card {
+        margin-bottom: 25px;
+        padding: 20px;
+        border-radius: 12px;
+    }
 
-        .badge-more {
-            background: #dce5ff;
-            color: #2540a1;
-            padding: 1px 6px;
-            border-radius: 6px;
-            font-size: 10px;
-            margin-left: 4px;
-        }
+    .user-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 15px;
+    }
 
-        .admin-dashboard {
-            padding: 20px;
-        }
+    .avatar {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        background: #1a73e8;
+        color: #fff;
+        font-size: 22px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
 
-        .dash-title {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 20px;
-            color: #183a72;
-        }
+    .user-info {
+        display: flex;
+        flex-direction: column;
+    }
 
-        .filter-bar {
-            padding: 16px;
-            margin-bottom: 20px;
-            border-radius: 12px;
-        }
+    .user-name {
+        font-weight: bold;
+        font-size: 18px;
+    }
 
-        .chart-card {
-            padding: 20px;
-            margin-bottom: 25px;
-            border-radius: 12px;
-        }
+    .user-stats {
+        display: flex;
+        gap: 15px;
+        font-size: 13px;
+    }
 
-        .user-card {
-            margin-bottom: 25px;
-            padding: 20px;
-            border-radius: 12px;
-        }
+    .section ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
 
-        .user-header {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            margin-bottom: 15px;
-        }
+    .section li {
+        display: flex;
+        gap: 10px;
+        padding: 6px 4px;
+        border-bottom: 1px solid #e0e8ff;
+        cursor: pointer;
+    }
 
-        .avatar {
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            background: #1a73e8;
-            color: #fff;
-            font-size: 22px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .section li:hover {
+            background: #edf3ff;
         }
 
-        .user-info {
-            display: flex;
-            flex-direction: column;
-        }
+    .empty {
+        font-size: 13px;
+        color: #6b7ba3;
+    }
 
-        .user-name {
-            font-weight: bold;
-            font-size: 18px;
-        }
+    .date {
+        min-width: 90px;
+        color: #6b7ba3;
+        font-size: 12px;
+    }
 
-        .user-stats {
-            display: flex;
-            gap: 15px;
-            font-size: 13px;
-        }
+    .subject {
+        flex: 1;
+    }
 
-        .section ul {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
+    .modal-list {
+        list-style: none;
+        padding: 0;
+    }
 
-        .section li {
+        .modal-list li {
             display: flex;
             gap: 10px;
-            padding: 6px 4px;
-            border-bottom: 1px solid #e0e8ff;
+            padding: 8px;
             cursor: pointer;
+            border-bottom: 1px solid #ddd;
         }
+    /* LAYOUT */
+    .admin-user-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+        gap: 28px;
+        margin-top: 30px;
+    }
+    /* CARD */
+    .admin-user-card {
+        padding: 22px;
+        border-radius: 12px;
+        background: #ffffff;
+        border: 1px solid #dfe6f3;
+    }
+    /* HEADER */
+    .auc-header {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 22px;
+    }
 
-            .section li:hover {
-                background: #edf3ff;
-            }
+    .auc-avatar {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: #1f4ea3;
+        color: white;
+        font-size: 22px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
 
-        .empty {
-            font-size: 13px;
-            color: #6b7ba3;
-        }
+    .auc-name {
+        font-size: 20px;
+        font-weight: 700;
+        color: #1a2240;
+    }
+    /* COUNTERS */
+    .auc-counters {
+        display: flex;
+        gap: 26px;
+        margin-top: 6px;
+    }
 
-        .date {
-            min-width: 90px;
-            color: #6b7ba3;
-            font-size: 12px;
-        }
+    .auc-counter {
+        display: flex;
+        flex-direction: column;
+    }
 
-        .subject {
-            flex: 1;
-        }
-
-        .modal-list {
-            list-style: none;
-            padding: 0;
-        }
-
-            .modal-list li {
-                display: flex;
-                gap: 10px;
-                padding: 8px;
-                cursor: pointer;
-                border-bottom: 1px solid #ddd;
-            }
-        /* LAYOUT */
-        .admin-user-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-            gap: 28px;
-            margin-top: 30px;
-        }
-        /* CARD */
-        .admin-user-card {
-            padding: 22px;
-            border-radius: 12px;
-            background: #ffffff;
-            border: 1px solid #dfe6f3;
-        }
-        /* HEADER */
-        .auc-header {
-            display: flex;
-            align-items: center;
-            gap: 18px;
-            margin-bottom: 22px;
-        }
-
-        .auc-avatar {
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            background: #1f4ea3;
-            color: white;
-            font-size: 22px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .auc-name {
+        .auc-counter .count {
             font-size: 20px;
             font-weight: 700;
             color: #1a2240;
         }
-        /* COUNTERS */
-        .auc-counters {
-            display: flex;
-            gap: 26px;
-            margin-top: 6px;
+
+        .auc-counter .label {
+            font-size: 13px;
+            color: #6c7a95;
         }
 
-        .auc-counter {
-            display: flex;
-            flex-direction: column;
+        .auc-counter.open .count {
+            color: #0052cc;
         }
 
-            .auc-counter .count {
-                font-size: 20px;
-                font-weight: 700;
-                color: #1a2240;
-            }
+        .auc-counter.closed .count {
+            color: #2c8b3f;
+        }
+    /* SECTION */
+    .auc-section {
+        margin-bottom: 26px;
+    }
 
-            .auc-counter .label {
-                font-size: 13px;
-                color: #6c7a95;
-            }
+    .auc-section-title {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-weight: 600;
+        color: #1a2240;
+    }
+    /* LISTA */
+    .auc-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
 
-            .auc-counter.open .count {
-                color: #0052cc;
-            }
+    .auc-item {
+        display: flex;
+        gap: 14px;
+        padding: 8px 4px;
+        border-bottom: 1px solid #e6eaf3;
+        cursor: pointer;
+        transition: background 0.15s;
+    }
 
-            .auc-counter.closed .count {
-                color: #2c8b3f;
-            }
-        /* SECTION */
-        .auc-section {
-            margin-bottom: 26px;
+        .auc-item:hover {
+            background: #f2f6ff;
         }
 
-        .auc-section-title {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            font-weight: 600;
-            color: #1a2240;
-        }
-        /* LISTA */
-        .auc-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
+        .auc-item .date {
+            width: 90px;
+            font-size: 13px;
+            color: #607091;
         }
 
-        .auc-item {
-            display: flex;
-            gap: 14px;
-            padding: 8px 4px;
-            border-bottom: 1px solid #e6eaf3;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-
-            .auc-item:hover {
-                background: #f2f6ff;
-            }
-
-            .auc-item .date {
-                width: 90px;
-                font-size: 13px;
-                color: #607091;
-            }
-
-            .auc-item .subject {
-                flex: 1;
-                font-size: 14px;
-                color: #1a2240;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-
-        .auc-empty {
-            color: #7a879e;
+        .auc-item .subject {
+            flex: 1;
             font-size: 14px;
-            padding: 6px 0;
-            font-style: italic;
+            color: #1a2240;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
-        .admin-section {
-            width: 100%;
-            padding: 24px 32px;
-            overflow-y: auto;
-            background: #f5f8ff;
-        }
+    .auc-empty {
+        color: #7a879e;
+        font-size: 14px;
+        padding: 6px 0;
+        font-style: italic;
+    }
 
-        .admin-dashboard {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
+    .admin-section {
+        width: 100%;
+        padding: 24px 32px;
+        overflow-y: auto;
+        background: #f5f8ff;
+    }
 
-        .chart-card {
-            min-height: 280px !important;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-        }
+    .admin-dashboard {
+        max-width: 1400px;
+        margin: 0 auto;
+    }
 
-        .admin-chart {
-            height: 360px !important;
-            width: 100%;
-        }
+    .chart-card {
+        min-height: 280px !important;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
 
-        .postit-wrapper {
-            flex-shrink: 0;
-        }
+    .admin-chart {
+        height: 360px !important;
+        width: 100%;
+    }
+
+    .postit-wrapper {
+        flex-shrink: 0;
+    }
 
     .postit-board {
         width: 100%;
@@ -2713,123 +3066,120 @@ else
     .postit-create {
         flex: 0 0 180px; /* larghezza fissa */
     }
-        /* ===== POST-IT ===== */
-        .postit-card {
-            background: #fff3a0;
-            border: 1px solid #e1d36a;
-            border-radius: 6px;
-            padding: 10px;
-            min-height: 120px;
-            box-shadow: 0 3px 6px rgba(0,0,0,.18);
-            position: relative;
-            cursor: pointer;
-            transition: transform .15s ease, box-shadow .15s ease;
-        }
-
-            .postit-card:hover {
-                transform: rotate(-1deg) scale(1.03);
-                box-shadow: 0 6px 14px rgba(0,0,0,.28);
-            }
-        /* ===== AZIONI ===== */
-        .postit-actions {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            display: flex;
-            gap: 4px;
-        }
-        /* ===== TESTI ===== */
-        .postit-title {
-            font-weight: 700;
-            font-size: 13px;
-            color: #5c5400;
-            margin-bottom: 6px;
-        }
-
-        .postit-text {
-            font-size: 12px;
-            color: #3e3a00;
-            line-height: 1.3;
-            display: -webkit-box;
-            -webkit-line-clamp: 4;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        /* ===== CREA ===== */
-        .postit-create {
-            background: #e6e6e6;
-            border: 2px dashed #aaa;
-            border-radius: 6px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            font-weight: 600;
-            color: #555;
-            cursor: pointer;
-        }
-
-            .postit-create:hover {
-                background: #ddd;
-            }
-        /* ===== POST-IT COMPOSER (BOTTOM LEFT) ===== */
-        .postit-composer {
-            position: absolute; /* ← NON fixed */
-            bottom: 16px;
-            left: 16px;
-            width: 340px;
-            background: #fffbe6;
-            border: 1px solid #e6d97a;
-            border-radius: 12px 12px 6px 6px;
-            box-shadow: 0 12px 32px rgba(0,0,0,.35);
-            z-index: 50;
-            animation: slideUp .2s ease-out;
-        }
-        /* Header */
-        .composer-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 10px;
-            font-weight: 600;
-            font-size: 13px;
-            color: #6b6500;
-            background: #fff3a0;
-            border-bottom: 1px solid #e1d36a;
-        }
-
-        .mail-container > .postit-board {
-            margin-left: 16px; /* allineata a sinistra */
-        }
-        /* Body */
-        .composer-body {
-            padding: 10px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        /* Actions */
-        .composer-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-            padding: 8px 10px;
-            border-top: 1px solid #eee;
-        }
-        /* Animazione */
-        @@keyframes slideUp {
-            from
-
-    {
-        transform: translateY(20px);
-        opacity: 0;
+    /* ===== POST-IT ===== */
+    .postit-card {
+        background: #fff3a0;
+        border: 1px solid #e1d36a;
+        border-radius: 6px;
+        padding: 10px;
+        min-height: 120px;
+        box-shadow: 0 3px 6px rgba(0,0,0,.18);
+        position: relative;
+        cursor: pointer;
+        transition: transform .15s ease, box-shadow .15s ease;
     }
 
-    to {
-        transform: translateY(0);
-        opacity: 1;
+        .postit-card:hover {
+            transform: rotate(-1deg) scale(1.03);
+            box-shadow: 0 6px 14px rgba(0,0,0,.28);
+        }
+    /* ===== AZIONI ===== */
+    .postit-actions {
+        position: absolute;
+        top: 4px;
+        right: 4px;
+        display: flex;
+        gap: 4px;
+    }
+    /* ===== TESTI ===== */
+    .postit-title {
+        font-weight: 700;
+        font-size: 13px;
+        color: #5c5400;
+        margin-bottom: 6px;
     }
 
+    .postit-text {
+        font-size: 12px;
+        color: #3e3a00;
+        line-height: 1.3;
+        display: -webkit-box;
+        -webkit-line-clamp: 4;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    /* ===== CREA ===== */
+    .postit-create {
+        background: #e6e6e6;
+        border: 2px dashed #aaa;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        font-weight: 600;
+        color: #555;
+        cursor: pointer;
+    }
+
+        .postit-create:hover {
+            background: #ddd;
+        }
+    /* ===== POST-IT COMPOSER (BOTTOM LEFT) ===== */
+    .postit-composer {
+        position: absolute; /* ← NON fixed */
+        bottom: 16px;
+        left: 16px;
+        width: 340px;
+        background: #fffbe6;
+        border: 1px solid #e6d97a;
+        border-radius: 12px 12px 6px 6px;
+        box-shadow: 0 12px 32px rgba(0,0,0,.35);
+        z-index: 50;
+        animation: slideUp .2s ease-out;
+    }
+    /* Header */
+    .composer-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 10px;
+        font-weight: 600;
+        font-size: 13px;
+        color: #6b6500;
+        background: #fff3a0;
+        border-bottom: 1px solid #e1d36a;
+    }
+
+    .mail-container > .postit-board {
+        margin-left: 16px; /* allineata a sinistra */
+    }
+    /* Body */
+    .composer-body {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+    /* Actions */
+    .composer-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        padding: 8px 10px;
+        border-top: 1px solid #eee;
+    }
+    /* Animazione */
+    @@keyframes slideUp {
+        from {
+            transform: translateY(20px);
+            opacity: 0;
+        }
+
+        to {
+            transform: translateY(0);
+            opacity: 1;
+        }
     }
 
     .tasks-panel {
@@ -2860,8 +3210,8 @@ else
         font-size: 14px;
     }
     /* =========================
-       MAIL ROW 2-LINES (compact)
-       ========================= */
+           MAIL ROW 2-LINES (compact)
+           ========================= */
 
     .mail-row2 {
         display: grid;
@@ -3025,15 +3375,13 @@ else
 
     /* responsive */
     @@media (max-width: 900px) {
-        .mail-row2
+        .mail-row2 {
+            grid-template-columns: 6px 200px 1fr;
+        }
 
-    {
-        grid-template-columns: 6px 200px 1fr;
-    }
-
-    .ml-assigned {
-        display: none;
-    }
-    /* se vuoi: nascondi chip su schermi piccoli */
+        .ml-assigned {
+            display: none;
+        }
+        /* se vuoi: nascondi chip su schermi piccoli */
     }
 </style>

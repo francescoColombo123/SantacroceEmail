@@ -1,14 +1,17 @@
 ﻿@page "/mail-detail/{id:int}/{cp?}"
+@using Microsoft.JSInterop
 @using Oracle.ManagedDataAccess.Client
 @using SCemail.Components.Data
 @using System.Text.RegularExpressions
+@using static System.Net.WebRequestMethods
 @inject MailService MailSvc
 @inject MailService_NEW MailSvc1
 @inject NavigationManager Nav
 @inject SCemail.Components.Data.AccessiService AccessiSrv
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
-
+@inject HttpClient Http
+@inject IJSRuntime JS
 <div class="detail-shell">
     @if (_loading)
     {
@@ -96,22 +99,44 @@
                         </div>
 
                         <div class="gmail-body">
-                            @((MarkupString)CleanQuotedPart(mail.CorpoHtml ?? mail.CorpoTesto ?? ""))
+                            @{
+                                if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+                                {
+                                    var safe = StripActiveContent(mail.CorpoHtml); // no CleanQuotedPartHtml qui
+                                                                                   <iframe class="mail-iframe" sandbox="" srcdoc="@safe"></iframe>
+                                }
+                                else
+                                {
+                                    var txt = mail.CorpoTesto ?? "";
+                                    @((MarkupString)$"<pre style='white-space:pre-wrap;margin:0;font-family:inherit'>{System.Net.WebUtility.HtmlEncode(txt)}</pre>")
+                                }
+                            }
                         </div>
+
 
                         @if (mail.Allegati?.Any() == true)
                         {
                             <div class="gmail-attachments">
                                 <div class="attach-title">📎 Allegati:</div>
-                                @foreach (var a in mail.Allegati)
-                                {
-                                    <a href="@GetDownloadUrl(a.Id)" target="_blank" class="attach-link">
-                                        <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
-                                        @a.NomeFile
-                                    </a>
-                                }
+
+                                <div class="attach-grid">
+                                    @foreach (var a in mail.Allegati)
+                                    {
+                                        var mime = NormalizeMime(a.MimeType, a.NomeFile);
+
+                                        <a class="attach-chip"
+                                           href="#"
+                                           @onclick="@(async () => await OpenAttachmentAsync(a.Id, mime))"
+                                           @onclick:preventDefault="true"
+                                           @onclick:stopPropagation="true">
+                                            <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
+                                            <span>@a.NomeFile</span>
+                                        </a>
+                                    }
+                                </div>
                             </div>
                         }
+
                     </div>
                 }
             </div>
@@ -292,6 +317,9 @@
 
         var quoteText = BuildGmailReplyAsText(msg);
         var quoteHtml = ToQuoteHtmlForQuill(quoteText);
+
+        var replyTo = ExtractEmailOnly(msg.Mittente); // ✅ mittente vero
+
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
@@ -301,38 +329,35 @@
             ["CorpoIniziale"] = quoteHtml,
             ["ReplyToMessageId"] = msg.MessageId,
             ["References"] = BuildReferencesChain(msg),
-            ["ThreadKey"] = msg.ThreadKey
+            ["ThreadKey"] = msg.ThreadKey,
+
+            // ✅ qui metti SEMPRE il mittente, non replyInfo.Destinatari
+            ["Destinatari"] = replyTo,
+
+            // Reply semplice: CC/BCC vuoti
+            ["Cc"] = null,
+            ["Bcc"] = null
         };
 
-        if (replyInfo != null)
-        {
+        if (replyInfo != null && !string.IsNullOrWhiteSpace(replyInfo.CasellaMittente))
             parameters["CasellaMittente"] = replyInfo.CasellaMittente;
-            parameters["Destinatari"] = replyInfo.Destinatari;
-            parameters["Cc"] = replyInfo.Cc;
-            parameters["Bcc"] = replyInfo.Bcc;
-        }
-        else
-        {
-            parameters["Destinatari"] = ExtractEmailOnly(msg.Mittente);
-        }
 
         var dialog = await DialogService.ShowAsync<ComposeDialog>(
-     "Rispondi",
-     parameters,
-     new DialogOptions
-     {
-         MaxWidth = MaxWidth.Medium,
-         FullWidth = true,
-         BackdropClick = false,     // ✅ v7+ equivalente di DisableBackdropClick=true
-         CloseOnEscapeKey = false   // opzionale: evita chiusura con ESC
-     }
- );
-
+            "Rispondi",
+            parameters,
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true,
+                BackdropClick = false,
+                CloseOnEscapeKey = false
+            });
 
         var result = await dialog.Result;
         if (result.Data is true)
             Snackbar.Add("Risposta inviata ✅", Severity.Success);
     }
+
 
 
 
@@ -668,6 +693,73 @@
         noTags = System.Net.WebUtility.HtmlDecode(noTags);
         return noTags;
     }
+
+    private static string NormalizeMime(string? mime, string? filename)
+    {
+        if (!string.IsNullOrWhiteSpace(mime) &&
+            !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
+            return mime;
+
+        var ext = Path.GetExtension(filename ?? "").ToLowerInvariant();
+        return ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => mime ?? "application/octet-stream"
+        };
+    }
+
+    private async Task OpenAttachmentAsync(int allegatoId, string mime)
+    {
+        // 1) prova a “materializzare” il file lato server (se manca)
+        try
+        {
+            var resp = await Http.PostAsync($"/api/attachments/{allegatoId}/ensure", content: null);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                Snackbar.Add("⚠️ Allegato non disponibile (non riesco a scaricarlo).", Severity.Warning);
+                await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+                return;
+            }
+        }
+        catch
+        {
+            Snackbar.Add("⚠️ Errore durante il recupero allegato.", Severity.Error);
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+            return;
+        }
+
+        // 2) preview solo per pdf/immagini, altrimenti download diretto
+        var previewable =
+            mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+            mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+        if (!previewable)
+        {
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+            return;
+        }
+
+        // 3) apro dialog anteprima (con pulsante download dentro)
+        var parameters = new DialogParameters
+        {
+            ["Url"] = $"/api/attachments/{allegatoId}/preview",
+            ["Mime"] = mime,
+            ["AllegatoId"] = allegatoId
+        };
+
+        DialogService.Show<PreviewDialog>("Anteprima", parameters);
+    }
+
 
     private string GetBodyVisibleAsText(EmailDetail_NEW mail)
     {
@@ -1314,6 +1406,27 @@
             "<span class=\"mention-tag\">@$1</span>"
         );
     }
+    private static string StripActiveContent(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return html;
+
+        // via script (solo script!)
+        html = Regex.Replace(
+            html,
+            @"<\s*script\b[^>]*>.*?<\s*/\s*script\s*>",
+            "",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        // via handler tipo onclick=
+        html = Regex.Replace(
+            html,
+            @"\son\w+\s*=\s*(""[^""]*""|'[^']*'|[^\s>]+)",
+            "",
+            RegexOptions.IgnoreCase);
+
+        return html;
+    }
+
 
 
 }
@@ -1711,4 +1824,40 @@
         gap: 10px;
     }
 
+    .mail-iframe {
+        width: 100%;
+        border: 0;
+        min-height: 700px;
+        display: block;
+    }
+
+    .attach-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .attach-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        background: #eef4ff;
+        border: 1px solid #d6e6ff;
+        border-radius: 12px;
+        padding: 6px 10px;
+        color: #0b3a82;
+        text-decoration: none;
+        transition: background .2s;
+    }
+
+    .attach-chip:hover {
+        background: #e6f0ff;
+    }
+
+    .attach-chip span {
+        max-width: 360px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 </style>
