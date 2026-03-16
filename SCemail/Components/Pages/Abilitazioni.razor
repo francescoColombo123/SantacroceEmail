@@ -8,8 +8,8 @@
 @inject NavigationManager Nav
 
 <div class="container my-4">
-    <div class="d-flex justify-content-between align-items-center mb-2">
-        <h5>🔑 Abilitazioni Utenti alle Caselle</h5>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h5 class="mb-0">🔑 Abilitazioni Utenti alle Caselle</h5>
         <MudButton Color="Color.Primary" Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.Home"
                    OnClick="@TornaHome">
@@ -17,91 +17,128 @@
         </MudButton>
     </div>
 
-    <MudExpansionPanels Multiple="true" Elevation="1">
-        @foreach (var casella in _caselle)
-        {
-            <MudExpansionPanel>
-                <TitleContent>
-                    <span class="fw-bold">@casella.Email</span>
-                    <small class="text-muted">(@casella.Provider)</small>
-                </TitleContent>
+    <div class="card shadow-sm mb-3">
+        <div class="card-body py-2">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label mb-1">Cerca</label>
+                    <input class="form-control form-control-sm"
+                           placeholder="Cerca per email, nome o id utente..."
+                           @bind="searchText"
+                           @bind:event="oninput" />
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <small class="text-muted">
+                        Caselle trovate: @CaselleFiltrate.Count()
+                    </small>
+                </div>
+            </div>
+        </div>
+    </div>
 
-                <ChildContent>
-                    <div class="mb-2 d-flex justify-content-between align-items-center">
-                        <div>
-                            <small class="text-muted">
-                                IMAP: @casella.ImapHost:@casella.ImapPort (SSL: @casella.UseSsl)
-                            </small>
-                        </div>
-                        <MudButton Variant="Variant.Text" Color="Color.Warning" Size="Size.Small"
+    @if (CaselleFiltrate.Any())
+    {
+        @foreach (var casella in CaselleFiltrate)
+        {
+            var utentiCasella = GetAbilitazioniFiltratePerCasella(casella.Id).ToList();
+
+            <div class="card shadow-sm mb-3">
+                <div class="card-header py-2 px-3 bg-light d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-bold">@casella.Email</div>
+                        <small class="text-muted">
+                            @casella.Provider · IMAP: @casella.ImapHost:@casella.ImapPort (SSL: @casella.UseSsl)
+                        </small>
+                    </div>
+
+                    <div class="d-flex gap-2 align-items-center">
+                        <MudButton Variant="Variant.Text"
+                                   Color="Color.Warning"
+                                   Size="Size.Small"
                                    OnClick="@(() => ModificaPassword(casella))">
                             🔐 Password
                         </MudButton>
-                    </div>
 
-                    <h6 class="mt-3 text-secondary">➕ Aggiungi utente</h6>
-                    <div class="input-group mb-2">
-                        <select class="form-select form-select-sm" @bind="_selezioneUtente[casella.Id]">
-                            <option value="">-- Seleziona utente --</option>
-                            @foreach (var u in GetUtentiDisponibili(casella.Id))
-                            {
-                                <option value="@u">@u</option>
-                            }
-                        </select>
-                        <button class="btn btn-sm btn-success"
-                                disabled="@string.IsNullOrWhiteSpace(GetSelected(casella.Id))"
-                                @onclick="() => AssociaUtente(casella.Id)">
-                            Aggiungi
-                        </button>
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Success"
+                                   Size="Size.Small"
+                                   OnClick="@(() => ApriDialogAggiungiUtente(casella))">
+                            ➕
+                        </MudButton>
                     </div>
+                </div>
 
-                    <h6 class="text-secondary mt-3">👥 Utenti abilitati</h6>
-                    <table class="table table-sm table-striped align-middle">
-                        <thead>
-                            <tr>
-                                <th>Username</th>
-                                <th>Firma</th>
-                                <th style="width:150px;">Azioni</th>
-                                <th>Admin</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var abil in _abilitazioni.Where(a => a.CasellaId == casella.Id))
-                            {
+                <div class="card-body py-2 px-3">
+                    @if (utentiCasella.Any())
+                    {
+                        <table class="table table-sm table-striped table-hover align-middle compact-table mb-0">
+                            <thead>
                                 <tr>
-                                    <td>@abil.Username</td>
-                                    <td>
-                                        <pre class="bg-light p-2 rounded firma-preview">
-        Cordiali saluti.
-        <b>@abil.Nome</b>
-        @abil.Titolo
-        <small>@abil.Recapito</small>
-        </pre>
-                                    </td>
-                                    <td>
-                                        <MudButton Variant="Variant.Text" Color="Color.Primary" Size="Size.Small"
-                                                   OnClick="@(() => ModificaFirma(abil))">
-                                            ✏️ Modifica
-                                        </MudButton>
-                                        <MudButton Variant="Variant.Text" Color="Color.Error" Size="Size.Small"
-                                                   OnClick="@(() => Rimuovi(abil))">
-                                            ❌ Rimuovi
-                                        </MudButton>
-                                    </td>
-                                    <td>
-                                        <MudSwitch Value="abil.IsAdmin"
-                                                   T="bool"
-                                                   Color="Color.Primary"
-                                                   ValueChanged="@(value => CambiaAdmin(abil, value))" />
-                                    </td>
+                                    <th style="width: 180px;">Username</th>
+                                    <th style="width: 220px;">Nome</th>
+                                    <th>Firma</th>
+                                    <th class="admin-col text-center">Admin</th>
+                                    <th style="width: 170px;">Azioni</th>
                                 </tr>
-                            }
-                        </tbody>
-                    </table>
-                </ChildContent>
-            </MudExpansionPanel>
+                            </thead>
+                            <tbody>
+                                @foreach (var abil in utentiCasella)
+                                {
+                                    <tr>
+                                        <td class="py-1">@abil.Username</td>
+                                        <td class="py-1">@abil.Nome</td>
+                                        <td class="py-1">
+                                            <div class="firma-mini">
+                                                <div>Cordiali saluti.</div>
+                                                <div><strong>@abil.Nome</strong></div>
+                                                <div>@abil.Titolo</div>
+                                                <div>@abil.Recapito</div>
+                                            </div>
+                                        </td>
+                                        <td class="py-1 admin-cell">
+                                            <input type="checkbox"
+                                                   class="admin-checkbox"
+                                                   checked="@abil.IsAdmin"
+                                                   @onchange="@(async e => await CambiaAdmin(abil, e.Value is bool b && b))" />
+                                        </td>
+                                        <td class="py-1">
+                                            <div class="d-flex gap-1">
+                                                <MudButton Variant="Variant.Text"
+                                                           Color="Color.Primary"
+                                                           Size="Size.Small"
+                                                           OnClick="@(() => ModificaFirma(abil))">
+                                                    ✏️
+                                                </MudButton>
+
+                                                <MudButton Variant="Variant.Text"
+                                                           Color="Color.Error"
+                                                           Size="Size.Small"
+                                                           OnClick="@(() => Rimuovi(abil))">
+                                                    ❌
+                                                </MudButton>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                    else
+                    {
+                        <div class="text-muted small py-1">
+                            Nessun utente abilitato.
+                        </div>
+                    }
+                </div>
+            </div>
         }
-    </MudExpansionPanels>
+    }
+    else
+    {
+        <div class="alert alert-light border text-muted">
+            Nessun risultato trovato.
+        </div>
+    }
 </div>
 
 <style>
@@ -110,20 +147,21 @@
     }
 
     h5, h6 {
-        margin-bottom: 0.3rem;
+        margin-bottom: 0.2rem;
         font-weight: 600;
     }
 
-    .table th, .table td {
-        padding: 0.25rem 0.4rem !important;
+    .compact-table th,
+    .compact-table td {
+        padding: 0.2rem 0.4rem !important;
         vertical-align: middle;
+        font-size: 0.8rem;
     }
 
-    .firma-preview {
-        font-size: 0.8rem;
-        line-height: 1.1rem;
-        margin: 0;
-        white-space: pre-wrap;
+    .firma-mini {
+        line-height: 1.05rem;
+        font-size: 0.76rem;
+        white-space: normal;
     }
 
     .mud-button-root {
@@ -132,14 +170,31 @@
         padding: 2px 6px !important;
     }
 
-    .input-group .form-select,
-    .input-group .btn {
-        font-size: 0.8rem;
-        height: 28px;
+    .mud-switch {
+        margin: 0 !important;
     }
 
-    .mud-expansion-panel {
-        margin-bottom: 0.25rem;
+    .card-header small {
+        font-size: 0.76rem;
+    }
+
+    .admin-col {
+        width: 70px;
+        text-align: center;
+    }
+
+    .admin-cell {
+        text-align: center;
+        vertical-align: middle !important;
+        padding: 0.15rem 0.25rem !important;
+    }
+
+    .admin-checkbox {
+        width: 16px;
+        height: 16px;
+        margin: 0;
+        vertical-align: middle;
+        cursor: pointer;
     }
 </style>
 
@@ -147,8 +202,8 @@
     private List<CasellaPosta> _caselle = new();
     private List<CasellaAbilitazione> _abilitazioni = new();
     private List<string> _utenti = new();
-    private Dictionary<int, string?> _selezioneUtente = new();
     private string? _cp;
+    private string searchText = "";
 
     protected override void OnInitialized()
     {
@@ -168,82 +223,155 @@
 
     protected override async Task OnInitializedAsync()
     {
-        await using var db = DbFactory.CreateDbContext();
-        _caselle = await db.CasellePosta.AsNoTracking().OrderBy(c => c.Email).ToListAsync();
-        _abilitazioni = await db.CasellaAbilitazioni.AsNoTracking()
-            .OrderBy(a => a.CasellaId).ThenBy(a => a.Username).ToListAsync();
-        _utenti = await db.InfoUsers.AsNoTracking().Select(i => i.Utente).OrderBy(x => x).ToListAsync();
+        await LoadData();
+    }
 
-        foreach (var c in _caselle)
-            _selezioneUtente[c.Id] = null;
+    private async Task LoadData()
+    {
+        await using var db = DbFactory.CreateDbContext();
+
+        _caselle = await db.CasellePosta
+            .AsNoTracking()
+            .OrderBy(c => c.Email)
+            .ToListAsync();
+
+        _abilitazioni = await db.CasellaAbilitazioni
+            .AsNoTracking()
+            .OrderBy(a => a.CasellaId)
+            .ThenBy(a => a.Username)
+            .ToListAsync();
+
+        _utenti = await db.InfoUsers
+            .AsNoTracking()
+            .Select(i => i.Utente)
+            .OrderBy(x => x)
+            .ToListAsync();
+    }
+
+    private IEnumerable<CasellaPosta> CaselleFiltrate =>
+        _caselle.Where(c =>
+        {
+            if (string.IsNullOrWhiteSpace(searchText))
+                return true;
+
+            var term = searchText.Trim();
+
+            if (!string.IsNullOrWhiteSpace(c.Email) &&
+                c.Email.Contains(term, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return _abilitazioni.Any(a =>
+                a.CasellaId == c.Id &&
+                (
+                    (!string.IsNullOrWhiteSpace(a.Nome) &&
+                     a.Nome.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    ||
+                    (!string.IsNullOrWhiteSpace(a.Username) &&
+                     a.Username.Contains(term, StringComparison.OrdinalIgnoreCase))
+                ));
+        });
+
+    private IEnumerable<CasellaAbilitazione> GetAbilitazioniFiltratePerCasella(int casellaId)
+    {
+        var query = _abilitazioni.Where(a => a.CasellaId == casellaId);
+
+        if (string.IsNullOrWhiteSpace(searchText))
+            return query.OrderBy(a => a.Username);
+
+        var term = searchText.Trim();
+
+        return query
+            .Where(a =>
+                (!string.IsNullOrWhiteSpace(a.Username) &&
+                 a.Username.Contains(term, StringComparison.OrdinalIgnoreCase))
+                ||
+                (!string.IsNullOrWhiteSpace(a.Nome) &&
+                 a.Nome.Contains(term, StringComparison.OrdinalIgnoreCase))
+                ||
+                (_caselle.FirstOrDefault(c => c.Id == casellaId)?.Email?
+                    .Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+            )
+            .OrderBy(a => a.Username);
     }
 
     private IEnumerable<string> GetUtentiDisponibili(int casellaId)
     {
-        var gia = _abilitazioni.Where(a => a.CasellaId == casellaId)
-                               .Select(a => a.Username)
-                               .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var gia = _abilitazioni
+            .Where(a => a.CasellaId == casellaId)
+            .Select(a => a.Username)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         return _utenti.Where(u => !gia.Contains(u));
     }
 
-    private string? GetSelected(int casellaId)
-        => _selezioneUtente.TryGetValue(casellaId, out var v) ? v : null;
-
-    private async Task AssociaUtente(int casellaId)
+    private async Task ApriDialogAggiungiUtente(CasellaPosta casella)
     {
-        var user = GetSelected(casellaId);
-        if (string.IsNullOrWhiteSpace(user)) return;
+        var utentiDisponibili = GetUtentiDisponibili(casella.Id).ToList();
+
+        if (!utentiDisponibili.Any())
+        {
+            Snackbar.Add("Non ci sono altri utenti disponibili per questa casella.", Severity.Info);
+            return;
+        }
+
+        var parameters = new DialogParameters
+        {
+            ["CasellaId"] = casella.Id,
+            ["CasellaEmail"] = casella.Email,
+            ["UtentiDisponibili"] = utentiDisponibili
+        };
+
+        var options = new DialogOptions
+        {
+            CloseOnEscapeKey = true,
+            MaxWidth = MaxWidth.Small,
+            FullWidth = true
+        };
+
+        var dialog = DialogService.Show<AggiungiAbilitazioneDialog>(
+            "Aggiungi utente",
+            parameters,
+            options);
+
+        var result = await dialog.Result;
+
+        if (result.Canceled || result.Data is not AggiungiAbilitazioneDialog.AggiungiAbilitazioneResult dto)
+            return;
 
         try
         {
             await using var db = DbFactory.CreateDbContext();
 
-            // Controllo se già abilitato
-            var count = await db.CasellaAbilitazioni
-                .CountAsync(a => a.CasellaId == casellaId && a.Username == user);
+            var alreadyExists = await db.CasellaAbilitazioni
+                .CountAsync(a => a.CasellaId == casella.Id && a.Username == dto.Username) > 0;
 
-            if (count > 0)
+            if (alreadyExists)
             {
-                Snackbar.Add($"'{user}' è già abilitato.", Severity.Info);
+                Snackbar.Add($"'{dto.Username}' è già abilitato.", Severity.Info);
                 return;
             }
 
-            // 🔹 Chiedi subito la firma
-            var parameters = new DialogParameters
+            var entity = new CasellaAbilitazione
             {
-                ["Title"] = $"Dati firma per {user}"
-            };
-            var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small };
-            var dialog = DialogService.Show<FirmaUtenteDialog>(
-                "Firma utente",
-                parameters,
-                new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small }
-            );
-            var result = await dialog.Result;
-
-            if (result.Canceled || result.Data is not FirmaUtenteDialog.FirmaUtenteResult fr)
-            {
-                Snackbar.Add("Operazione annullata", Severity.Info);
-                return;
-            }
-
-            var a = new CasellaAbilitazione
-            {
-                CasellaId = casellaId,
-                Username = user,
-                Nome = fr.Nome,
-                Titolo = fr.Titolo,
-                Recapito = fr.Recapito,
-                IsAdmin = fr.IsAdmin,
+                CasellaId = casella.Id,
+                Username = dto.Username,
+                Nome = dto.Nome,
+                Titolo = dto.Titolo,
+                Recapito = dto.Recapito,
+                IsAdmin = dto.IsAdmin,
                 CreatedAt = DateTime.Now
             };
 
-            db.CasellaAbilitazioni.Add(a);
+            db.CasellaAbilitazioni.Add(entity);
             await db.SaveChangesAsync();
 
-            _abilitazioni.Add(a);
-            _selezioneUtente[casellaId] = null;
-            Snackbar.Add($"Utente '{user}' abilitato con firma ✅", Severity.Success);
+            _abilitazioni.Add(entity);
+            _abilitazioni = _abilitazioni
+                .OrderBy(a => a.CasellaId)
+                .ThenBy(a => a.Username)
+                .ToList();
+
+            Snackbar.Add($"Utente '{dto.Username}' abilitato con firma ✅", Severity.Success);
         }
         catch (Exception ex)
         {
@@ -275,11 +403,14 @@
                     item.Nome = fr.Nome;
                     item.Titolo = fr.Titolo;
                     item.Recapito = fr.Recapito;
+                    item.IsAdmin = fr.IsAdmin;
                     await db.SaveChangesAsync();
 
                     abil.Nome = fr.Nome;
                     abil.Titolo = fr.Titolo;
                     abil.Recapito = fr.Recapito;
+                    abil.IsAdmin = fr.IsAdmin;
+
                     Snackbar.Add("Firma aggiornata ✅", Severity.Success);
                 }
             }
@@ -340,6 +471,7 @@
             {
                 db.CasellaAbilitazioni.Remove(found);
                 await db.SaveChangesAsync();
+
                 _abilitazioni.RemoveAll(x => x.Id == abil.Id);
                 Snackbar.Add("Abilitazione rimossa ✅", Severity.Success);
             }
@@ -367,8 +499,8 @@
 
                 Snackbar.Add(
                     nuovoValore
-                    ? $"{abil.Username} ora è amministratore della casella."
-                    : $"{abil.Username} non è più amministratore.",
+                        ? $"{abil.Username} ora è amministratore della casella."
+                        : $"{abil.Username} non è più amministratore.",
                     Severity.Success
                 );
             }

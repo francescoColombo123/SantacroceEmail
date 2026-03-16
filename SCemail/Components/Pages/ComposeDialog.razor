@@ -58,7 +58,7 @@
                               @bind-Value="_toInput"
                               Immediate="true"
                               OnInput="@(async (ChangeEventArgs e) =>
-                                      await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.To))"
+                                                                    await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.To))"
                               @onkeydown="@(async e => await HandleRecipientKey(e, _toList, _toInput ?? "", v => _toInput = v, RecipientField.To))"
                               Placeholder="Aggiungi destinatario..."
                               Class="recipient-input"
@@ -89,28 +89,28 @@
         <!-- ==========================  CC  ========================== -->
         @if (_showCc || _ccList.Any())
         {
-        <div class="recipient-container" @ref="_ccBoxRef">
-            <label class="mud-input-label">CC</label>
-            <div class="recipient-box">
-                @foreach (var chip in _ccList)
-                {
-                    <MudChip T="RecipientChip"
-                             Color="Color.Secondary"
-                             Variant="Variant.Filled"
-                             OnClick="() => OnChipClick(chip)"
-                             OnClose="@(e => RemoveRecipient(_ccList, chip))"
-                             Closeable="true"
-                             Class="chip-pill">
-                        <div class="chip-avatar chip-cc">@chip.Email.Substring(0, 1).ToUpper()</div>
-                        <div class="chip-name">@chip.NameOrEmail</div>
-                    </MudChip>
-                }
+            <div class="recipient-container" @ref="_ccBoxRef">
+                <label class="mud-input-label">CC</label>
+                <div class="recipient-box">
+                    @foreach (var chip in _ccList)
+                    {
+                        <MudChip T="RecipientChip"
+                                 Color="Color.Secondary"
+                                 Variant="Variant.Filled"
+                                 OnClick="() => OnChipClick(chip)"
+                                 OnClose="@(e => RemoveRecipient(_ccList, chip))"
+                                 Closeable="true"
+                                 Class="chip-pill">
+                            <div class="chip-avatar chip-cc">@chip.Email.Substring(0, 1).ToUpper()</div>
+                            <div class="chip-name">@chip.NameOrEmail</div>
+                        </MudChip>
+                    }
 
-                <MudTextField T="string"
-                              @bind-Value="_ccInput"
-                              Immediate="true"
-                              OnInput="@(async (ChangeEventArgs e) =>
-                                                          await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Cc))"
+                    <MudTextField T="string"
+                                  @bind-Value="_ccInput"
+                                  Immediate="true"
+                                  OnInput="@(async (ChangeEventArgs e) =>
+                                                                                            await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Cc))"
                               @onkeydown="@(async e => await HandleRecipientKey(e, _ccList, _ccInput ?? "", v => _ccInput = v, RecipientField.Cc))"
                               Placeholder="Aggiungi CC..."
                               Class="recipient-input"
@@ -118,48 +118,49 @@
             </div>
 
             @if (_showSuggestionsCc && _suggestionsCc.Any())
-            {
-                <MudPaper Class="suggestion-panel">
-                    @foreach (var s in _suggestionsCc)
-                    {
-                        <div class="suggestion-item"
-                             @onclick="() => SelectSuggestion(s, _ccList, RecipientField.Cc)">
-                            <div class="chip-avatar chip-cc">@s.Email.Substring(0, 1).ToUpper()</div>
-                            <div class="chip-texts">
-                                <div class="chip-name">@s.NameOrEmail</div>
-                                <div class="chip-email">@s.Email</div>
-                            </div>
-                        </div>
-                    }
-                </MudPaper>
-            }
-        </div>
-        }
-        @if (_showBcc || _bccList.Any()){
-
-        <!-- ==========================  CCN  ========================== -->
-        <div class="recipient-container" @ref="_bccBoxRef">
-            <label class="mud-input-label">CCN</label>
-            <div class="recipient-box">
-                @foreach (var chip in _bccList)
                 {
-                    <MudChip T="RecipientChip"
-                             Color="Color.Tertiary"
-                             Variant="Variant.Filled"
-                             OnClick="() => OnChipClick(chip)"
-                             OnClose="@(e => RemoveRecipient(_bccList, chip))"
-                             Closeable="true"
-                             Class="chip-pill">
-                        <div class="chip-avatar chip-bcc">@chip.Email.Substring(0, 1).ToUpper()</div>
-                        <div class="chip-name">@chip.NameOrEmail</div>
-                    </MudChip>
+                    <MudPaper Class="suggestion-panel">
+                        @foreach (var s in _suggestionsCc)
+                        {
+                            <div class="suggestion-item"
+                                 @onclick="() => SelectSuggestion(s, _ccList, RecipientField.Cc)">
+                                <div class="chip-avatar chip-cc">@s.Email.Substring(0, 1).ToUpper()</div>
+                                <div class="chip-texts">
+                                    <div class="chip-name">@s.NameOrEmail</div>
+                                    <div class="chip-email">@s.Email</div>
+                                </div>
+                            </div>
+                        }
+                    </MudPaper>
                 }
+            </div>
+        }
+        @if (_showBcc || _bccList.Any())
+        {
 
-                <MudTextField T="string"
-                              @bind-Value="_bccInput"
-                              Immediate="true"
-                              OnInput="@(async (ChangeEventArgs e) =>
-                                                          await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Bcc))"
+            <!-- ==========================  CCN  ========================== -->
+            <div class="recipient-container" @ref="_bccBoxRef">
+                <label class="mud-input-label">CCN</label>
+                <div class="recipient-box">
+                    @foreach (var chip in _bccList)
+                    {
+                        <MudChip T="RecipientChip"
+                                 Color="Color.Tertiary"
+                                 Variant="Variant.Filled"
+                                 OnClick="() => OnChipClick(chip)"
+                                 OnClose="@(e => RemoveRecipient(_bccList, chip))"
+                                 Closeable="true"
+                                 Class="chip-pill">
+                            <div class="chip-avatar chip-bcc">@chip.Email.Substring(0, 1).ToUpper()</div>
+                            <div class="chip-name">@chip.NameOrEmail</div>
+                        </MudChip>
+                    }
+
+                    <MudTextField T="string"
+                                  @bind-Value="_bccInput"
+                                  Immediate="true"
+                                  OnInput="@(async (ChangeEventArgs e) =>
+                                                                                            await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Bcc))"
                               @onkeydown="@(async e => await HandleRecipientKey(e, _bccList, _bccInput ?? "", v => _bccInput = v, RecipientField.Bcc))"
                               Placeholder="Aggiungi CCN..."
                               Class="recipient-input"
@@ -167,22 +168,22 @@
             </div>
 
             @if (_showSuggestionsBcc && _suggestionsBcc.Any())
-            {
-                <MudPaper Class="suggestion-panel">
-                    @foreach (var s in _suggestionsBcc)
-                    {
-                        <div class="suggestion-item"
-                             @onclick="() => SelectSuggestion(s, _bccList, RecipientField.Bcc)">
-                            <div class="chip-avatar chip-bcc">@s.Email.Substring(0, 1).ToUpper()</div>
-                            <div class="chip-texts">
-                                <div class="chip-name">@s.NameOrEmail</div>
-                                <div class="chip-email">@s.Email</div>
+                {
+                    <MudPaper Class="suggestion-panel">
+                        @foreach (var s in _suggestionsBcc)
+                        {
+                            <div class="suggestion-item"
+                                 @onclick="() => SelectSuggestion(s, _bccList, RecipientField.Bcc)">
+                                <div class="chip-avatar chip-bcc">@s.Email.Substring(0, 1).ToUpper()</div>
+                                <div class="chip-texts">
+                                    <div class="chip-name">@s.NameOrEmail</div>
+                                    <div class="chip-email">@s.Email</div>
+                                </div>
                             </div>
-                        </div>
-                    }
-                </MudPaper>
-            }
-        </div>
+                        }
+                    </MudPaper>
+                }
+            </div>
 
         }
 
@@ -198,7 +199,7 @@
             <label class="msg-label">Messaggio</label>
             <div id="editor"></div>
         </div>
-      
+
         <!-- Firma -->
         @if (!string.IsNullOrEmpty(_firmaHtml))
         {
@@ -232,6 +233,54 @@
             </ul>
         }
 
+        @if (_pending is not null)
+        {
+            <MudPaper Class="undo-bar" Elevation="6">
+                <div class="undo-left">
+                    <MudText Typo="Typo.body2" Class="undo-title">
+                        @_pending.Label
+                    </MudText>
+                    <MudChip T="int" Color="Color.Primary" Variant="Variant.Filled" Size="Size.Small">
+                        @_pending.SecondsLeft
+                    </MudChip>
+                </div>
+
+                <div class="undo-right">
+
+                    @if (_pending?.Kind == PendingActionKind.Send)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="SendNow">
+                            Invia subito
+                        </MudButton>
+                    }
+
+                    @if (_pending?.Kind == PendingActionKind.SaveDraft)
+                    {
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Secondary"
+                                   Size="Size.Small"
+                                   OnClick="SendNow">
+                            Salva subito
+                        </MudButton>
+                    }
+
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Secondary"
+                               Size="Size.Small"
+                               OnClick="UndoPending">
+                        Annulla
+                    </MudButton>
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                   Color="Color.Primary"
+                                   Size="Size.Small"
+                                   OnClick="ConfirmAndExit" />
+                </div>
+            </MudPaper>
+        }
     </DialogContent>
 
     <DialogActions>
@@ -256,31 +305,59 @@
         border-radius: 8px;
     }
 
-    /* forza l’altezza reale dell’area di scrittura */
-    #editor .ql-container {
-        min-height: 260px !important;
-        height: 260px !important; /* oppure 40vh */
-        border: none !important;
-    }
+        /* forza l’altezza reale dell’area di scrittura */
+        #editor .ql-container {
+            min-height: 260px !important;
+            height: 260px !important; /* oppure 40vh */
+            border: none !important;
+        }
 
 
-        /* area testo scrollabile */
+    /* area testo scrollabile */
     .mud-dialog-content {
         max-height: 75vh;
     }
 
 
-       #editor .ql-editor {
-            font-family: "Courier New", Courier, monospace !important;
-            font-size: 14px;
-            min-height: 260px !important;
-            height: 100% !important;
-            line-height: 1.5;
-            color: #222;
-        }
+    #editor .ql-editor {
+        font-family: "Courier New", Courier, monospace !important;
+        font-size: 14px;
+        min-height: 260px !important;
+        height: 100% !important;
+        line-height: 1.5;
+        color: #222;
+    }
 
 
+    .undo-bar {
+        position: sticky;
+        bottom: 0;
+        margin-top: 12px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        background: #fff;
+        border: 1px solid rgba(0,0,0,.12);
+    }
 
+    .undo-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .undo-title {
+        font-weight: 700;
+    }
+
+    .undo-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
 
     .drop-zone {
         border: 2px dashed #1a73e8;
@@ -342,6 +419,7 @@
         font-weight: 700 !important;
         padding: 14px 12px !important;
     }
+
     .chip-x {
         margin-left: 6px;
     }
@@ -402,7 +480,30 @@
     }
 
     .recipient-container {
+        position: relative; /* ✅ ancora il pannello */
+
         margin-bottom: 8px;
+    }
+
+    .suggestion-panel {
+        position: relative;
+        top: auto;
+        left: auto;
+        right: auto;
+        margin-top: 6px; /* spazio sotto il box */
+        z-index: 1;
+        max-height: 220px;
+        overflow-y: auto;
+        border: 1px solid rgba(0,0,0,.12);
+        border-radius: 10px;
+        background: #fff;
+    }
+    .suggestion-item {
+        padding: 8px 10px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        cursor: pointer;
     }
 
     .recipient-box {
@@ -439,8 +540,13 @@
         display: block;
         margin: 0 0 6px 2px;
     }
+
     .recipient-container {
         margin-bottom: 6px;
+    }
+
+    .suggestion-item:hover {
+        background: rgba(0,0,0,.04);
     }
 
     .recipient-head {
@@ -519,7 +625,18 @@
     private List<string> _caselleDisponibili = new();
     private string? _selectedCasella;
     private bool _fromLocked = false;
+    private PendingAction? _pending;
+    private enum PendingActionKind { Send, SaveDraft, Other }
 
+    private sealed class PendingAction
+    {
+        public PendingActionKind Kind { get; init; } = PendingActionKind.Other;
+        public string Label { get; init; } = "";
+        public int SecondsLeft { get; set; }
+        public Func<CancellationToken, Task> ExecuteAsync { get; init; } = _ => Task.CompletedTask;
+        public CancellationTokenSource Cts { get; } = new();
+        public bool CloseOnExecute { get; init; } = true;
+    }
     protected override async Task OnInitializedAsync()
     {
         _draftId = DraftId;
@@ -562,6 +679,97 @@
         }
     }
 
+    private async Task StartUndoableAction(
+     PendingActionKind kind,
+     string label,
+     Func<CancellationToken, Task> executeAsync,
+     int seconds = 10,
+     bool closeOnExecute = true)
+    {
+        await CancelPendingInternal();
+
+        _pending = new PendingAction
+        {
+            Kind = kind,
+            Label = label,
+            SecondsLeft = seconds,
+            ExecuteAsync = executeAsync,
+            CloseOnExecute = closeOnExecute
+        };
+
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            while (_pending is not null && _pending.SecondsLeft > 0)
+            {
+                await Task.Delay(1000, _pending.Cts.Token);
+                if (_pending is null) return;
+
+                _pending.SecondsLeft--;
+                await InvokeAsync(StateHasChanged);
+            }
+
+            if (_pending is not null && !_pending.Cts.IsCancellationRequested)
+                await ExecutePendingInternal();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async Task UndoPending()
+    {
+        await CancelPendingInternal();
+        Snackbar.Add("Operazione annullata ✅", Severity.Info);
+    }
+
+    private async Task ConfirmAndExit()
+    {
+        await ExecutePendingInternal(forceClose: true);
+    }
+    private async Task SendNow()
+    {
+        await ExecutePendingInternal(forceClose: false);
+    }
+    private async Task CancelPendingInternal()
+    {
+        if (_pending is null) return;
+
+        try { _pending.Cts.Cancel(); } catch { /* ignore */ }
+        _pending.Cts.Dispose();
+        _pending = null;
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ExecutePendingInternal(bool forceClose = false)
+    {
+        if (_pending is null) return;
+
+        var p = _pending;
+        _pending = null;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            await p.ExecuteAsync(p.Cts.Token);
+
+            if (forceClose || p.CloseOnExecute)
+                MudDialog.Close(DialogResult.Ok(true));
+        }
+        catch (OperationCanceledException)
+        {
+            // annullata durante l’esecuzione (raro)
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore durante pending action");
+            Snackbar.Add("Errore durante l’operazione ❌", Severity.Error);
+        }
+        finally
+        {
+            try { p.Cts.Dispose(); } catch { }
+        }
+    }
     private async Task<IEnumerable<RecipientChip>> SearchRecipientsHybrid(string value, CancellationToken token)
     {
         var query = (value ?? "").Trim();
@@ -664,6 +872,8 @@
     private List<RecipientChip> _suggestionsBcc = new();
     private async Task Cancel()
     {
+        await CancelPendingInternal();
+
         await SafeDestroyEditor();
         MudDialog.Cancel();
     }
@@ -685,16 +895,24 @@
             return;
         }
 
-        var fromAddress = _selectedCasella ?? await MailSvc.GetEmailAddressByUsernameAsync(Utente);
+        // Qui NON inviare subito: prepara l’azione e fai partire il countdown
+        await StartUndoableAction(
+        kind: PendingActionKind.Send,
+        label: "Invio programmato…",
+        executeAsync: async (ct) =>
+            {
+                // (puoi ricontrollare ct se vuoi)
+                ct.ThrowIfCancellationRequested();
 
-        var userHtml = _bodyHtml ?? "";
+                var fromAddress = _selectedCasella ?? await MailSvc.GetEmailAddressByUsernameAsync(Utente);
 
-        // Firma fuori quill (non editabile)
-        var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
-            ? ""
-            : $@"<br><br><div style=""font-family:'Courier New',Courier,monospace;"">{_firmaHtml}</div>";
+                var userHtml = _bodyHtml ?? "";
 
-        var corpoHtml = $@"
+                var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
+                    ? ""
+                    : $@"<br><br><div style=""font-family:'Courier New',Courier,monospace;"">{_firmaHtml}</div>";
+
+                var corpoHtml = $@"
 <div style=""background:#ffffff;color:#222;
             font-family:'Courier New',Courier,monospace;
             font-size:14px;line-height:1.5;"">
@@ -702,22 +920,25 @@
   {firmaPart}
 </div>";
 
-        await MailSvc.SendEmailAsync(
-            usernameOrEmail: Utente,
-            to: string.Join(";", ChipsToEmails(_toList)),
-            cc: string.Join(";", ChipsToEmails(_ccList)),
-            bcc: string.Join(";", ChipsToEmails(_bccList)),
-            subject: _composeSubject ?? "(nessun oggetto)",
-            bodyHtml: corpoHtml,
-            attachments: _outgoing,
-            fromAddressOverride: fromAddress,
-            inReplyTo: ReplyToMessageId,
-            referencesHdr: References
+                await MailSvc.SendEmailAsync(
+                    usernameOrEmail: Utente,
+                    to: string.Join(";", ChipsToEmails(_toList)),
+                    cc: string.Join(";", ChipsToEmails(_ccList)),
+                    bcc: string.Join(";", ChipsToEmails(_bccList)),
+                    subject: _composeSubject ?? "(nessun oggetto)",
+                    bodyHtml: corpoHtml,
+                    attachments: _outgoing,
+                    fromAddressOverride: fromAddress,
+                    inReplyTo: ReplyToMessageId,
+                    referencesHdr: References
+                );
+
+                Snackbar.Add("Email inviata ✅", Severity.Success);
+            },
+            seconds: 10,
+            closeOnExecute: true
         );
-
-        MudDialog.Close(DialogResult.Ok(true));
     }
-
 
     private RecipientChip CreateRecipientFromText(string raw)
     {
@@ -768,24 +989,32 @@
 
     private async Task SaveDraft()
     {
-        var to = string.Join(";", ChipsToEmails(_toList));
-        var cc = string.Join(";", ChipsToEmails(_ccList));
-        var ccn = string.Join(";", ChipsToEmails(_bccList)); // CCN
+        await StartUndoableAction(
+        kind: PendingActionKind.SaveDraft,
+        label: "Salvataggio bozza…",
+        executeAsync: async (ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
 
-        _draftId = await MailSvc.SaveDraftAsync(
-                     utente: Utente,
-                     to: to,
-                     cc: cc,
-                     ccn: ccn,
-                     subject: _composeSubject,
-                     bodyHtml: _bodyHtml,
-                     draftId: _draftId
-                 );
+                var to = string.Join(";", ChipsToEmails(_toList));
+                var cc = string.Join(";", ChipsToEmails(_ccList));
+                var ccn = string.Join(";", ChipsToEmails(_bccList));
 
-        Snackbar.Add("💾 Bozza salvata!", Severity.Info);
+                _draftId = await MailSvc.SaveDraftAsync(
+                    utente: Utente,
+                    to: to,
+                    cc: cc,
+                    ccn: ccn,
+                    subject: _composeSubject,
+                    bodyHtml: _bodyHtml,
+                    draftId: _draftId
+                );
 
-        MudDialog.Close(DialogResult.Ok(false));
-        
+                Snackbar.Add("💾 Bozza salvata!", Severity.Success);
+            },
+            seconds: 10,
+            closeOnExecute: true
+        );
     }
 
 
@@ -1053,6 +1282,8 @@
     }
     public async ValueTask DisposeAsync()
     {
+        await CancelPendingInternal();
+
         try
         {
             await JSRuntime.InvokeVoidAsync("destroyQuill", "editor");
@@ -1066,10 +1297,8 @@
         if (string.IsNullOrWhiteSpace(htmlOrText))
             return htmlOrText ?? "";
 
-        // normalizza newline (Windows -> \n)
         var s = htmlOrText.Replace("\r\n", "\n");
 
-        // 1) RAW: <div style="....">  (anche multi-line)
         s = Regex.Replace(
             s,
             @"<div\s+style\s*=\s*""[\s\S]*?""\s*>",
@@ -1077,7 +1306,6 @@
             RegexOptions.IgnoreCase
         );
 
-        // 2) RAW: </div>
         s = Regex.Replace(
             s,
             @"</div\s*>",
@@ -1085,7 +1313,6 @@
             RegexOptions.IgnoreCase
         );
 
-        // 3) ESCAPED: &lt;div style="..."&gt;
         s = Regex.Replace(
             s,
             @"&lt;div\s+style\s*=\s*&quot;[\s\S]*?&quot;\s*&gt;",
@@ -1093,7 +1320,6 @@
             RegexOptions.IgnoreCase
         );
 
-        // 4) ESCAPED: &lt;/div&gt;
         s = Regex.Replace(
             s,
             @"&lt;/div\s*&gt;",
@@ -1120,10 +1346,8 @@
 
     private void InitReplyRecipients()
     {
-        // 1) ricavo indirizzo "mio" (casella selezionata o utente)
         var myAddr = (_selectedCasella ?? "").Trim().ToLowerInvariant();
 
-        // 2) TO: usa Destinatari come "reply-to target" (idealmente From o ReplyTo che passi dal chiamante)
         var to = SplitAddresses(Destinatari)
             .Select(ParseAddressToChip)
             .Where(c => !string.IsNullOrWhiteSpace(c.Email))
@@ -1131,7 +1355,6 @@
             .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // 3) CC: prendi Cc originale (se lo passi) e togli me + già in TO
         var cc = SplitAddresses(Cc)
             .Select(ParseAddressToChip)
             .Where(c => !string.IsNullOrWhiteSpace(c.Email))

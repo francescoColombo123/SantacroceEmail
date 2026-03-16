@@ -2,27 +2,71 @@
 @using MudBlazor
 @using Microsoft.AspNetCore.Components
 @inject IJSRuntime JS
-
 @inject NavigationManager Navigation
+@inject HttpClient Http
 
 <MudDialog MaxWidth="MaxWidth.Large" FullWidth="true">
     <DialogContent>
-        @if (IsImage)
+        @if (_loading)
         {
-            <img src="@Url" style="max-width:100%; height:auto;" />
+            <MudText>Caricamento...</MudText>
         }
-        else if (IsPdf)
+        else if (!string.IsNullOrWhiteSpace(_error))
         {
-            <canvas id="@CanvasId" style="width:100%"></canvas>
+            <MudAlert Severity="Severity.Error" Dense="true">
+                @_error
+            </MudAlert>
+        }
+        else if (_current is null)
+        {
+            <MudText>Anteprima non disponibile</MudText>
         }
         else
         {
-            <MudText>Anteprima non disponibile</MudText>
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+                <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60%;">
+                    @_current.Filename
+                </div>
+
+                @if (_attachments.Count > 1)
+                {
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <MudButton Variant="Variant.Outlined"
+                                   Disabled="@(!_hasPrevious)"
+                                   OnClick="GoPrevious">
+                            Precedente
+                        </MudButton>
+
+                        <MudText Typo="Typo.body2">
+                            @(_currentIndex + 1) / @_attachments.Count
+                        </MudText>
+
+                        <MudButton Variant="Variant.Outlined"
+                                   Disabled="@(!_hasNext)"
+                                   OnClick="GoNext">
+                            Successivo
+                        </MudButton>
+                    </div>
+                }
+            </div>
+
+            @if (IsImage)
+            {
+                <img src="@Url" style="max-width:100%; height:auto;" />
+            }
+            else if (IsPdf)
+            {
+                <canvas id="@CanvasId" style="width:100%"></canvas>
+            }
+            else
+            {
+                <MudText>Anteprima non disponibile</MudText>
+            }
         }
     </DialogContent>
 
     <DialogActions>
-        <MudButton Variant="Variant.Filled" OnClick="Download">Scarica</MudButton>
+        <MudButton Variant="Variant.Filled" OnClick="Download" Disabled="@(_current is null)">Scarica</MudButton>
         <MudButton Variant="Variant.Text" OnClick="Cancel">Chiudi</MudButton>
     </DialogActions>
 </MudDialog>
@@ -30,28 +74,130 @@
 @code {
     [CascadingParameter] public IMudDialogInstance? MudDialog { get; set; }
 
-    [Parameter] public string Url { get; set; } = "";
-    [Parameter] public string Mime { get; set; } = "";
     [Parameter] public int AllegatoId { get; set; }
+
     private string CanvasId = $"pdf_{Guid.NewGuid():N}";
+    private bool _loading = true;
+    private string? _error;
+
+    private List<AttachmentItemDto> _attachments = new();
+    private AttachmentItemDto? _current;
+    private int _currentIndex = -1;
+
+    private bool _pdfNeedsRender;
+    private string? _lastRenderedPdfUrl;
+
+    private bool _hasPrevious => _currentIndex > 0;
+    private bool _hasNext => _currentIndex >= 0 && _currentIndex < _attachments.Count - 1;
+
+    private string Url => _current is null ? "" : $"/api/attachments/{_current.Id}/preview";
+    private string DownloadUrl => _current is null ? "" : $"/api/attachments/{_current.Id}/download";
+    private string Mime => _current?.Mime ?? "";
+
+    private bool IsPdf =>
+        Mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase);
+
+    private bool IsImage =>
+        Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadContextAsync();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && IsPdf)
+        if (_pdfNeedsRender && !_loading && _current is not null && IsPdf)
         {
-            await JS.InvokeVoidAsync("pdfPreview.render", CanvasId, Url);
+            _pdfNeedsRender = false;
+
+            if (_lastRenderedPdfUrl != Url)
+            {
+                _lastRenderedPdfUrl = Url;
+                await JS.InvokeVoidAsync("pdfPreview.render", CanvasId, Url);
+            }
         }
     }
 
+    private async Task LoadContextAsync()
+    {
+        try
+        {
+            _loading = true;
+            _error = null;
+            _attachments.Clear();
+            _current = null;
+            _currentIndex = -1;
 
-    private bool IsPdf =>
-        (Mime ?? "").Trim().StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase);
+            var context = await Http.GetFromJsonAsync<AttachmentViewerContextDto>(
+                $"/api/attachments/{AllegatoId}/context");
 
-    private bool IsImage =>
-        (Mime ?? "").Trim().StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+            if (context is null || context.Attachments is null || context.Attachments.Count == 0)
+            {
+                _error = "Nessun allegato disponibile.";
+                return;
+            }
+
+            _attachments = context.Attachments;
+            _currentIndex = _attachments.FindIndex(x => x.Id == AllegatoId);
+
+            if (_currentIndex < 0)
+            {
+                _error = "Allegato corrente non trovato.";
+                return;
+            }
+
+            _current = _attachments[_currentIndex];
+            _lastRenderedPdfUrl = null;
+            _pdfNeedsRender = IsPdf;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task GoPrevious()
+    {
+        if (!_hasPrevious) return;
+        await ChangeCurrentAsync(_currentIndex - 1);
+    }
+
+    private async Task GoNext()
+    {
+        if (!_hasNext) return;
+        await ChangeCurrentAsync(_currentIndex + 1);
+    }
+
+    private async Task ChangeCurrentAsync(int newIndex)
+    {
+        if (newIndex < 0 || newIndex >= _attachments.Count)
+            return;
+
+        _currentIndex = newIndex;
+        _current = _attachments[_currentIndex];
+        AllegatoId = _current.Id;
+
+        CanvasId = $"pdf_{Guid.NewGuid():N}";
+        _lastRenderedPdfUrl = null;
+        _pdfNeedsRender = IsPdf;
+
+        await InvokeAsync(StateHasChanged);
+    }
 
     private void Cancel() => MudDialog?.Cancel();
 
     private void Download()
-        => Navigation.NavigateTo($"/api/attachments/{AllegatoId}/download", forceLoad: true);
+        => Navigation.NavigateTo(DownloadUrl, forceLoad: true);
+
+    private sealed record AttachmentItemDto(int Id, string Filename, string Mime);
+
+    private sealed record AttachmentViewerContextDto(
+        int CurrentId,
+        List<AttachmentItemDto> Attachments
+    );
 }

@@ -46,8 +46,7 @@ else
 
                 </MudButton>
 
-                <ul class="folder-list">
-
+                <ul class="folder-list folder-icons">
                     @* Se admin → aggiunge la cartella Amministrazione *@
                     @if (_isAdmin)
                     {
@@ -58,17 +57,37 @@ else
                             </MudTooltip>
                         </li>
                     }
+                    @if (_hasAdminCaselle)
+                    {
+                        <li @onclick="@(() => ChangeFolder("unassigned"))"
+                            class="@IsActive("unassigned")">
 
+                            <MudTooltip Text="Email non assegnate (caselle admin)" Placement="Placement.Right">
+                                <div class="folder-icon-wrap @(_unassignedCount > 0 ? "is-alert" : "")">
+                                    <MudIcon Icon="@Icons.Material.Filled.AssignmentLate" />
+                                </div>
+                            </MudTooltip>
+                        </li>
+                    }
                     @* Cartelle normali *@
                     @foreach (var f in _folders)
                     {
                         <li @onclick="@(() => ChangeFolder(f.UiName))"
                             class="@IsActive(f.UiName)">
+
                             <MudTooltip Text="@f.Label" Placement="Placement.Right">
-                                <MudIcon Icon="@f.IconClass" />
+                                @if (f.UiName == "drafts")
+                                {
+                                    <div class="drafts-icon-wrap @(_hasUnreadDrafts ? "has-unread" : "")">
+                                        <MudIcon Icon="@f.IconClass" />
+                                    </div>
+                                }
+                                else
+                                {
+                                    <MudIcon Icon="@f.IconClass" />
+                                }
                             </MudTooltip>
                         </li>
-
                     }
                     <li @onclick="@(() => ChangeFolder("mentions"))"
                         class="@IsActive("mentions")">
@@ -147,40 +166,158 @@ else
 
             else
             {
-                <section class="mail-grid @( _selectedId != null ? "detail-view" : "full-list")">
-
+                <section class="mail-grid @GetMailGridClass()">
                     @* ============================
            LISTA NORMALE
            ============================ *@
                     <div class="mail-list">
                         <div class="list-header">
                             <div class="title">
-                                <MudIcon Icon="@Icons.Material.Filled.Mail" />
+                                <MudIcon Icon="@(_folder == "sent" ? Icons.Material.Filled.Send : Icons.Material.Filled.Mail)" />
                                 <span>@Title</span>
                             </div>
-
+                            @if (_folder == "sent")
+                            {
+                                                    <MudTextField T="string"
+                                                                  Value="_sentSearch"
+                                                                  ValueChanged="async v => { _sentSearch = v?.Trim(); await LoadMoreSentAsync(reset:true); }"
+                                                                  Placeholder="Cerca (oggetto/destinatari)..."
+                                                                  Adornment="Adornment.Start"
+                                                                  AdornmentIcon="@Icons.Material.Filled.Search"
+                                                                  DebounceInterval="400"
+                                                                  Immediate="true"
+                                                                  Class="search-box" />
+                            }
+                            else
+                            {
                             <MudTextField T="string"
-                                          Value="_searchText"
-                                          ValueChanged="async v => await OnSearchChanged(v)"
-                                          Placeholder="Cerca..."
+                                          Value="_searchWord"
+                                          ValueChanged="async v => await OnWordSearchChanged(v)"
+                                          Placeholder="Cerca parola (oggetto/mittente)..."
                                           Adornment="Adornment.Start"
                                           AdornmentIcon="@Icons.Material.Filled.Search"
                                           DebounceInterval="400"
                                           Immediate="true"
                                           Class="search-box" />
 
-                            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
-                                           OnClick="Reload"
+                            <div class="addr-search-wrap">
+                               <MudTextField T="string"
+                                          Value="_addrInput"
+                                          TextChanged="@(async (string v) => await OnAddressInput(v))"
+                                          Immediate="true"
+                                          DebounceInterval="250"
+                                          Placeholder="Cerca indirizzo (rubrica)..."
+                                          Adornment="Adornment.Start"
+                                          AdornmentIcon="@Icons.Material.Filled.AlternateEmail"
+                                          Class="search-box" />
+
+
+                                @if (_showAddrSuggestions && _addrSuggestions.Any())
+                                {
+                                    <MudPaper Class="suggestion-panel">
+                                        @foreach (var s in _addrSuggestions)
+                                        {
+                                            <div class="suggestion-item"
+                                                 @onclick="async () => await SelectAddressSuggestion(s)">
+                                                <div class="chip-avatar chip-a">@s.Email.Substring(0, 1).ToUpper()</div>
+                                                <div class="chip-texts">
+                                                    <div class="chip-name">@s.NameOrEmail</div>
+                                                    <div class="chip-email">@s.Email</div>
+                                                </div>
+                                            </div>
+                                        }
+                                    </MudPaper>
+                                }
+                            </div>
+
+                            <MudIconButton Icon="@Icons.Material.Filled.FilterAlt"
+                                           Title="Applica filtro indirizzo"
+                                           OnClick="ApplyAddressFilter"
                                            Color="Color.Primary" />
-                        </div>
+                        }
+                                       </div>
 
                         <div id="mailScroll" class="list-scroll" @ref="_scrollDiv">
-                            @if (_folder == "drafts")
+                            @if (_folder == "sent")
+                            {
+                                <ul class="mail-ul">
+                                    @foreach (var item in _sent)
+                                    {
+                                        <li class="sent-row @(item.Id == _sentSelectedId ? "selected" : "")"
+                                            @onclick="@(() => SelectSentAsync(item.Id))">
+
+                                            <div class="sent-strip"></div>
+
+                                            <!-- LEFT: destinatari + oggetto + preview -->
+                                            <div class="sent-main">
+                                                <div class="sent-top">
+                                                    <MudTooltip Text="@SentList_ToTooltip(item)">
+                                                        <div class="sent-to">
+                                                            <span class="sent-to-main">@SentList_ToMain(item)</span>
+                                                            @if (SentList_ToExtra(item) > 0)
+                                                            {
+                                                                <span class="sent-to-more">+@SentList_ToExtra(item)</span>
+                                                            }
+                                                        </div>
+                                                    </MudTooltip>
+
+                                                    <div class="sent-date">@item.DataInvio.ToString("dd/MM/yyyy HH:mm")</div>
+                                                </div>
+
+                                                <!-- ✅ NUOVO: da quale casella proviene -->
+                                                <div class="sent-from">
+                                                    <span class="sent-from-lab">Da:</span>
+                                                    <span class="sent-from-val">@ExtractEmail(item.CasellaMittente)</span>
+                                                </div>
+
+                                                <div class="sent-mid" title="@item.Oggetto">
+                                                    <span class="sent-subject">
+                                                        @(string.IsNullOrWhiteSpace(item.Oggetto) ? "(nessun oggetto)" : item.Oggetto)
+                                                    </span>
+                                                </div>
+
+                                                <div class="sent-bot">
+                                                    <span class="sent-preview" title="@SentList_PreviewPlain(item)">
+                                                        @SentList_PreviewPlain(item)
+                                                    </span>
+                                                    @if (item.Allegati?.Any() == true)
+                                                    {
+                                                        <div class="sent-att" @onclick:stopPropagation="true">
+                                                            @foreach (var a in item.Allegati)
+                                                            {
+                                                                <MudTooltip Text="@a.NomeFile">
+                                                                    <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                   Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                   Size="Size.Small"
+                                                                                   OnClick="@(async () => await OpenAttachmentAsync_Sent(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
+                                                                </MudTooltip>
+                                                            }
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </div>
+                                        </li>
+                                    }
+                                </ul>
+
+                                @if (_sentLoading)
+                                {
+                                    <div class="load-more">
+                                        <div class="dots-loader small">
+                                            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                        </div>
+                                        <span class="load-text">Carico…</span>
+                                    </div>
+                                }
+
+                                
+                            }
+                            else if (_folder == "drafts")
                             {
                                 <ul class="mail-ul">
                                     @foreach (var d in _drafts)
                                     {
-                                        <li class="mail-row2"
+                                        <li class="mail-row2 @(d.Letto ? "read" : "unread")"
                                             @onclick="@(() => OpenDraft(d.Id))">
 
                                             <div class="status-strip"></div>
@@ -242,13 +379,284 @@ else
                             }
                             else
                             {
+                                
+                                @if (_folder == "inbox")
+                                {
+                                    <!-- BLOCCO TOP: MAIL RICEVUTE -->
+                                    <div class="inbox-block">
+                                        <div class="inbox-block-head">MAIL RICEVUTE</div>
 
+                                        <div id="inboxScroll" class="inbox-block-body">
+                                            <ul class="mail-ul">
+                                                @foreach (var item in _emails)
+                                                {
+                                                    <li @key="item.Id"
+                                                        class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
+                                                        @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
+
+                                                        <div class="status-strip"></div>
+
+                                                        <!-- LEFT: mittente + destinatari -->
+                                                        <div class="ml-left">
+                                                            <MudTooltip Text="@item.Mittente">
+                                                                <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                            </MudTooltip>
+
+                                                            @* destinatari: nostra casella + eventuali extra *@
+                                                            <MudTooltip Text="@BuildRecipientsTooltip(item)">
+                                                                <div class="ml-to">
+                                                                    <span class="ml-to-label">A:</span>
+                                                                    <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
+                                                                    @if (GetRecipientsExtraCount(item) > 0)
+                                                                    {
+                                                                        <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
+                                                                    }
+                                                                </div>
+                                                            </MudTooltip>
+                                                        </div>
+
+                                                        <!-- CENTER: 2 righe -->
+                                                        <div class="ml-center">
+                                                            <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
+                                                            <div class="ml-line1">
+                                                                <div class="ml-subject" title="@item.Oggetto">
+                                                                    <strong>@(item.Oggetto ?? "")</strong>
+                                                                </div>
+
+                                                                @{
+                                                                    var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
+                                                                    var shortList = assList.Take(2).ToList();
+                                                                    var extra = assList.Count - shortList.Count;
+                                                                }
+
+                                                                <MudTooltip Text="@string.Join("\n", assList)">
+                                                                    <div class="ml-assigned">
+                                                                        @foreach (var a in shortList)
+                                                                        {
+                                                                            <span class="chip">@a</span>
+                                                                        }
+                                                                        @if (extra > 0)
+                                                                        {
+                                                                            <span class="chip more">+@extra</span>
+                                                                        }
+                                                                    </div>
+                                                                </MudTooltip>
+
+                                                                <div class="ml-date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</div>
+                                                            </div>
+
+                                                            <!-- Riga 2: preview + pulsanti + allegati -->
+                                                            <div class="ml-line2">
+                                                                <div class="ml-preview" title="@item.Preview">
+                                                                    @item.Preview
+                                                                </div>
+
+                                                                <div class="ml-tools" @onclick:stopPropagation="true">
+                                                                    <!-- Pulsanti (assegna / archivia) -->
+                                                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                   Color="Color.Primary"
+                                                                                   Size="Size.Small"
+                                                                                   Title="Assegna"
+                                                                                   OnClick="@(() => Forward(item))" />
+
+                                                                    @if (_folder != "unassigned")
+                                                                    {
+                                                                        @if (_folder is "inbox" or "mentions")
+                                                                        {
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                           Color="Color.Success"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Archivia"
+                                                                                           OnClick="@(() => Archive(item))" />
+                                                                        }
+
+                                                                        @if (_folder == "myarchive")
+                                                                        {
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                                                           Color="Color.Primary"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Ripristina in Posta in arrivo"
+                                                                                           OnClick="@(() => Unarchive(item))" />
+                                                                        }
+                                                                    }
+                                                                    <!-- Allegati: 1 icona per file -->
+                                                                    @if (item.Allegati?.Any() == true)
+                                                                    {
+                                                                        <div class="ml-att">
+                                                                            @foreach (var a in item.Allegati)
+                                                                            {
+                                                                                <MudTooltip Text="@a.NomeFile">
+                                                                                    <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                                   Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                                   Size="Size.Small" OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
+
+                                                                                </MudTooltip>
+
+                                                                            }
+                                                                        </div>
+                                                                    }
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </li>
+
+                                                }
+                                            </ul>
+
+                                            @if (_loadingList)
+                                            {
+                                                <div class="load-more">
+                                                    <div class="dots-loader small">
+                                                        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                                    </div>
+                                                    <span class="load-text">Carico…</span>
+                                                </div>
+                                            }
+                                        </div>
+                                    </div>
+
+                                    <!-- SEZIONI -->
+                                    <div class="sections-wrap">
+                                        @foreach (var sec in _sezioniVm)
+                                        {
+                                            <div class="sec-card">
+                                                <div class="sec-head">@sec.Nome</div>
+
+                                                <div id="@sec.ScrollDivId" class="sec-body">
+                                                    <ul class="mail-ul">
+                                                        @foreach (var item in sec.Emails)
+                                                        {
+                                                            <li @key="item.Id"
+                                                                class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
+                                                                @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
+
+                                                                <div class="status-strip"></div>
+
+                                                                <!-- LEFT: mittente + destinatari -->
+                                                                <div class="ml-left">
+                                                                    <MudTooltip Text="@item.Mittente">
+                                                                        <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                                    </MudTooltip>
+
+                                                                    @* destinatari: nostra casella + eventuali extra *@
+                                                                    <MudTooltip Text="@BuildRecipientsTooltip(item)">
+                                                                        <div class="ml-to">
+                                                                            <span class="ml-to-label">A:</span>
+                                                                            <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
+                                                                            @if (GetRecipientsExtraCount(item) > 0)
+                                                                            {
+                                                                                <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
+                                                                            }
+                                                                        </div>
+                                                                    </MudTooltip>
+                                                                </div>
+
+                                                                <!-- CENTER: 2 righe -->
+                                                                <div class="ml-center">
+                                                                    <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
+                                                                    <div class="ml-line1">
+                                                                        <div class="ml-subject" title="@item.Oggetto">
+                                                                            <strong>@(item.Oggetto ?? "")</strong>
+                                                                        </div>
+
+                                                                        @{
+                                                                            var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
+                                                                            var shortList = assList.Take(2).ToList();
+                                                                            var extra = assList.Count - shortList.Count;
+                                                                        }
+
+                                                                        <MudTooltip Text="@string.Join("\n", assList)">
+                                                                            <div class="ml-assigned">
+                                                                                @foreach (var a in shortList)
+                                                                                {
+                                                                                    <span class="chip">@a</span>
+                                                                                }
+                                                                                @if (extra > 0)
+                                                                                {
+                                                                                    <span class="chip more">+@extra</span>
+                                                                                }
+                                                                            </div>
+                                                                        </MudTooltip>
+
+                                                                        <div class="ml-date">@item.Data?.ToString("dd/MM/yyyy HH:mm")</div>
+                                                                    </div>
+
+                                                                    <!-- Riga 2: preview + pulsanti + allegati -->
+                                                                    <div class="ml-line2">
+                                                                        <div class="ml-preview" title="@item.Preview">
+                                                                            @item.Preview
+                                                                        </div>
+
+                                                                        <div class="ml-tools" @onclick:stopPropagation="true">
+                                                                            <!-- Pulsanti (assegna / archivia) -->
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                           Color="Color.Primary"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Assegna"
+                                                                                           OnClick="@(() => Forward(item))" />
+
+                                                                            @if (_folder is "inbox" or "mentions")
+                                                                            {
+                                                                                <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                               Color="Color.Success"
+                                                                                               Size="Size.Small"
+                                                                                               Title="Archivia"
+                                                                                               OnClick="@(() => Archive(item))" />
+                                                                            }
+
+                                                                            @if (_folder == "myarchive")
+                                                                            {
+                                                                                <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                                                               Color="Color.Primary"
+                                                                                               Size="Size.Small"
+                                                                                               Title="Ripristina in Posta in arrivo"
+                                                                                               OnClick="@(() => Unarchive(item))" />
+                                                                            }
+                                                                            <!-- Allegati: 1 icona per file -->
+                                                                            @if (item.Allegati?.Any() == true)
+                                                                            {
+                                                                                <div class="ml-att">
+                                                                                    @foreach (var a in item.Allegati)
+                                                                                    {
+                                                                                        <MudTooltip Text="@a.NomeFile">
+                                                                                            <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                                           Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                                           Size="Size.Small"
+                                                                                                           OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
+
+                                                                                        </MudTooltip>
+
+                                                                                    }
+                                                                                </div>
+                                                                            }
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </li>
+                                                        }
+                                                    </ul>
+
+                                                    @if (sec.Loading)
+                                                    {
+                                                        <div class="load-more">
+                                                            <div class="dots-loader small">
+                                                                <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+                                                            </div>
+                                                            <span class="load-text">Carico sezione…</span>
+                                                        </div>
+                                                    }
+                                                </div>
+                                            </div>
+                                        }
+                                    </div>
+                                }
+                                else{
                                 <ul class="mail-ul">
                                     @foreach (var item in _emails)
                                     {
                                         <li @key="item.Id"
                                             class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
-                                            @onclick="@(() => OpenEmailAndMarkRead(item))">
+                                                @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
 
                                             <div class="status-strip"></div>
 
@@ -342,7 +750,7 @@ else
                                                                         <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
                                                                                        Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
                                                                                        Size="Size.Small"
-                                                                                       OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType))" />
+                                                                                           OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
 
                                                                     </MudTooltip>
 
@@ -356,8 +764,9 @@ else
 
                                     }
                                 </ul>
+                                }
 
-                                @if (_loadingList)
+                                /*@if (_loadingList)
                                 {
                                     <div class="load-more">
                                         <div class="dots-loader small">
@@ -365,7 +774,7 @@ else
                                         </div>
                                         <span class="load-text">Carico…</span>
                                     </div>
-                                }
+                                }*/
                             }
                         </div>
                     </div>
@@ -382,6 +791,98 @@ else
                                 </div>
                                 <span class="load-text">Carico email…</span>
                             </div>
+                        }
+                        else if (_folder == "sent")
+                        {
+                            if (_sentDetail is null)
+                            {
+                                <div class="empty-detail">Seleziona una email inviata</div>
+                            }
+                            else
+                            {
+                                <div class="detail-header gmail-detail-head">
+                                    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                                                   Color="Color.Primary"
+                                                   OnClick="@BackToSentList"
+                                                   Title="Torna alla lista" />
+
+                                    <div class="head-titles">
+                                        <div class="head-subject">@(_sentDetail.Oggetto ?? "(nessun oggetto)")</div>
+
+                                        @{
+                                            var (to, cc, bcc) = SentDetail_Recipients(_sentDetail);
+                                            var toCompact = to.Count == 0 ? "(nessun destinatario)" : string.Join(", ", to.Take(2));
+                                            if (to.Count > 2) toCompact += $" +{to.Count - 2}";
+                                        }
+
+                                        <div class="gmail-mini">
+                                            <button class="gmail-expand"
+                                                    @onclick="() => _sentShowHeaders = !_sentShowHeaders"
+                                                    type="button">
+                                                <MudIcon Icon="@(_sentShowHeaders? Icons.Material.Filled.KeyboardArrowUp : Icons.Material.Filled.KeyboardArrowDown)" />
+                                            </button>
+
+                                            <div class="gmail-mini-line">
+                                                <span class="gm-lab">A</span>
+                                                <span class="gm-val">@toCompact</span>
+                                                <span class="gm-dot">•</span>
+                                                <span class="gm-date">@_sentDetail.DataInvio.ToString("dd/MM/yyyy HH:mm")</span>
+                                            </div>
+                                        </div>
+
+                                        @if (_sentShowHeaders)
+                                        {
+                                            <div class="gmail-headers">
+                                                <div class="gh-row">
+                                                    <span class="gh-lab">Da:</span>
+                                                    <span class="gh-val">@ExtractEmail(_sentDetail.CasellaMittente)</span>
+                                                </div>
+
+                                                <div class="gh-row">
+                                                    <span class="gh-lab">A:</span>
+                                                    <span class="gh-val">@string.Join(", ", to)</span>
+                                                </div>
+
+                                                @if (cc.Any())
+                                                {
+                                                    <div class="gh-row">
+                                                        <span class="gh-lab">CC:</span>
+                                                        <span class="gh-val">@string.Join(", ", cc)</span>
+                                                    </div>
+                                                }
+
+                                                @if (bcc.Any())
+                                                {
+                                                    <div class="gh-row">
+                                                        <span class="gh-lab">CCN:</span>
+                                                        <span class="gh-val">@string.Join(", ", bcc)</span>
+                                                    </div>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                </div>
+                                <div class="mail-body">
+                                    @((MarkupString)(_sentDetail.CorpoHtml ?? _sentDetail.CorpoTesto ?? ""))
+
+                                    @if (_sentDetail.Allegati?.Any() == true)
+                                    {
+                                        <div class="attachments-grid">
+                                            @foreach (var a in _sentDetail.Allegati)
+                                            {
+                                                <a class="attach-chip"
+                                                   href="#"
+                                                   @onclick="@(async () => await OpenAttachmentAsync_Sent(a.Id, a.MimeType, _sentDetail.Allegati.Select(x => x.Id).ToList()))"
+                                                   @onclick:preventDefault="true">
+                                                    <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
+                                                    <span>@a.NomeFile</span>
+                                                </a>
+                                            }
+                                        </div>
+                                    }
+                                   
+                                </div>
+                            }
                         }
                         else if (_thread?.Any() == true)
                         {
@@ -422,7 +923,7 @@ else
                                         {
                                             <a class="attach-chip"
                                                href="#"
-                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType))"
+                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, msg.Allegati.Select(x => x.Id).ToList()))" "
                                                @onclick:preventDefault="true"
                                                @onclick:stopPropagation="true">
                                                 <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
@@ -582,7 +1083,13 @@ else
             }
         </aside>
 
-
+        @if (_showAttachmentViewer)
+        {
+            <AttachmentViewerOverlay Id="@_attachmentViewerId"
+                                     Src="@_attachmentViewerSrc"
+                                     Ids="@_attachmentViewerIds"
+                                     OnClose="@CloseAttachmentViewer" />
+        }
     </div>
 
 }
@@ -615,9 +1122,12 @@ else
     private string Title => _folder switch
     {
         "inbox" => "Posta in arrivo (assegnate a me)",
+        "sent" => "Inviate",
         "myarchive" => "Mio archivio",
         "all" => "Tutti i messaggi",
         "drafts" => "Bozze",
+        "unassigned" => "Email non assegnate (caselle admin)",
+
         _ => "Posta"
     };
     private string? _searchText;
@@ -651,6 +1161,10 @@ else
     private int _draftIndex = 0;
     private bool _hasMoreDrafts = true;
     private int _draftTotal = 0;
+
+    private List<int> _adminCaselleIds = new();   // ✅ caselle dove l'utente è admin
+    private bool _hasAdminCaselle => _adminCaselleIds.Count > 0;
+    private int _unassignedCount = 0;
 
     private void ApplicaFiltri()
     {
@@ -762,14 +1276,124 @@ else
         return lines.Count == 0 ? $"A: {main}" : string.Join("\n", lines);
     }
 
+    public record RecipientChip(string Email, string? Name)
+    {
+        public string NameOrEmail => string.IsNullOrWhiteSpace(Name) ? Email : Name;
+    }
+    private static readonly Regex UsernamePattern =
+        new(@"^[a-z]\.[a-z]+$", RegexOptions.IgnoreCase);
+
+    // input + suggerimenti indirizzo
+    private string? _addrInput;
+    private bool _showAddrSuggestions;
+    private List<RecipientChip> _addrSuggestions = new();
+    private RecipientChip? _selectedAddressChip;
+    private List<SentEmailListItemDto> _sent = new();
+    private List<SentEmailListItemDto> _sentSelectedThread = new(); // se vuoi “thread” no, tienilo 1 elemento
+    private SentEmailDetailDto? _sentDetail;
+    private bool _sentShowHeaders = false;
+    private int _sentStart = 0;
+    private bool _sentLoading = false;
+    private bool _sentHasMore = true;
+    private int? _sentSelectedId = null;
+    private string? _sentSearch;
+    private int _draftsUnreadCount = 0;
+    private bool _hasUnreadDrafts => _draftsUnreadCount > 0;
+    private bool _showAttachmentViewer;
+    private int _attachmentViewerId;
+    private string? _attachmentViewerSrc;
+    private List<int> _attachmentViewerIds = new();
+    // cache locale rubrica (come compose)
+    private List<RecipientChip> _allRecipients = new();
+    private CancellationTokenSource? _ctsAddr;
+
+    private class SezioneVm
+    {
+        public long IdSezione { get; set; }
+        public string Nome { get; set; } = "";
+
+        public List<EmailListItem_NEW> Emails { get; set; } = new();
+
+        public int Start { get; set; } = 0;
+        public int PageSize { get; set; } = 20;
+
+        public bool Loading { get; set; } = false;
+        public bool HasMore { get; set; } = true;
+
+        // per riconoscere lo scroll div
+        public string ScrollDivId => $"secScroll_{IdSezione}";
+    }
+
+    private List<EmailInboxSezione> _sezioni = new();
+    private List<SezioneVm> _sezioniVm = new();
+
+    // lock per evitare doppie chiamate dallo stesso div
+    private HashSet<string> _scrollLoadLocks = new();
+
+    // listener JS
+    private bool _scrollListenersAttached = false;
+    private DotNetObjectReference<Mail_NEW>? _scrollDotNetRef;
+
+    // parole
+    private string? _searchWord;
+
+    private static RecipientChip ParseAddressToChip(string raw)
+    {
+        var m = Regex.Match(raw ?? "", @"^(?<name>.+?)\s*<(?<mail>[^>]+)>\s*$");
+        return m.Success
+            ? new RecipientChip(m.Groups["mail"].Value.Trim(), m.Groups["name"].Value.Trim())
+            : new RecipientChip((raw ?? "").Trim(), null);
+    }
+
     private static string StripHtml(string? html)
     {
         if (string.IsNullOrWhiteSpace(html)) return "";
         return Regex.Replace(html, "<.*?>", " ").Trim();
     }
+    private async Task OnWordSearchChanged(string? value)
+    {
+        _searchWord = value?.Trim();
+
+        _currentIndex = 0;
+        _emails.Clear();
+        _hasMore = true;
+
+        ResetInboxSectionsPaging();
+
+        _caselleIds ??= await AccessiSrv.GetCaselleAbilitateAsync(_utente!);
+
+        // inbox “principale”
+        await LoadMoreEmails(_caselleIds, filtro: _searchWord);
+
+        // ✅ ricarico SUBITO anche le sezioni (prima pagina)
+        if (_folder == "inbox" && _sezioniVm?.Any() == true)
+        {
+            foreach (var sec in _sezioniVm)
+                await LoadMoreSezione(sec);
+        }
+    }
+    private string GetMailGridClass()
+    {
+        // ✅ Inviate: sempre split view (lista + dettaglio)
+        if (_folder == "sent")
+            return "detail-view";
+
+        // ✅ Tutto il resto: come prima (full list finché non apri il dettaglio)
+        return (_selectedId != null) ? "detail-view" : "full-list";
+    }
+
+    private string SentList_PreviewPlain(SentEmailListItemDto item)
+    {
+        var s = item.Preview ?? "";
+        s = ToPlainText(s);          // rimuove tag + HtmlDecode + spazi
+        return Truncate(s, 140);     // opzionale: accorcia un po’
+    }
     private async Task OpenDraft(long draftId)
     {
         var d = await MailSvc.GetDraftByIdAsync(draftId, _utente!);
+        await MailSvc.MarkDraftAsReadAsync(d.Id, _utente!);
+        if (_draftsUnreadCount > 0)
+            _draftsUnreadCount--;
         if (d == null)
         {
             Snackbar.Add("Bozza non trovata", Severity.Warning);
@@ -816,7 +1440,71 @@ else
         _drafts.RemoveAll(x => x.Id == id);
         Snackbar.Add("Bozza eliminata", Severity.Success);
     }
+    private async Task LoadMoreSentAsync(bool reset = false)
+    {
+        if (_sentLoading) return;
 
+        if (reset)
+        {
+            _sentStart = 0;
+            _sentHasMore = true;
+            _sentSelectedId = null;
+            _sentDetail = null;
+            _sent.Clear();
+        }
+
+        if (!_sentHasMore) return;
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        _sentLoading = true;
+        StateHasChanged();
+
+        try
+        {
+            var res = await MailSvc.GetSentPagedAsync(
+                utente: _utente!,
+                start: _sentStart,
+                pageSize: _pageSize,
+                searchText: _sentSearch
+            );
+
+            if (_sentStart == 0) _sent = res.Page;
+            else _sent.AddRange(res.Page.Where(x => !_sent.Any(s => s.Id == x.Id)));
+
+            _sentStart += _pageSize;
+            _sentHasMore = _sent.Count < res.Total;
+        }
+        finally
+        {
+            _sentLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectSentAsync(int id)
+    {
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        _sentSelectedId = id;
+        _loadingDetail = true;
+        StateHasChanged();
+
+        try
+        {
+            _sentDetail = await MailSvc.GetSentDetailAsync(id, _utente!);
+        }
+        finally
+        {
+            _loadingDetail = false;
+            StateHasChanged();
+        }
+    }
+
+    private void BackToSentList()
+    {
+        _sentSelectedId = null;
+        _sentDetail = null;
+    }
 
     // --- DESTINATARI (solo UI) ---
     // NOTA: qui assumo che EmailListItem_NEW possa avere stringhe tipo Destinatari / Cc / Ccn.
@@ -1023,10 +1711,23 @@ else
     protected override void OnInitialized()
     {
         _dotNetRef = DotNetObjectReference.Create(this);
+        _scrollDotNetRef = DotNetObjectReference.Create(this);
+
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // ✅ inbox: attacco listener a più div
+        if (!_isLoading && !_scrollListenersAttached && _folder == "inbox")
+        {
+            await JS.InvokeVoidAsync("scrollSections.attach", "inboxScroll", _scrollDotNetRef, "OnAnyScrollBottom", 120);
+
+            foreach (var sec in _sezioniVm)
+                await JS.InvokeVoidAsync("scrollSections.attach", sec.ScrollDivId, _scrollDotNetRef, "OnAnyScrollBottom", 120);
+
+            _scrollListenersAttached = true;
+        }
+
         if (!_isLoading && !_listenerAttached && _scrollDiv.Context != null)
         {
             await JS.InvokeVoidAsync("initMailScrollListener", _dotNetRef, _scrollDiv);
@@ -1037,13 +1738,50 @@ else
     public void Dispose()
     {
         _dotNetRef?.Dispose();
+        _scrollDotNetRef?.Dispose();
+
     }
 
     [JSInvokable]
     public async Task OnMailScrolledToBottom()
     {
+        // ✅ SENT: infinite scroll su lista inviati
+        if (_folder == "sent")
+        {
+            if (_sentLoading || !_sentHasMore) return;
+            await LoadMoreSentAsync();
+            return;
+        }
+
+        // ✅ altri folder: comportamento attuale
         if (_loadingEmails || !_hasMore) return;
-        await LoadMoreEmails();
+        await LoadMoreEmails(_caselleIds, filtro: _searchWord);
+    }
+    [JSInvokable]
+    public async Task OnAnyScrollBottom(string elementId)
+    {
+        if (_scrollLoadLocks.Contains(elementId)) return;
+        _scrollLoadLocks.Add(elementId);
+
+        try
+        {
+            if (elementId == "inboxScroll")
+            {
+                // carica altre inbox
+                if (!_loadingEmails && _hasMore)
+                    await LoadMoreEmails(_caselleIds, filtro: _searchWord);
+
+                return;
+            }
+
+            var sec = _sezioniVm.FirstOrDefault(s => s.ScrollDivId == elementId);
+            if (sec != null)
+                await LoadMoreSezione(sec);
+        }
+        finally
+        {
+            _scrollLoadLocks.Remove(elementId);
+        }
     }
 
     protected override async Task OnParametersSetAsync()
@@ -1056,8 +1794,13 @@ else
         _allUsers = await MailSvc.GetUserListAsync();
 
         _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+        var recenti = await MailSvc.GetRecentRecipientsAsync(30);
+        _allRecipients = recenti
+            .Select(ParseAddressToChip)
+            .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
         await ReloadMyTasks();
-
+        _draftsUnreadCount = await MailSvc.CountUnreadDraftsAsync(_utente!);
         _postIts = await postItService.GetByUtenteAsync(_utente!);
 
         _isAdmin = await AccessiSrv.IsAdminAsync(_utente);
@@ -1066,6 +1809,10 @@ else
         // per esempio:
         //_isAdmin = await AccessiSrv.IsAdminAsync(_utente);
         // oppure lascialo se lo gestisci altrove
+        if (_folder == "sent")
+        {
+            await LoadMoreSentAsync(reset: true);
+        }
         if (_folder == "admin" && _isAdmin)
         {
             Nav.NavigateTo($"/admin-dashboard?cp={_cp}", true);
@@ -1083,12 +1830,37 @@ else
             _folders = new()
         {
             new FolderItem_NEW("inbox",     "Posta in arrivo", Icons.Material.Filled.Inbox,   1, unreadInbox),
+
+            new FolderItem_NEW("sent",      "Inviate",          Icons.Material.Filled.Send,    2, 0),
+
             new FolderItem_NEW("myarchive", "Mio archivio",    Icons.Material.Filled.Archive, 2, unreadArchive),
             new FolderItem_NEW("all",       "Tutti i messaggi", Icons.Material.Filled.AllInbox, 3, unreadAll),
-            new FolderItem_NEW("drafts", "Bozze", Icons.Material.Filled.Drafts, 4, 0)
+            new FolderItem_NEW("drafts", "Bozze", Icons.Material.Filled.Drafts, 4, _draftsUnreadCount)
 
         };
 
+        _adminCaselleIds.Clear();
+        _unassignedCount = 0;
+
+            using (var db = DbFactory.CreateDbContext())
+            {
+                _adminCaselleIds = await db.Database
+    .SqlQuery<int>($@"
+        SELECT DISTINCT CASELLA_ID
+        FROM SGAPP.CASELLA_ABILITAZIONI
+        WHERE USERNAME = {_utente}
+          AND NVL(IS_ADMIN,0) = 1
+    ")
+    .ToListAsync();
+            }
+
+        // opzionale ma consigliato: incrocio con caselle abilitate (sicurezza)
+        if (_adminCaselleIds.Count > 0 && _caselleIds?.Any() == true)
+            _adminCaselleIds = _adminCaselleIds.Intersect(_caselleIds).ToList();
+
+        // ✅ count non assegnate (solo se ha admin caselle)
+        if (_adminCaselleIds.Count > 0)
+                _unassignedCount = await MailSvc.CountUnassignedForAdminAsync(_adminCaselleIds);
             // ⬇️ IMPORTANTE: se sono in admin NON carico le mail normali
             if (_folder != "admin")
             {
@@ -1119,10 +1891,88 @@ else
                     _loadingDashboard = false;
                 }
             }
+            if (_folder == "inbox")
+            {
+                // 1) carico elenco sezioni attive
+                _sezioni = await MailSvc.GetSezioniInboxAsync(soloAttive: true);
+
+                // 2) preparo VM per ciascuna sezione
+                _sezioniVm = _sezioni
+                    .Select(s => new SezioneVm
+                    {
+                        IdSezione = s.Id,      // <-- se il campo si chiama diverso, adegua
+                        Nome = s.Nome ?? $"Sezione {s.Ordine}",
+                        PageSize = _pageSize
+                    })
+                    .ToList();
+
+                // 3) carico la prima pagina di ogni sezione (così vedi subito contenuto)
+                foreach (var sec in _sezioniVm)
+                    await LoadMoreSezione(sec);
+            }
 
         }
 
         _isLoading = false;
+    }
+
+    private async Task LoadMoreSezione(SezioneVm sec)
+    {
+        if (sec.Loading || !sec.HasMore) return;
+        if (string.IsNullOrWhiteSpace(_utente)) return;
+
+        sec.Loading = true;
+        StateHasChanged();
+
+        try
+        {
+            _caselleIds ??= await AccessiSrv.GetCaselleAbilitateAsync(_utente!);
+
+            var word = _searchWord;                      // ✅ parola
+            var addr = _selectedAddressChip?.Email;      // ✅ rubrica (se selezionato)
+
+            var (page, total) = await MailSvc.GetEmailPageInSezioneAsync(
+                idSezione: sec.IdSezione,
+                utente: _utente!,
+                casellaIds: _caselleIds!,
+                start: sec.Start,
+                pageSize: sec.PageSize,
+                word: word,
+                address: addr
+            );
+
+            if (sec.Start == 0) sec.Emails = page;
+            else
+            {
+                foreach (var m in page)
+                    if (!sec.Emails.Any(x => x.Id == m.Id))
+                        sec.Emails.Add(m);
+            }
+
+            sec.Start += sec.PageSize;
+            sec.HasMore = sec.Emails.Count < total;
+        }
+        finally
+        {
+            sec.Loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private Task OpenAttachmentAsync_Sent(int attachmentId, string? mimeType, List<int> ids)
+    {
+        _attachmentViewerId = attachmentId;
+        _attachmentViewerSrc = "sent";
+        _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
+        _showAttachmentViewer = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private Task CloseAttachmentViewer()
+    {
+        _showAttachmentViewer = false;
+        return Task.CompletedTask;
     }
 
     private static string ToPlainText(string? html)
@@ -1156,7 +2006,103 @@ else
         return $"{title}\n\n{desc}";
     }
 
+    private async Task<IEnumerable<RecipientChip>> SearchRecipientsHybrid(string value, CancellationToken token)
+    {
+        var query = (value ?? "").Trim();
+        if (string.IsNullOrEmpty(query))
+            return _allRecipients.Take(10);
 
+        var locali = _allRecipients
+            .Where(c => c.Email.Contains(query, StringComparison.OrdinalIgnoreCase) ||
+                        (c.NameOrEmail?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+            .ToList();
+
+        locali = locali
+            .OrderByDescending(c => UsernamePattern.IsMatch(c.Email.Split('@')[0]))
+            .ThenBy(c => c.Email)
+            .Take(10)
+            .ToList();
+
+        if (locali.Count >= 5)
+            return locali;
+
+        var found = await MailSvc.SearchRecipientsAsync(_utente!, query, 10, token) ?? new List<string>();
+        var nuovi = found
+            .Select(ParseAddressToChip)
+            .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _allRecipients.AddRange(nuovi);
+        _allRecipients = _allRecipients
+            .GroupBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .ToList();
+
+        return locali.Concat(nuovi)
+                     .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+                     .Take(10);
+    }
+
+    private async Task OnAddressInput(string value)
+    {
+        var q = (value ?? "").Trim();
+
+        if (string.IsNullOrWhiteSpace(q) || q.Length < 2)
+        {
+            _showAddrSuggestions = false;
+            _addrSuggestions.Clear();
+            _selectedAddressChip = null;
+
+            if (_folder == "inbox")
+                await ApplyAddressFilter();
+
+            StateHasChanged();
+            return;
+        }
+
+        _ctsAddr?.Cancel();
+        _ctsAddr = new CancellationTokenSource();
+
+        try
+        {
+
+
+            var res = (await SearchRecipientsHybrid(q, _ctsAddr.Token)).ToList();
+            _addrSuggestions = res;
+            _showAddrSuggestions = res.Any();
+            StateHasChanged();
+        }
+        catch (TaskCanceledException) { }
+    }
+    private async Task SelectAddressSuggestion(RecipientChip chip)
+    {
+        _selectedAddressChip = chip;
+        _addrInput = chip.Email;
+
+        _showAddrSuggestions = false;
+        _addrSuggestions.Clear();
+        ResetInboxSectionsPaging();   // ✅ QUI
+
+        // ✅ scelta: applico SUBITO il filtro (consigliato)
+        await ApplyAddressFilter();
+    }
+    private async Task ApplyAddressFilter()
+    {
+        _currentIndex = 0;
+        _emails.Clear();
+        _hasMore = true;
+
+        ResetInboxSectionsPaging(); // ✅ anche qui (non fa male, ti salva da casi edge)
+
+        await LoadMoreEmails(_caselleIds, filtro: _searchWord);
+
+        // ✅ ricarico SUBITO anche le sezioni
+        if (_folder == "inbox" && _sezioniVm?.Any() == true)
+        {
+            foreach (var sec in _sezioniVm)
+                await LoadMoreSezione(sec);
+        }
+    }
     private async Task NuovoPostIt()
     {
         var id = await postItService.AddAsync(_utente!, "Nuovo post-it…", "Nuovo post-it…");
@@ -1447,8 +2393,7 @@ else
                 return;
 
             casellaIds ??= _caselleIds ?? await AccessiSrv.GetCaselleAbilitateAsync(_utente);
-            string? filtroEffettivo = filtro ?? _searchText?.Trim();
-
+            string? filtroEffettivo = (filtro ?? _searchWord ?? _searchText)?.Trim();
             // 🔔 MENTIONS (intoccato)
             if (_folder == "mentions")
             {
@@ -1470,6 +2415,37 @@ else
                 _mentionsCount = _emails.Count(x => x.Aperto == "N");
                 return;
             }
+
+            if (_folder == "unassigned")
+            {
+                if (string.IsNullOrWhiteSpace(_utente))
+                {
+                    _emails.Clear();
+                    _hasMore = false;
+                    return;
+                }
+
+                var wordUnassigned = filtroEffettivo;
+                var addrUnassigned = _selectedAddressChip?.Email;
+
+                var (pageUnassigned, totalUnassigned) =
+                    await MailSvc.GetUnassignedForAdminPagedAsync(
+                        utente: _utente!,
+                        start: _currentIndex,
+                        pageSize: _pageSize,
+                        word: wordUnassigned,
+                        address: addrUnassigned
+                    );
+
+                if (_currentIndex == 0) _emails = pageUnassigned;
+                else _emails.AddRange(pageUnassigned.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                _currentIndex += _pageSize;
+                _hasMore = _emails.Count < totalUnassigned;
+
+                _unassignedCount = totalUnassigned; // ✅ così count coerente col filtro
+                return;
+            }
             if (_folder == "drafts")
             {
                 await LoadMoreDrafts(filtroEffettivo);
@@ -1477,19 +2453,23 @@ else
             }
 
             // 🔍 RICERCA VELOCE (MITTENTE + OGGETTO)
-            if (!string.IsNullOrWhiteSpace(filtroEffettivo) && filtroEffettivo.Length >= 2)
-            {
-                var (page, total) = await MailSvc.SearchEmailsAsync(
-                    casellaIds: casellaIds,
-                    start: _currentIndex,
-                    pageSize: _pageSize,
-                    searchText: filtroEffettivo
-                );
+            var word = filtroEffettivo;
+            var addr = _selectedAddressChip?.Email; // <-- solo se scelto da rubrica
 
-                if (_currentIndex == 0)
-                    _emails = page;
-                else
-                    _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
+            if ((!string.IsNullOrWhiteSpace(word) && word.Length >= 2) || !string.IsNullOrWhiteSpace(addr))
+            {
+               var (page, total) = await MailSvc.SearchEmailsAdvancedAsync(
+                        casellaIds: casellaIds,
+                        start: _currentIndex,
+                        pageSize: _pageSize,
+                        word: word,
+                        address: addr,
+                        folderUi: _folder,
+                        utente: _utente
+                    );
+
+                if (_currentIndex == 0) _emails = page;
+                else _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
                 _currentIndex += _pageSize;
                 _hasMore = _emails.Count < total;
@@ -1535,47 +2515,7 @@ else
     }
 
 
-    private async Task OpenAttachmentAsync(int allegatoId, string mime)
-    {
-        // 1) provo a “materializzare” il file lato server (se manca)
-        try
-        {
-            var resp = await Http.PostAsync($"/api/attachments/{allegatoId}/ensure", content: null);
-
-            if (!resp.IsSuccessStatusCode)
-            {
-                Snackbar.Add("⚠️ Allegato non disponibile (non riesco a scaricarlo).", Severity.Warning);
-                await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
-                return;
-            }
-        }
-        catch
-        {
-            Snackbar.Add("⚠️ Errore durante il recupero allegato.", Severity.Error);
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
-            return;
-        }
-
-        // 2) dopo ensure, scelgo preview o download
-        var previewable =
-            mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase) ||
-            mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
-
-        if (!previewable)
-        {
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
-            return;
-        }
-
-        var parameters = new DialogParameters
-        {
-            ["Url"] = $"/api/attachments/{allegatoId}/preview",
-            ["Mime"] = mime,
-            ["AllegatoId"] = allegatoId
-        };
-
-        DialogService.Show<PreviewDialog>("Anteprima", parameters);
-    }
+   
 
     private async Task SelectEmail(int id)
     {
@@ -1619,11 +2559,19 @@ else
     {
         try
         {
+            var requireComment = true;
+
+            // se sono admin globale ok
+            if (_isAdmin) requireComment = false;
+
+            // se sono nella folder unassigned -> è per definizione admin-per-casella
+            if (_folder == "unassigned") requireComment = false;
+
             var parameters = new DialogParameters
             {
                 ["Users"] = await MailSvc.GetUserListAsync(),
-                ["RequireComment"] = !_isAdmin,     // ✅ non-admin => commento obbligatorio
-                ["Title"] = "Assegna internamente"  // ✅ titolo dialog
+                ["RequireComment"] = requireComment,
+                ["Title"] = "Assegna internamente"
             };
 
             var dialog = DialogService.Show<ForwardDialog>(
@@ -1649,9 +2597,22 @@ else
                 msg.Id,
                 fr.User,
                 soloInvio: false,
-                fr.Comment
+                fr.Comment,
+                eseguitoDa: _utente
             );
 
+            if (_folder == "unassigned")
+            {
+                _emails.RemoveAll(x => x.Id == msg.Id);
+
+                // rapido:
+                _unassignedCount = Math.Max(0, _unassignedCount - 1);
+
+                // se vuoi PERFETTO DB:
+                // _unassignedCount = await MailSvc.CountUnassignedAsync(_adminCaselleIds);
+
+                StateHasChanged();
+            }
             Snackbar.Add($"Email assegnata a {fr.User} ✅", Severity.Success);
         }
         catch (Exception ex)
@@ -1700,38 +2661,61 @@ else
         _postIts = await postItService.GetByUtenteAsync(_utente!);
     }
 
-    private async Task OpenEmailAndMarkRead(EmailListItem_NEW item)
+    private async Task OpenEmailAndMarkRead(EmailListItem_NEW item, string? fromSection)
     {
         try
         {
-            // 🔸 Marca come letta a livello grafico
+            // UI: marca letta
             if (item.Aperto != "Y")
             {
                 var updated = item with { Aperto = "Y" };
                 var idx = _emails.FindIndex(e => e.Id == item.Id);
-                if (idx >= 0)
-                    _emails[idx] = updated;
-
+                if (idx >= 0) _emails[idx] = updated;
                 StateHasChanged();
             }
 
-            // 🔸 Aggiorna in background (DB)
-            _ = Task.Run(async () =>
+            // DB: fire-and-forget (senza Task.Run se puoi)
+            _ = SafeForget(async () =>
             {
                 await MailSvc.SegnaLettaAsync(item.Id, item.AssegnatoA);
                 await MailSvc.MarkOpenedAsync(item.Id);
-
-                // ⬅️ NUOVO: marca la menzione come VISTA
                 await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
             });
 
-            // 🔸 Vai al dettaglio
-            Nav.NavigateTo($"/mail-detail/{item.Id}/{_cp}");
+            // ✅ Passo SOLO dove stavo
+            var url = QueryHelpers.AddQueryString(
+                $"/mail-detail/{item.Id}/{_cp}",
+                new Dictionary<string, string?>
+                {
+                    ["fromFolder"] = _folder,
+                    ["fromSection"] = fromSection
+                });
+
+            Nav.NavigateTo(url);
         }
         catch (Exception ex)
         {
             Console.WriteLine($"❌ Errore in OpenEmailAndMarkRead: {ex.Message}");
             Snackbar.Add("Errore durante apertura email", Severity.Error);
+        }
+    }
+
+    private static async Task SafeForget(Func<Task> work)
+    {
+        try { await work(); }
+        catch (Exception ex) { Console.WriteLine("❌ BG error: " + ex); }
+    }
+
+    private void ResetInboxSectionsPaging()
+    {
+        if (_sezioniVm == null) return;
+
+        foreach (var s in _sezioniVm)
+        {
+            s.Start = 0;
+            s.Emails.Clear();
+            s.HasMore = true;
+            s.Loading = false;
         }
     }
 
@@ -1793,6 +2777,63 @@ else
         if (result.Data is true)
             Snackbar.Add("Email inviata ✅", Severity.Success);
     }
+
+    // --------------------
+    // SENT (LIST) helpers
+    // --------------------
+    private List<string> SentList_ToAll(SentEmailListItemDto item)
+    {
+        return ParseAddressList(item.Destinatari)
+            .Select(ExtractEmail)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private string SentList_ToMain(SentEmailListItemDto item)
+    {
+        var to = SentList_ToAll(item);
+        return to.FirstOrDefault() ?? "(nessun destinatario)";
+    }
+
+    private int SentList_ToExtra(SentEmailListItemDto item)
+    {
+        var to = SentList_ToAll(item);
+        return Math.Max(0, to.Count - 1);
+    }
+
+    private string SentList_ToTooltip(SentEmailListItemDto item)
+    {
+        var to = SentList_ToAll(item);
+        return to.Count == 0 ? "A: (nessun destinatario)" : $"A: {string.Join(", ", to)}";
+    }
+
+  
+
+    private (List<string> To, List<string> Cc, List<string> Bcc) SentDetail_Recipients(SentEmailDetailDto d)
+    {
+        var to = ParseAddressList(d.Destinatari)
+            .Select(ExtractEmail)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var cc = ParseAddressList(d.Cc)
+            .Select(ExtractEmail)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var bcc = ParseAddressList(d.Ccn)
+            .Select(ExtractEmail)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return (to, cc, bcc);
+    }
+
+    
 
     private string GetAttachmentIcon(string? name)
     {
@@ -1915,7 +2956,17 @@ else
     private void GoToTask(int taskId)
     => Nav.NavigateTo($"/tasks-new?cp={Uri.EscapeDataString(_cp ?? "")}");
 
-}
+    private Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
+    {
+        _attachmentViewerId = attachmentId;
+        _attachmentViewerSrc = null;
+        _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
+        _showAttachmentViewer = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    }
 
 <style>
     /* ===== COLORI BASE ===== */
@@ -2056,6 +3107,30 @@ else
         gap: 12px;
         width: 100%;
     }
+
+    .folder-list.folder-icons li {
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        gap: 0;
+        justify-content: center;
+    }
+
+    .folder-list.folder-icons .drafts-icon-wrap,
+    .folder-list.folder-icons .unassigned-icon-wrap {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+
+        .folder-list.folder-icons .drafts-icon-wrap.has-unread,
+        .folder-list.folder-icons .unassigned-icon-wrap.has-unassigned {
+            background: #ffdddd;
+            border: 1px solid #ff9a9a;
+        }
 
     .folder-list {
         list-style: none;
@@ -2290,6 +3365,12 @@ else
         text-overflow: ellipsis;
     }
 
+    .mail-row2.selected {
+        background: #eaf2ff !important;
+        outline: 2px solid rgba(26,115,232,.25);
+        outline-offset: -2px;
+    }
+
     .mail-row.unread {
         background: #eef4ff;
         font-weight: 600;
@@ -2376,6 +3457,30 @@ else
         overflow: hidden;
     }
 
+    .folder-icon-wrap {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+    }
+
+        .folder-icon-wrap.is-alert {
+            background: #ffdddd;
+            border: 1px solid #ff9a9a;
+        }
+
+        .folder-list li{
+  width: 44px;
+  height: 44px;
+  padding: 0;                /* niente padding “strano” */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;                    /* non serve */
+  border-radius: 10px;
+}
 
     .date {
         color: var(--muted);
@@ -2450,6 +3555,46 @@ else
         gap: 8px;
         align-items: center;
     }
+
+    .sent-from {
+        display: flex;
+        gap: 6px;
+        font-size: 12px;
+        color: #6b7ba3;
+        min-width: 0;
+    }
+
+    .sent-from-lab {
+        font-weight: 700;
+        color: #4b5f8c;
+        flex-shrink: 0;
+    }
+
+    .sent-from-val {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .addr-search-wrap { position: relative; width: 360px; }
+
+.suggestion-panel{
+  position: absolute;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  max-height: 280px;
+  overflow: auto;
+}
+.suggestion-item{
+  display:flex;
+  gap:10px;
+  padding:8px;
+  cursor:pointer;
+}
+.suggestion-item:hover{ background:#f2f6ff; }
+
 
     .subject {
         font-size: 17.5px;
@@ -3027,6 +4172,16 @@ else
         justify-content: center;
     }
 
+    .drafts-icon-wrap {
+        position: relative;
+        padding: 6px;
+        border-radius: 10px;
+    }
+
+        .drafts-icon-wrap.has-unread {
+            background: #ffdddd;
+            border: 1px solid #ff9a9a;
+        }
     .admin-chart {
         height: 360px !important;
         width: 100%;
@@ -3348,6 +4503,58 @@ else
         min-width: 0;
     }
 
+    /* contenitore inbox (card) */
+    .inbox-block {
+        margin: 12px 12px 0 12px;
+        border: 1px solid #e6eefc;
+        border-radius: 12px;
+        background: #fff;
+        overflow: hidden;
+    }
+
+    .inbox-block-head {
+        padding: 10px 12px;
+        font-weight: 700;
+        border-bottom: 1px solid #e6eefc;
+        background: #f7faff;
+    }
+
+    /* ✅ IMPORTANTISSIMO: non deve occupare tutto lo spazio */
+    #inboxScroll.inbox-block-body {
+        max-height: 320px; /* scegli tu: 280/320/360 */
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
+    /* sezioni sotto */
+    .sections-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+    }
+
+    .sec-card {
+        border: 1px solid #e6eefc;
+        border-radius: 12px;
+        background: #fff;
+        overflow: hidden;
+    }
+
+    .sec-head {
+        padding: 10px 12px;
+        font-weight: 700;
+        border-bottom: 1px solid #e6eefc;
+        background: #f7faff;
+    }
+
+    /* ✅ anche le sezioni devono avere una "finestra" scrollabile */
+    .sec-body {
+        max-height: 260px; /* scegli tu */
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
+
     .ml-tools {
         display: inline-flex;
         align-items: center;
@@ -3383,5 +4590,202 @@ else
             display: none;
         }
         /* se vuoi: nascondi chip su schermi piccoli */
+    }
+    /* =========================
+       SENT (LIST) Gmail-like
+       ========================= */
+    .sent-row {
+        display: grid;
+        grid-template-columns: 6px 1fr;
+        gap: 12px;
+        padding: 10px 12px;
+        border-bottom: 1px solid #e8eefc;
+        background: #fff;
+        cursor: pointer;
+        align-items: stretch;
+    }
+
+        .sent-row:hover {
+            background: #f5f8ff;
+        }
+
+        .sent-row.selected {
+            background: #eaf2ff !important;
+            outline: 2px solid rgba(26,115,232,.25);
+            outline-offset: -2px;
+        }
+
+  
+    .sent-strip {
+        width: 6px;
+        border-radius: 4px;
+        background: transparent;
+    }
+
+    .sent-main {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .sent-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .sent-to {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .sent-to-main {
+        font-weight: 700;
+        font-size: 13px;
+        color: #0b2542;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sent-to-more {
+        flex-shrink: 0;
+        background: #dce5ff;
+        color: #2540a1;
+        padding: 1px 6px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+    }
+
+    .sent-date {
+        flex-shrink: 0;
+        font-size: 12px;
+        color: #6b7ba3;
+        white-space: nowrap;
+    }
+
+    .sent-mid {
+        min-width: 0;
+    }
+
+    .sent-subject {
+        font-size: 13px;
+        font-weight: 600;
+        color: #0b2542;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .sent-bot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-width: 0;
+    }
+
+    .sent-preview {
+        font-size: 12px;
+        color: #6b7ba3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
+
+    .sent-att {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    /* =========================
+       SENT (DETAIL) Gmail-like
+       ========================= */
+    .gmail-detail-head .head-titles {
+        min-width: 0;
+    }
+
+    .gmail-mini {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 4px;
+    }
+
+    .gmail-expand {
+        border: none;
+        background: transparent;
+        padding: 0;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        color: #6b7ba3;
+    }
+
+    .gmail-mini-line {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 12px;
+        color: #4b5f8c;
+        min-width: 0;
+    }
+
+    .gm-lab {
+        font-weight: 700;
+        color: #1a2240;
+    }
+
+    .gm-val {
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .gm-dot {
+        color: #9aa7c2;
+    }
+
+    .gm-date {
+        color: #6b7ba3;
+        white-space: nowrap;
+    }
+
+    .gmail-headers {
+        margin-top: 8px;
+        padding: 10px 12px;
+        border: 1px solid #e6eefc;
+        border-radius: 10px;
+        background: #f7faff;
+        max-width: 980px;
+    }
+
+    .gh-row {
+        display: grid;
+        grid-template-columns: 44px 1fr;
+        gap: 8px;
+        align-items: baseline;
+        font-size: 12px;
+        color: #4b5f8c;
+    }
+
+    .gh-lab {
+        font-weight: 700;
+        color: #1a2240;
+    }
+
+    .gh-val {
+        color: #183a72;
+        white-space: normal;
+        word-break: break-word;
     }
 </style>

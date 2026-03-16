@@ -1,9 +1,11 @@
-﻿@using MudBlazor
+﻿@using Microsoft.EntityFrameworkCore
+@using MudBlazor
 @using System.Globalization
 @using Microsoft.JSInterop
+@using SCemail.Components.Data
 
 @inject IJSRuntime JS
-
+@inject IDbContextFactory<MailDbContext> DbFactory
 <MudDialog Class="taskdlg">
     <DialogContent>
         <MudStack Spacing="2">
@@ -14,7 +16,7 @@
                     Compila i campi principali e crea il task.
                 </MudText>
             </div>
-
+            
             <MudTextField Label="Oggetto"
                           @bind-Value="_titolo"
                           Variant="Variant.Outlined"
@@ -27,9 +29,9 @@
 
             <!-- Quill (toolbar + editor) -->
             <div class="taskrte">
+                <div id="@_toolbarId" class="taskrte__toolbar"></div>
                 <div id="@_editorId" class="taskrte__editor"></div>
             </div>
-
             <div class="taskdlg__section-title">Scadenza</div>
 
             <MudGrid Spacing="2">
@@ -64,6 +66,10 @@
                              Clearable="true"
                              SearchFunc="SearchUsers"
                              ValueChanged="OnPickAssignee"
+                             Loading="_usersLoading"
+                             Disabled="_usersLoading"
+                             MaxItems="500"
+                             MaxHeight="420"
                              Class="w-100" />
 
             @if (_assegnati.Count > 0)
@@ -148,6 +154,10 @@
     private string? _dueTimeText;
     private bool _timeInvalid;
 
+    private List<string> _allUsers = new();
+    private bool _usersLoading;
+    private string? _usersLoadError;
+
     // HTML che arriva da Quill
     private string _descrHtml = "";
 
@@ -155,12 +165,47 @@
     private readonly string _editorId = $"task_editor_{Guid.NewGuid():N}";
     private readonly string _toolbarId = $"task_toolbar_{Guid.NewGuid():N}";
 
-    private readonly List<string> _allUsers = new()
+    protected override async Task OnInitializedAsync()
     {
-        "a.saldarella","a.tomaiuoli","admin","amministrazione","b.demilio",
-        "c.costa","c.diiorio","corsud","coseme","diagnosys","eurocereali",
-        "f.maulucci","generale","laboratorio","m.prencipe","raya"
-    };
+        await LoadUsersAsync();
+    }
+
+    private async Task LoadUsersAsync()
+    {
+        try
+        {
+            _usersLoading = true;
+            _usersLoadError = null;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            // EF Core: se hai un'entità InfoUser mappata
+            _allUsers = await db.Set<InfoUser>()
+                .AsNoTracking()
+                .Select(x => x.Utente)
+                .Where(u => u != null && u != "")
+                .Distinct()
+                .OrderBy(u => u)
+                .ToListAsync();
+
+            // se Utente è nullable nel model:
+            _allUsers = _allUsers
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Select(u => u.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(u => u, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _usersLoadError = ex.Message;
+            _allUsers = new();
+        }
+        finally
+        {
+            _usersLoading = false;
+        }
+    }
 
     private HashSet<string> _assegnati = new(StringComparer.OrdinalIgnoreCase);
     private DotNetObjectReference<CreateTaskDialog>? _dotnetRef;
@@ -171,8 +216,13 @@
 
         _dotnetRef = DotNetObjectReference.Create(this);
 
-        await JS.InvokeVoidAsync("initQuillTask", _editorId, _dotnetRef, _descrHtml);
-
+        await JS.InvokeVoidAsync(
+            "initQuillTask",
+            _editorId,
+            _toolbarId,
+            _dotnetRef,
+            _descrHtml
+        );
     }
 
     public void Dispose()
@@ -228,9 +278,11 @@
     {
         s = (s ?? "").Trim();
         IEnumerable<string> q = _allUsers;
+
         if (!string.IsNullOrWhiteSpace(s))
             q = q.Where(x => x.Contains(s, StringComparison.OrdinalIgnoreCase));
-        return Task.FromResult(q.Take(12));
+
+        return Task.FromResult(q.Take(100)); // oppure senza Take
     }
 
     private void OnPickAssignee(string u)

@@ -20,6 +20,8 @@ namespace SCemail.Components.Data
         public DbSet<EmailAllegato> EmailAllegati => Set<EmailAllegato>();
         public DbSet<InfoUser> InfoUsers => Set<InfoUser>();
         public DbSet<EmailDestinatario> EmailDestinatari { get; set; } = null!;
+        public DbSet<EmailInboxSezione> EmailInboxSezioni => Set<EmailInboxSezione>();
+        public DbSet<EmailInboxSezioneMap> EmailInboxSezioneMap => Set<EmailInboxSezioneMap>();
 
         public DbSet<EmailTask> EmailTasks => Set<EmailTask>();
         public DbSet<EmailBozza> EmailBozze => Set<EmailBozza>();
@@ -293,9 +295,44 @@ namespace SCemail.Components.Data
                 e.Property(x => x.Oggetto).HasColumnName("OGGETTO");
                 e.Property(x => x.CorpoHtml).HasColumnName("CORPO_HTML");
                 e.Property(x => x.LastSaved).HasColumnName("LAST_SAVED"); // tipo DATE/NULL
+                e.Property(x => x.Letto)
+                     .HasColumnName("LETTO")
+                     .HasConversion<int>()     // bool <-> number(1)
+                     .IsRequired();
             });
 
+            mb.Entity<EmailTaskComment>(e =>
+            {
+                e.ToTable("EMAIL_TASK_COMMENTS");
+                e.HasKey(x => x.Id);
 
+                e.Property(x => x.Id).HasColumnName("ID");
+                e.Property(x => x.TaskId).HasColumnName("TASK_ID");
+                e.Property(x => x.Utente).HasColumnName("UTENTE");
+                e.Property(x => x.Testo).HasColumnName("TESTO");
+                e.Property(x => x.DataCreazione).HasColumnName("DATA_CREAZIONE");
+                e.Property(x => x.ReplyTo).HasColumnName("REPLY_TO");
+
+                // NEW
+                e.Property(x => x.IsDone).HasColumnName("IS_DONE");
+            });
+
+            mb.Entity<EmailInboxSezioneMap>(e =>
+            {
+                e.HasKey(x => x.Id);
+
+                e.HasIndex(x => new { x.IdEmail, x.Utente }).IsUnique();
+
+                e.HasOne(x => x.Sezione)
+                 .WithMany()
+                 .HasForeignKey(x => x.IdSezione)
+                 .HasPrincipalKey(s => s.Id);
+            });
+
+            mb.Entity<EmailInboxSezione>(e =>
+            {
+                e.HasKey(x => x.Id);
+            });
             // === BOZZA_ALLEGATI ===
             mb.Entity<BozzaAllegato>(e =>
             {
@@ -382,7 +419,14 @@ namespace SCemail.Components.Data
                 e.Property(x => x.EmailId).HasColumnName("EMAIL_ID");
                 e.Property(x => x.NomeFile).HasColumnName("NOME_FILE");
                 e.Property(x => x.MimeType).HasColumnName("MIME_TYPE");
-                e.Property(x => x.Content).HasColumnName("CONTENT");
+                e.Property(x => x.Path)
+                     .HasColumnName("PATH")
+                     .HasMaxLength(2000)
+                     .IsRequired();
+                e.Property(x => x.Content)
+        .HasColumnName("CONTENT")
+        .HasColumnType("BLOB")
+        .IsRequired();
 
                 e.HasOne(x => x.Email)
                  .WithMany(m => m.Allegati)

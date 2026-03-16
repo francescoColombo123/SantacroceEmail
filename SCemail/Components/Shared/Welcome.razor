@@ -7,7 +7,7 @@
 @using SCemail.Components.Data
 @inject IDbContextFactory<MailDbContext> DbFactory
 @inject ISnackbar Snackbar
-
+@inject IEmailTasksClient TaskClient
 @code {
     private string? _cp;
     private string? _utente;
@@ -17,6 +17,7 @@
     private List<EmailMenzione> _mentions = new();
     private List<string> _caselleErrore = new();
     private bool _showCaselleAlert = false;
+    private TaskHomeBadgesDto? _taskBadges;
     protected override async Task OnInitializedAsync()
     {
         var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
@@ -29,6 +30,9 @@
         if (string.IsNullOrWhiteSpace(_utente))
             return;
 
+        // ✅ badges task (ora è sicuro fare Trim)
+        _taskBadges = await TaskClient.GetHomeBadgesAsync(_utente.Trim().ToLowerInvariant());
+
         await using var db = await DbFactory.CreateDbContextAsync();
 
         _hasCasella = await db.CasellaAbilitazioni.CountAsync(a => a.Username == _utente) > 0;
@@ -40,11 +44,12 @@
             .ToListAsync();
 
         _mentionsCount = _mentions.Count;
+
         _caselleErrore = await db.CasellePosta
-    .AsNoTracking()
-    .Where(c => c.StatoConn != "OK")
-    .Select(c => c.Email)
-    .ToListAsync();
+            .AsNoTracking()
+            .Where(c => c.StatoConn != "OK")
+            .Select(c => c.Email)
+            .ToListAsync();
 
         _showCaselleAlert = _caselleErrore.Any();
     }
@@ -88,7 +93,7 @@
                 .Where(m => m.Utente == _utente && m.Visto == "N")
                 .CountAsync();
 
-
+            _taskBadges = await TaskClient.GetHomeBadgesAsync(_utente.Trim().ToLowerInvariant());
             StateHasChanged();
         }
         catch (Exception ex)
@@ -219,7 +224,98 @@ string.IsNullOrWhiteSpace(_cp)
                     }
                 </div>
             }
-            @if (_showCaselleAlert)
+            @if (_taskBadges is not null && _taskBadges.AssignedUnreadTotal > 0)
+            {
+                <div class="mentions-panel" style="background:#fff7e6; border:1px solid #ffd591;">
+                    <div class="mentions-title" style="color:#ad4e00;">
+                        🆕 Nuovi task assegnati
+                    </div>
+
+                    <div class="mention-row"
+                         @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}"))">
+                        <span class="badge mention">NUOVI</span>
+                        <span class="text">Hai <b>@_taskBadges.AssignedUnreadTotal</b> nuovi task assegnati</span>
+                    </div>
+
+                    @foreach (var t in _taskBadges.AssignedTop)
+                    {
+                        <div class="mention-row"
+                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
+                            <span class="badge mention">@t.UnreadCount</span>
+                            <span class="text">#@t.TaskId — @t.Titolo <span style="opacity:.75;">(@t.LastEventText)</span></span>
+                        </div>
+                    }
+                </div>
+            }
+            @if (_taskBadges is not null && _taskBadges.UnreadTotal > 0)
+            {
+                <div class="mentions-panel" style="background:#e6ffed; border:1px solid #b7ebc6;">
+                    <div class="mentions-title" style="color:#137333;">
+                        💬 Nuovi commenti Task
+                    </div>
+
+                    <div class="mention-row"
+                         @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}"))">
+                        <span class="badge update">NUOVI</span>
+                        <span class="text">Hai <b>@_taskBadges.UnreadTotal</b> nuove notifiche nei task</span>
+                    </div>
+
+                    @foreach (var t in _taskBadges.UnreadTop)
+                    {
+                        <div class="mention-row"
+                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
+                            <span class="badge update">@t.UnreadCount</span>
+                            <span class="text">#@t.TaskId — @t.Titolo <span style="opacity:.75;">(@t.LastEventText)</span></span>
+                        </div>
+                    }
+                </div>
+            }
+
+            @if (_taskBadges is not null && (_taskBadges.ToCloseCount > 0 || _taskBadges.WaitingReviewCount > 0))
+            {
+                <div class="mentions-panel" style="background:#e8f0fe; border:1px solid #c7dbff;">
+                    <div class="mentions-title" style="color:#174ea6;">
+                        ✅ Attività Task
+                    </div>
+                   
+                    @if (_taskBadges.ToCloseCount > 0)
+                    {
+                        <div class="mention-row"
+                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&view=toClose"))">
+                            <span class="badge update">DA CHIUDERE</span>
+                            <span class="text">Hai <b>@_taskBadges.ToCloseCount</b> task pronti da chiudere</span>
+                        </div>
+
+                        @foreach (var t in _taskBadges.ToCloseTop)
+                        {
+                            <div class="mention-row"
+                                 @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
+                                <span class="badge update">✅</span>
+                                <span class="text">#@t.TaskId — @t.Titolo</span>
+                            </div>
+                        }
+                    }
+
+                    @if (_taskBadges.WaitingReviewCount > 0)
+                    {
+                        <div class="mention-row"
+                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&view=waiting"))">
+                            <span class="badge mention">IN ATTESA</span>
+                            <span class="text">Hai <b>@_taskBadges.WaitingReviewCount</b> task completati da te in attesa di chiusura</span>
+                        </div>
+
+                        @foreach (var t in _taskBadges.WaitingReviewTop)
+                        {
+                            <div class="mention-row"
+                                 @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
+                                <span class="badge mention">⏳</span>
+                                <span class="text">#@t.TaskId — @t.Titolo</span>
+                            </div>
+                        }
+                    }
+                </div>
+            }
+            @if (_showCaselleAlert && IsAdmin)
             {
                 <div class="mentions-panel" style="background:#fdecea; border:1px solid #f5c6cb;">
                     <div class="mentions-title" style="color:#721c24;">

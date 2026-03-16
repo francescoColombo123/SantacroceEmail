@@ -165,34 +165,38 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, quoteHtml) => {
 
 window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {
     const editorEl = document.getElementById(editorId);
-    if (!editorEl) return;
+    const toolbarEl = document.getElementById(toolbarId);
 
-    // opzionale: evita doppio init se riapri il dialog
-    if (editorEl.__quillTask) return;
+    if (!editorEl || !toolbarEl) return;
 
-    const q = new Quill(editorEl, {
+    // toolbar HTML (puoi personalizzarla)
+    toolbarEl.innerHTML = `
+    <span class="ql-formats">
+      <button class="ql-bold"></button>
+      <button class="ql-italic"></button>
+      <button class="ql-underline"></button>
+    </span>
+    <span class="ql-formats">
+      <button class="ql-list" value="ordered"></button>
+      <button class="ql-list" value="bullet"></button>
+    </span>
+    <span class="ql-formats">
+      <button class="ql-link"></button>
+    </span>
+  `;
+
+    const quill = new Quill(editorEl, {
         theme: "snow",
-        modules: {
-            toolbar: toolbarId ? `#${toolbarId}` : [
-                ["bold", "italic", "underline"],
-                [{ list: "ordered" }, { list: "bullet" }],
-                ["link"],
-                ["clean"]
-            ]
-        }
+        modules: { toolbar: toolbarEl }
     });
 
-    editorEl.__quillTask = q;
+    if (initialHtml) quill.clipboard.dangerouslyPasteHTML(initialHtml);
 
-    // init contenuto
-    if (initialHtml) q.clipboard.dangerouslyPasteHTML(initialHtml, "api");
+    quill.on("text-change", () => {
+        const html = editorEl.querySelector(".ql-editor")?.innerHTML ?? "";
+        dotnetRef?.invokeMethodAsync("UpdateTaskHtml", html);
+    });
 
-    const handler = () => {
-        try {
-            dotnetRef.invokeMethodAsync("UpdateTaskHtml", (q.root.innerHTML || "").trim());
-        } catch (e) { }
-    };
-
-    q.on("text-change", handler);
-    handler();
+    // opzionale: salva istanza per cleanup
+    editorEl.__quill = quill;
 };

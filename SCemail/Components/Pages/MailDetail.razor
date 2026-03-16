@@ -1,4 +1,5 @@
 ﻿@page "/mail-detail/{id:int}/{cp?}"
+@using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.JSInterop
 @using Oracle.ManagedDataAccess.Client
 @using SCemail.Components.Data
@@ -42,6 +43,28 @@
                                            Title="Archivia"
                                            Color="Color.Primary"
                                            OnClick="@ArchiveThread" />
+
+                            <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           Title="Assegna"
+                                           OnClick="@(() => AssignThread())" />
+
+                            <MudSelect T="long?"
+                                       Dense="true"
+                                       Variant="Variant.Outlined"
+                                       Label="Sposta in..."
+                                       Value="_sezioneSelezionata"
+                                       ValueChanged="OnSpostaInChanged"
+                                       Disabled="@_moving"
+                                       Style="min-width:220px">
+                                @foreach (var s in _sezioni)
+                                {
+                                    <MudSelectItem T="long?" Value="@(s.Id)">
+                                        @s.Nome
+                                    </MudSelectItem>
+                                }
+                            </MudSelect>
                         </div>
                     </div>
                 </div>
@@ -126,7 +149,7 @@
 
                                         <a class="attach-chip"
                                            href="#"
-                                           @onclick="@(async () => await OpenAttachmentAsync(a.Id, mime))"
+                                           @onclick="@(async () => await OpenAttachmentAsync(a.Id, mime, mail.Allegati.Select(x => x.Id).ToList()))"
                                            @onclick:preventDefault="true"
                                            @onclick:stopPropagation="true">
                                             <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
@@ -139,6 +162,8 @@
 
                     </div>
                 }
+
+
             </div>
 
 
@@ -159,34 +184,43 @@
                 }
                 else
                 {
-                    @foreach (var c in _comments)
+                    @foreach (var c in _comments.OrderBy(x => x.DataCreazione))
                     {
-                        <div class="comment-box">
-
-                            <!-- AVATAR TEAM STYLE -->
-                            <div class="avatar2" style="background:@GetAvatarColor(c.Autore)">
-                                @GetInitials(c.Autore)
+                        if (IsActivity(c))
+                        {
+                            <div class="activity-line">
+                                <span class="activity-text">@((MarkupString)ActivityText(c))</span>
+                                <span class="activity-time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
                             </div>
-
-                            <div class="comment-content">
-                                <div class="comment-header">
-                                    <span class="author">@c.Autore</span>
-                                    <span class="time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
+                        }
+                        else
+                        {
+                            <div class="comment-box">
+                                <!-- AVATAR TEAM STYLE -->
+                                <div class="avatar2" style="background:@GetAvatarColor(c.Autore)">
+                                    @GetInitials(c.Autore)
                                 </div>
 
-                                <div class="comment-text">
-                                    @((MarkupString)HighlightMentions(c.Testo))
-                                </div>
-
-                                @if (!string.IsNullOrWhiteSpace(c.AllegatoNome))
-                                {
-                                    <div class="comment-attachment">
-                                        <MudIcon Icon="@GetAttachmentIcon(c.AllegatoNome)" />
-                                        <a href="@GetCommentAttachmentUrl(c.Id)" target="_blank">@c.AllegatoNome</a>
+                                <div class="comment-content">
+                                    <div class="comment-header">
+                                        <span class="author">@c.Autore</span>
+                                        <span class="time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
                                     </div>
-                                }
+
+                                    <div class="comment-text">
+                                        @((MarkupString)HighlightMentions(c.Testo))
+                                    </div>
+
+                                    @if (!string.IsNullOrWhiteSpace(c.AllegatoNome))
+                                    {
+                                        <div class="comment-attachment">
+                                            <MudIcon Icon="@GetAttachmentIcon(c.AllegatoNome)" />
+                                            <a href="@GetCommentAttachmentUrl(c.Id)" target="_blank">@c.AllegatoNome</a>
+                                        </div>
+                                    }
+                                </div>
                             </div>
-                        </div>
+                        }
                     }
                 }
             </div>
@@ -252,6 +286,14 @@
 
         </aside>
     }
+
+    @if (_showAttachmentViewer)
+    {
+        <AttachmentViewerOverlay Id="@_attachmentViewerId"
+                                 Src="@_attachmentViewerSrc"
+                                 Ids="@_attachmentViewerIds"
+                                 OnClose="@CloseAttachmentViewer" />
+    }
 </div>
 
 @code {
@@ -272,7 +314,9 @@
     private bool _mentionOpen;
     private int _mentionIndex = 0;
     private bool _savingComment = false;
-
+    private List<EmailInboxSezione> _sezioni = new();
+    private long? _sezioneSelezionata;
+    private bool _moving = false;
     public class EmailReplyInfo
     {
         public string CasellaMittente { get; set; } = "";
@@ -280,17 +324,24 @@
         public string? Cc { get; set; }
         public string? Bcc { get; set; }
     }
+    private string? _fromFolder;
+    private string? _fromSection;
+
 
     protected override async Task OnInitializedAsync()
     {
         _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp);
         _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
+        _sezioni = await MailSvc1.GetSezioniInboxAsync(soloAttive: true);
+
         if (!string.IsNullOrWhiteSpace(_utente))
         {
             await MailSvc1.SegnaNotificheVisteAsync(Id, _utente);
         }
         if (_email != null)
         {
+            _sezioneSelezionata = await MailSvc1.GetSezioneCorrenteAsync(_email.Id, _utente);
+
             _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id);
 
             _thread = _thread
@@ -308,6 +359,12 @@
 
         _allUsers = await AccessiSrv.GetUserListAsync();
         _loading = false;
+
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = QueryHelpers.ParseQuery(uri.Query);
+
+        if (q.TryGetValue("fromFolder", out var f)) _fromFolder = f.ToString();
+        if (q.TryGetValue("fromSection", out var s)) _fromSection = s.ToString();
     }
     private async Task Reply(EmailDetail_NEW msg)
     {
@@ -424,10 +481,17 @@
         var last = GetThreadLast();
         if (last == null) return;
 
-        // ✅ riuso il tuo dialog interno (ForwardDialog) che assegna a utenti interni
+        var requireComment = true;
+
+        // se admin globale ok
+        if (await AccessiSrv.IsAdminAsync(_utente))
+            requireComment = false;
+
         var parameters = new DialogParameters
         {
-            ["Users"] = await MailSvc1.GetUserListAsync()
+            ["Users"] = await MailSvc1.GetUserListAsync(),
+            ["RequireComment"] = requireComment,
+            ["Title"] = "Assegna internamente"
         };
 
         var dialog = DialogService.Show<ForwardDialog>(
@@ -437,11 +501,25 @@
         );
 
         var result = await dialog.Result;
-        if (!result.Canceled && result.Data is ForwardDialog.ForwardResult fr)
+
+        if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
+            return;
+
+        if (requireComment && string.IsNullOrWhiteSpace(fr.Comment))
         {
-            await MailSvc1.AssignEmailAsync(last.Id, fr.User, fr.SoloInvio, fr.Comment);
-            Snackbar.Add($"Assegnata a {fr.User} ✅", Severity.Success);
+            Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
+            return;
         }
+
+        await MailSvc1.AssignEmailAsync(
+            last.Id,
+            fr.User,
+            soloInvio: false,
+            fr.Comment,
+            _utente
+        );
+
+        Snackbar.Add($"Assegnata a {fr.User} ✅", Severity.Success);
     }
 
    private async Task ForwardExternalThread()
@@ -647,6 +725,37 @@
         return body.Trim();
     }
 
+    private async Task OnSpostaInChanged(long? idSezione)
+    {
+        if (_email == null || string.IsNullOrWhiteSpace(_utente) || idSezione == null)
+            return;
+
+        if (_sezioneSelezionata == idSezione)
+            return;
+
+        _moving = true;
+        try
+        {
+            await MailSvc1.SpostaEmailInSezioneAsync(_email.Id, idSezione.Value, _utente, updatedBy: _utente);
+            _sezioneSelezionata = idSezione;
+
+            Snackbar.Add("Spostata ✅", Severity.Success);
+
+            // opzionale: torna alla lista (dipende dal tuo flusso)
+            // GoBack();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(ex);
+            Snackbar.Add("Errore nello spostamento", Severity.Error);
+        }
+        finally
+        {
+            _moving = false;
+            StateHasChanged();
+        }
+    }
+
     private static string FormatDateSimple(DateTime? dt)
     {
         if (dt == null) return "";
@@ -717,49 +826,42 @@
         };
     }
 
-    private async Task OpenAttachmentAsync(int allegatoId, string mime)
+    private bool _showAttachmentViewer;
+    private int _attachmentViewerId;
+    private string? _attachmentViewerSrc;
+    private List<int> _attachmentViewerIds = new();
+
+    private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
     {
-        // 1) prova a “materializzare” il file lato server (se manca)
-        try
-        {
-            var resp = await Http.PostAsync($"/api/attachments/{allegatoId}/ensure", content: null);
+        var mime = NormalizeMime(mimeType, null);
 
-            if (!resp.IsSuccessStatusCode)
-            {
-                Snackbar.Add("⚠️ Allegato non disponibile (non riesco a scaricarlo).", Severity.Warning);
-                await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
-                return;
-            }
-        }
-        catch
-        {
-            Snackbar.Add("⚠️ Errore durante il recupero allegato.", Severity.Error);
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
-            return;
-        }
-
-        // 2) preview solo per pdf/immagini, altrimenti download diretto
         var previewable =
-            mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase) ||
-            mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+            !string.IsNullOrWhiteSpace(mime) &&
+            (
+                mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+                mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+                mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
+                mime.Equals("text/html", StringComparison.OrdinalIgnoreCase)
+            );
 
         if (!previewable)
         {
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{allegatoId}/download");
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{attachmentId}/download");
             return;
         }
 
-        // 3) apro dialog anteprima (con pulsante download dentro)
-        var parameters = new DialogParameters
-        {
-            ["Url"] = $"/api/attachments/{allegatoId}/preview",
-            ["Mime"] = mime,
-            ["AllegatoId"] = allegatoId
-        };
-
-        DialogService.Show<PreviewDialog>("Anteprima", parameters);
+        _attachmentViewerId = attachmentId;
+        _attachmentViewerSrc = null;
+        _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
+        _showAttachmentViewer = true;
+        StateHasChanged();
     }
 
+    private Task CloseAttachmentViewer()
+    {
+        _showAttachmentViewer = false;
+        return Task.CompletedTask;
+    }
 
     private string GetBodyVisibleAsText(EmailDetail_NEW mail)
     {
@@ -947,8 +1049,18 @@
     }
 
 
-    private void GoBack() => Nav.NavigateTo($"/mail-new?cp={Cp}");
-    private string GetDownloadUrl(int id) => $"/api/attachments/{id}";
+    private void GoBack()
+    {
+        // Torno alla folder, e se ho una sezione ci “atterro”
+        var url = string.IsNullOrWhiteSpace(_fromFolder)
+            ? $"/mail-new?cp={Cp}"
+            : $"/mail-new?cp={Cp}&folder={_fromFolder}";
+
+        if (!string.IsNullOrWhiteSpace(_fromSection))
+            url += $"#{_fromSection}";   // <-- ancora allo specifico div
+
+        Nav.NavigateTo(url);
+    }
     private string GetCommentAttachmentUrl(int id) => $"/api/comments/{id}/attachment";
 
     private string GetAttachmentIcon(string? name)
@@ -1426,6 +1538,19 @@
 
         return html;
     }
+    private static bool IsActivity(CommentoEmail c)
+    => c != null
+       && !string.IsNullOrWhiteSpace(c.Testo)
+       && c.Testo.StartsWith("[[ASSIGN]]", StringComparison.OrdinalIgnoreCase);
+
+    private static string ActivityText(CommentoEmail c)
+    {
+        var t = c?.Testo ?? "";
+        if (t.StartsWith("[[ASSIGN]]", StringComparison.OrdinalIgnoreCase))
+            t = t.Substring("[[ASSIGN]]".Length).Trim();
+
+        return System.Net.WebUtility.HtmlEncode(t);
+    }
 
 
 
@@ -1859,5 +1984,29 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+    }
+
+    .activity-line {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        margin: 10px 0;
+        border-radius: 999px;
+        background: #f6f8ff;
+        border: 1px dashed #d6e4ff;
+        text-align: center;
+    }
+
+    .activity-text {
+        font-size: 13px;
+        font-weight: 600;
+        color: #2a3b66;
+    }
+
+    .activity-time {
+        font-size: 12px;
+        color: #7a87a6;
     }
 </style>

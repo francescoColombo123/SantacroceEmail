@@ -677,6 +677,7 @@
 </style>
 
 @code {
+
     private bool _showMention;
     private ElementReference _anchorRef;
     private List<string> _mentionOptions = new();
@@ -685,6 +686,8 @@
     private List<string> _allUsers = new();
 
     [Parameter, SupplyParameterFromQuery] public string? Cp { get; set; }
+    [Parameter, SupplyParameterFromQuery] public int? OpenTaskId { get; set; }
+    [Parameter, SupplyParameterFromQuery] public string? View { get; set; } // toClose | waiting
     private string? _utente;
 
     private List<TaskDto> _items = new();
@@ -701,6 +704,10 @@
     private bool _loaded;
     private string _scope = "mine";
     private int _tabIndex = 0;
+
+    private string? _homeView;
+    private HashSet<int> _canCloseById = new();
+    private HashSet<int> _iMarkedDone = new();
     private enum TaskView
     {
         Open,       // aperti che mi riguardano (assegnati a me OR creati da me)
@@ -739,26 +746,34 @@
     protected override async Task OnParametersSetAsync()
     {
         _loaded = false;
+
         _items.Clear();
         _commentCounts.Clear();
         _taggedTaskIds.Clear();
+        _canCloseById.Clear();
+        _iMarkedDone.Clear();
+
         _sel = null;
         _comments.Clear();
+
+        _homeView = string.IsNullOrWhiteSpace(View) ? null : View.Trim(); // toClose | waiting
 
         if (!string.IsNullOrWhiteSpace(Cp))
         {
             _utente = await AccessiSrv.GetUtenteFromCpAsync(Cp);
+
             if (!string.IsNullOrWhiteSpace(_utente))
             {
                 _allUsers = (await MailSvc.GetUserListAsync()) ?? new List<string>();
 
-                await ReloadTasksAndBadgesAsync();
+                // ✅ IMPORTANT: passa OpenTaskId per aprire subito un task
+                await ReloadTasksAndBadgesAsync(selectTaskId: OpenTaskId);
             }
         }
 
         _loaded = true;
+        StateHasChanged();
     }
-
 
     private string GetTaskItemClass(bool tagged, TaskDto t)
     {
@@ -804,7 +819,16 @@
 
             _ => q
         };
-
+        if (_homeView == "toClose")
+        {
+            // Creati da me + pronti da chiudere (assegnatario ha scritto "Fatto")
+            q = q.Where(t => _canCloseById.Contains(t.Id));
+        }
+        else if (_homeView == "waiting")
+        {
+            // Task dove IO ho scritto "Fatto" e attendo la chiusura del creatore
+            q = q.Where(t => _iMarkedDone.Contains(t.Id));
+        }
         // ✅ 2) Filtro “Solo menzioni” (ha senso SOLO se NON sei già in vista Mentioned)
         if (_onlyMentions && _view != TaskView.Mentioned)
             q = q.Where(t => _taggedTaskIds.Contains(t.Id));
@@ -846,7 +870,10 @@
         );
 
         if (IsDoneComment(txt))
-            safe = $"<span class=\"done-badge\">✅ FATTO</span> {safe}";
+        {
+            var cleaned = Regex.Replace(safe, @"\b(fatto|done|completato|completata)\b", "", RegexOptions.IgnoreCase).Trim();
+            safe = $"<span class=\"done-badge\">✅ FATTO</span> {(string.IsNullOrWhiteSpace(cleaned) ? "" : cleaned)}";
+        }
 
         return (MarkupString)safe;
     }
@@ -855,6 +882,9 @@
 
     private async Task SelectTask(TaskDto t)
     {
+        // ✅ segna visto (azzera UNREAD_COUNT)
+        if (!string.IsNullOrWhiteSpace(_utente))
+            await TaskClient.MarkTaskSeenAsync(t.Id, _utente.Trim().ToLowerInvariant());
         _sel = t;
 
         var cs = await TaskClient.GetCommentsAsync(t.Id);
@@ -1002,7 +1032,7 @@
         };
 
         // NIENTE parameters (come il tuo dialog "Firma")
-        var dialog = DialogService.Show<CreateTaskDialog>("Nuovo task", options);
+        var dialog = DialogService.Show<CreateTaskDialog>("", options);
         var res = await dialog.Result;
 
         if (res.Canceled || res.Data is null)
@@ -1031,21 +1061,64 @@
         _loaded = false;
 
         _items = await TaskClient.GetForUserAsync(_utente!) ?? new();
+
         _commentCounts.Clear();
         _taggedTaskIds.Clear();
+        _canCloseById.Clear();
+        _iMarkedDone.Clear();
         _comments.Clear();
         _sel = null;
 
+        var me = _utente!.Trim().ToLowerInvariant();
+
         foreach (var t in _items)
         {
-            var cs = await TaskClient.GetCommentsAsync(t.Id);
-            _commentCounts[t.Id] = cs?.Count ?? 0;
+            var cs = await TaskClient.GetCommentsAsync(t.Id) ?? new List<TaskCommentDto>();
+            _commentCounts[t.Id] = cs.Count;
 
+            // menzioni
             var rx = new Regex(@$"(?<=^|\s)@{Regex.Escape(_utente!)}\b", RegexOptions.IgnoreCase);
-            if (cs != null && cs.Any(c => rx.IsMatch(c.Testo ?? "")))
+            if (cs.Any(c => rx.IsMatch(c.Testo ?? "")))
                 _taggedTaskIds.Add(t.Id);
+
+            // ✅ set per filtri HOME (toClose / waiting)
+            bool isOpen = !string.Equals(t.Stato, TaskStati.Chiuso, StringComparison.OrdinalIgnoreCase);
+
+            if (isOpen)
+            {
+                var creator = (t.CreatoDa ?? "").Trim().ToLowerInvariant();
+
+                var assignees = new HashSet<string>(
+                    (t.AssegnatiA ?? new List<string>())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Select(x => x.Trim().ToLowerInvariant()),
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+                bool anyAssigneeDone = assignees.Count > 0 && cs.Any(c =>
+                    !string.IsNullOrWhiteSpace(c.Utente) &&
+                    assignees.Contains(c.Utente.Trim().ToLowerInvariant()) &&
+                    IsDoneComment(c.Testo)
+                );
+
+                bool iDone = cs.Any(c =>
+                    !string.IsNullOrWhiteSpace(c.Utente) &&
+                    string.Equals(c.Utente.Trim().ToLowerInvariant(), me, StringComparison.OrdinalIgnoreCase) &&
+                    IsDoneComment(c.Testo)
+                );
+
+                // toClose: creato da me + un assegnatario ha fatto
+                if (creator == me && anyAssigneeDone)
+                    _canCloseById.Add(t.Id);
+
+                // waiting: assegnato a me + io ho fatto + creato da altri
+                bool isAssignedToMe = assignees.Contains(me);
+                if (creator != me && isAssignedToMe && iDone)
+                    _iMarkedDone.Add(t.Id);
+            }
         }
 
+        // ✅ apri task se richiesto
         if (selectTaskId is int id && id > 0)
         {
             var found = _items.FirstOrDefault(x => x.Id == id);
@@ -1141,23 +1214,22 @@
         var creator = _sel.CreatoDa?.Trim();
         var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
 
-        var dialog = DialogService.Show<CloseCommentDialog>("Fatto ✅", new DialogParameters
+        var dialog = DialogService.Show<CloseCommentDialog>("", new DialogParameters
         {
-            ["Title"] = "Fatto ✅",
+            ["Title"] = "Segna come fatto",
             ["Message"] = string.IsNullOrWhiteSpace(creator)
-                ? "Confermi di aver completato? (Puoi aggiungere una nota facoltativa)"
-                : $"Confermi di aver completato? (nota facoltativa, avviserà @{creator})"
+        ? "Confermi di aver completato? Puoi aggiungere una nota (facoltativa)."
+        : $"Confermi di aver completato? (Nota facoltativa: notificherà il creatore {creator}).",
+            ["Placeholder"] = "Nota facoltativa…"
         }, options);
-
         var res = await dialog.Result;
         if (res.Canceled) return;
 
         var note = (res.Data as string)?.Trim();
 
         _newText = string.IsNullOrWhiteSpace(note)
-     ? (string.IsNullOrWhiteSpace(creator) ? "Fatto" : $"Fatto @{creator}")
-     : (string.IsNullOrWhiteSpace(creator) ? $"Fatto — {note}" : $"Fatto @{creator} — {note}");
-
+            ? "Fatto"
+            : $"Fatto — {note}";
 
         await PostComment();
     }

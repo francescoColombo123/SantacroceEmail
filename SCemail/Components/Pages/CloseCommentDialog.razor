@@ -1,41 +1,44 @@
 ﻿@using MudBlazor
 @using Microsoft.AspNetCore.Components
-@inherits ComponentBase
 
-<CascadingValue Value="MudDialog">
-    <MudDialog>
-        <DialogContent>
-            <MudText Typo="Typo.h6">@Title</MudText>
-            @if (!string.IsNullOrWhiteSpace(Message))
-            {
-                <MudText Typo="Typo.body2" Class="mb-2">@Message</MudText>
-            }
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6">@Title</MudText>
 
-            <MudTextField T="string"
-                          @bind-Value="_text"
-                          Lines="3"
-                          Variant="Variant.Outlined"
-                          Placeholder="Inserisci commento..."
-                          Immediate="true" />
-        </DialogContent>
+        @if (!string.IsNullOrWhiteSpace(Message))
+        {
+            <MudText Typo="Typo.body2" Class="mb-3">@Message</MudText>
+        }
 
-        <DialogActions>
-            <MudButton Variant="Variant.Text" OnClick="Cancel">Annulla</MudButton>
-            <MudButton Color="Color.Primary"
-                       Variant="Variant.Filled"
-                       Disabled="@string.IsNullOrWhiteSpace(_text)"
-                       OnClick="Ok">
-                Conferma
-            </MudButton>
-        </DialogActions>
-    </MudDialog>
-</CascadingValue>
+        <MudTextField T="string"
+                      @bind-Value="_text"
+                      Lines="3"
+                      Variant="Variant.Outlined"
+                      Placeholder="@Placeholder"
+                      Immediate="true"
+                      Clearable="true" />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">
+            Annulla
+        </MudButton>
+
+        <!-- ✅ sempre abilitato: la nota è facoltativa -->
+        <MudButton Color="Color.Success"
+                   Variant="Variant.Filled"
+                   OnClick="Ok">
+            Segna come fatto
+        </MudButton>
+    </DialogActions>
+</MudDialog>
 
 @code {
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
 
-    [Parameter] public string Title { get; set; } = "Commento";
-    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string Title { get; set; } = "Fatto";
+    [Parameter] public string Message { get; set; } = "Vuoi aggiungere una nota? (facoltativa)";
+    [Parameter] public string Placeholder { get; set; } = "Nota facoltativa…";
 
     private string? _text;
 

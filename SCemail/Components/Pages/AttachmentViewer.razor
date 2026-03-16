@@ -1,57 +1,173 @@
 ﻿@page "/attachment-viewer/{Id:int}"
 @inject HttpClient Http
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
 
-<h3 style="margin:0 0 10px 0;">Anteprima allegato</h3>
+<PageTitle>Anteprima allegato</PageTitle>
 
-@if (_loading)
-{
-    <p>Caricamento…</p>
-}
-else if (_error != null)
-{
-    <div style="padding:12px;border:1px solid #f3c0c0;background:#fff2f2;border-radius:10px;">
-        <b>Impossibile aprire l’allegato</b>
-        <div style="margin-top:6px;">@_error</div>
-        <div style="margin-top:10px;">
-            Se l’errore riguarda le credenziali, occorre <b>riaggiornare la password</b> della casella,
-            altrimenti non è possibile scaricare i PDF/DOC.
+<div @ref="_rootEl"
+     tabindex="0"
+     style="max-width:1200px; margin:24px auto; padding:0 16px; outline:none;">
+    <div style="background:#ffffff; border:1px solid #e7eaf0; border-radius:18px; box-shadow:0 8px 24px rgba(15,23,42,.06); overflow:hidden;">
+
+        <div style="padding:18px 20px; border-bottom:1px solid #eef2f7; background:linear-gradient(180deg,#fbfcfe 0%,#f7f9fc 100%);">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+                <div>
+                    <div style="font-size:13px; color:#64748b; margin-bottom:4px;">Visualizzatore allegati</div>
+                    <h3 style="margin:0; font-size:22px; color:#0f172a;">Anteprima allegato</h3>
+                </div>
+
+                @if (_attachments.Count > 1 && _currentMeta is not null)
+                {
+                    <div style="display:flex; align-items:center; gap:10px; background:#fff; border:1px solid #e5e7eb; padding:8px 12px; border-radius:999px;">
+                        <button @onclick="GoPrevious"
+                                disabled="@(!_hasPrevious)"
+                                style="@GetNavButtonStyle(_hasPrevious)">
+                            ← Precedente
+                        </button>
+
+                        <span style="font-size:13px; color:#475569; min-width:70px; text-align:center;">
+                            @(_currentIndex + 1) / @_attachments.Count
+                        </span>
+
+                        <button @onclick="GoNext"
+                                disabled="@(!_hasNext)"
+                                style="@GetNavButtonStyle(_hasNext)">
+                            Successivo →
+                        </button>
+                    </div>
+                }
+            </div>
         </div>
-    </div>
-}
-else
-{
-    <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
-        <div style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:60vw;">
-            @_meta!.Filename
-        </div>
 
-        <a href="@_downloadUrl" target="_blank" rel="noopener"
-           style="padding:8px 12px; background:#1a73e8; color:white; border-radius:8px; text-decoration:none;">
-            Scarica
-        </a>
-    </div>
-
-    @if (_isPreviewable)
-    {
-        @if (_meta!.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        @if (_loading)
         {
-            <img src="@_inlineUrl" style="max-width:100%; border:1px solid #e0e0e0; border-radius:10px;" />
+            <div style="padding:36px 20px;">
+                <div style="display:flex; align-items:center; gap:12px; color:#475569;">
+                    <div style="width:18px; height:18px; border:3px solid #cbd5e1; border-top-color:#2563eb; border-radius:50%;"></div>
+                    <span>Caricamento allegato...</span>
+                </div>
+            </div>
+        }
+        else if (!string.IsNullOrWhiteSpace(_error))
+        {
+            <div style="padding:20px;">
+                <div style="padding:16px 18px; border:1px solid #fecaca; background:#fff1f2; border-radius:14px; color:#7f1d1d;">
+                    <div style="font-weight:700; margin-bottom:6px;">Impossibile aprire l’allegato</div>
+                    <div>@_error</div>
+                </div>
+            </div>
+        }
+        else if (_currentMeta is null)
+        {
+            <div style="padding:20px;">
+                <div style="padding:16px 18px; border:1px solid #e5e7eb; background:#f8fafc; border-radius:14px; color:#334155;">
+                    Allegato non disponibile.
+                </div>
+            </div>
         }
         else
         {
-            <iframe src="@_inlineUrl"
-                    style="width:100%; height:80vh; border:1px solid #e0e0e0; border-radius:10px;"
-                    loading="lazy"></iframe>
+            <div style="padding:18px 20px; border-bottom:1px solid #eef2f7; background:#fff;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+                    <div style="min-width:0; flex:1;">
+                        <div style="font-size:12px; color:#64748b; margin-bottom:6px;">Nome file</div>
+                        <div title="@_currentMeta.Filename"
+                             style="font-size:18px; font-weight:700; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                            @_currentMeta.Filename
+                        </div>
+
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+                            <span style="font-size:12px; color:#334155; background:#f1f5f9; border:1px solid #e2e8f0; padding:5px 10px; border-radius:999px;">
+                                @_currentMeta.Mime
+                            </span>
+
+                            @if (_isSent)
+                            {
+                                <span style="font-size:12px; color:#1d4ed8; background:#eff6ff; border:1px solid #bfdbfe; padding:5px 10px; border-radius:999px;">
+                                    Allegato inviato
+                                </span>
+                            }
+                            else
+                            {
+                                <span style="font-size:12px; color:#0f766e; background:#ecfeff; border:1px solid #a5f3fc; padding:5px 10px; border-radius:999px;">
+                                    Allegato email
+                                </span>
+                            }
+
+                            @if (_isPreviewable)
+                            {
+                                <span style="font-size:12px; color:#166534; background:#f0fdf4; border:1px solid #bbf7d0; padding:5px 10px; border-radius:999px;">
+                                    Anteprima disponibile
+                                </span>
+                            }
+                            else
+                            {
+                                <span style="font-size:12px; color:#92400e; background:#fffbeb; border:1px solid #fde68a; padding:5px 10px; border-radius:999px;">
+                                    Solo download
+                                </span>
+                            }
+                        </div>
+                    </div>
+
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                        <a href="@_downloadUrl"
+                           target="_blank"
+                           rel="noopener"
+                           style="display:inline-flex; align-items:center; gap:8px; padding:10px 14px; background:#2563eb; color:#fff; text-decoration:none; border-radius:10px; font-weight:600; box-shadow:0 4px 12px rgba(37,99,235,.18);">
+                            Scarica
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div style="padding:20px; background:#f8fafc;">
+                @if (_isPreviewable)
+                {
+                    <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:14px; box-shadow:0 4px 12px rgba(15,23,42,.04);">
+                        @if (_isImage)
+                        {
+                            <div style="display:flex; justify-content:center; align-items:center; min-height:420px; background:#f8fafc; border-radius:12px;">
+                                <img src="@_inlineUrl"
+                                     alt="@_currentMeta.Filename"
+                                     style="max-width:100%; max-height:80vh; object-fit:contain; border-radius:10px;" />
+                            </div>
+                        }
+                        else if (_isPdf)
+                        {
+                            <div style="display:flex; justify-content:center; align-items:flex-start; min-height:420px; background:#f8fafc; border-radius:12px; padding:16px; overflow:auto;">
+                                <canvas id="pdfCanvas"
+                                        style="max-width:100%; background:#fff; box-shadow:0 4px 12px rgba(15,23,42,.12); border-radius:10px;">
+                                </canvas>
+                            </div>
+                        }
+                        else
+                        {
+                            <iframe src="@_inlineUrl"
+                                    title="Anteprima allegato"
+                                    style="width:100%; height:82vh; border:none; border-radius:12px; background:#fff;"
+                                    loading="lazy">
+                            </iframe>
+                        }
+                    </div>
+                }
+                else
+                {
+                    <div style="padding:18px; border:1px solid #e5e7eb; background:#fff; border-radius:16px; color:#334155;">
+                        <div style="font-weight:700; margin-bottom:6px;">Anteprima non disponibile</div>
+                        <div style="line-height:1.5;">
+                            Questo file (<b>@_currentMeta.Mime</b>) non è visualizzabile direttamente nel browser.
+                            Puoi comunque scaricarlo e aprirlo con l’applicazione corretta.
+                        </div>
+                    </div>
+                }
+            </div>
         }
-    }
-    else
-    {
-        <div style="padding:12px;border:1px solid #e6e6e6;background:#fafafa;border-radius:10px;">
-            Questo file (<b>@_meta!.Mime</b>) non è visualizzabile direttamente nel browser.<br />
-            Puoi comunque scaricarlo e aprirlo con Word/Excel.
-        </div>
-    }
-}
+    </div>
+</div>
 
 @code {
     [Parameter] public int Id { get; set; }
@@ -59,26 +175,153 @@ else
     private bool _loading = true;
     private string? _error;
 
-    private AttachmentMetaDto? _meta;
-    private bool _isPreviewable;
+    private List<AttachmentMetaDto> _attachments = new();
+    private AttachmentMetaDto? _currentMeta;
 
-    private string _inlineUrl => $"/api/attachments/{Id}/inline";
-    private string _downloadUrl => $"/api/attachments/{Id}/download";
+    private string? _src;
+    private List<int> _ids = new();
 
-    protected override async Task OnInitializedAsync()
+    private int _currentIndex = -1;
+    private int? _lastRenderedPdfId;
+
+    private DotNetObjectReference<AttachmentViewer>? _dotNetRef;
+    private ElementReference _rootEl;
+
+    private bool _hasPrevious => _currentIndex > 0;
+    private bool _hasNext => _currentIndex >= 0 && _currentIndex < _attachments.Count - 1;
+
+    private bool _isSent => string.Equals(_src, "sent", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isImage =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isPdf =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isPreviewable =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        (
+            _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.Equals("text/html", StringComparison.OrdinalIgnoreCase)
+        );
+
+    private string _querySuffix
     {
+        get
+        {
+            var query = new List<string>();
+
+            if (_ids.Any())
+                query.Add($"ids={Uri.EscapeDataString(string.Join(",", _ids))}");
+
+            if (!string.IsNullOrWhiteSpace(_src))
+                query.Add($"src={Uri.EscapeDataString(_src)}");
+
+            return query.Count > 0 ? "?" + string.Join("&", query) : "";
+        }
+    }
+
+    private string _inlineUrl => _currentMeta is null
+        ? ""
+        : _isSent
+            ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
+            : $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
+
+    private string _pdfInlineUrl => _inlineUrl;
+
+    private string _downloadUrl => _currentMeta is null
+        ? ""
+        : _isSent
+            ? $"/api/attachments/{_currentMeta.Id}/downloadInternal{_querySuffix}"
+            : $"/api/attachments/{_currentMeta.Id}/download{_querySuffix}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        ParseQueryString();
+        _lastRenderedPdfId = null;
+        await LoadContextAsync(Id);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("attachmentViewer.registerEscape", _dotNetRef);
+            await JS.InvokeVoidAsync("attachmentViewer.focusElement", _rootEl);
+        }
+
+        if (_currentMeta is not null && _isPdf && _lastRenderedPdfId != _currentMeta.Id)
+        {
+            _lastRenderedPdfId = _currentMeta.Id;
+            await JS.InvokeVoidAsync("pdfPreview.render", "pdfCanvas", _pdfInlineUrl);
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnEscapePressed()
+    {
+        await JS.InvokeVoidAsync("history.back");
+    }
+
+    private void ParseQueryString()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var query = QueryHelpers.ParseQuery(uri.Query);
+
+        _src = query.TryGetValue("src", out var srcVal)
+            ? srcVal.ToString()
+            : null;
+
+        _ids = new List<int>();
+
+        if (query.TryGetValue("ids", out var idsVal))
+        {
+            _ids = idsVal.ToString()
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => int.TryParse(x, out var n) ? n : 0)
+                .Where(x => x > 0)
+                .Distinct()
+                .ToList();
+        }
+    }
+
+    private async Task LoadContextAsync(int attachmentId)
+    {
+        _loading = true;
+        _error = null;
+        _attachments = new();
+        _currentMeta = null;
+        _currentIndex = -1;
+
         try
         {
-            _meta = await Http.GetFromJsonAsync<AttachmentMetaDto>($"/api/attachments/{Id}/meta");
-            if (_meta is null) { _error = "Metadati non disponibili."; return; }
+            var context = await Http.GetFromJsonAsync<AttachmentViewerContextDto>(
+                $"/api/attachments/{attachmentId}/context{_querySuffix}");
 
-            var mime = (_meta.Mime ?? "").ToLowerInvariant();
+            if (context is null || context.Attachments is null || context.Attachments.Count == 0)
+            {
+                _error = "Metadati non disponibili.";
+                return;
+            }
 
-            _isPreviewable =
-                mime == "application/pdf" ||
-                mime.StartsWith("image/") ||
-                mime.StartsWith("text/") ||
-                mime == "text/html";
+            _attachments = context.Attachments;
+            _currentIndex = _attachments.FindIndex(x => x.Id == context.CurrentId);
+
+            if (_currentIndex < 0)
+            {
+                _error = "Allegato corrente non trovato nel contesto.";
+                return;
+            }
+
+            _currentMeta = _attachments[_currentIndex];
         }
         catch (Exception ex)
         {
@@ -90,5 +333,64 @@ else
         }
     }
 
+    private async Task GoPrevious()
+    {
+        if (!_hasPrevious)
+            return;
+
+        await ChangeAttachmentAsync(_attachments[_currentIndex - 1].Id);
+    }
+
+    private async Task GoNext()
+    {
+        if (!_hasNext)
+            return;
+
+        await ChangeAttachmentAsync(_attachments[_currentIndex + 1].Id);
+    }
+
+    private async Task ChangeAttachmentAsync(int newId)
+    {
+        var newIndex = _attachments.FindIndex(x => x.Id == newId);
+        if (newIndex < 0)
+            return;
+
+        _currentIndex = newIndex;
+        _currentMeta = _attachments[_currentIndex];
+        _lastRenderedPdfId = null;
+
+        Nav.NavigateTo($"/attachment-viewer/{newId}{_querySuffix}", replace: true);
+
+        await Task.CompletedTask;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("attachmentViewer.unregisterEscape");
+        }
+        catch
+        {
+        }
+
+        _dotNetRef?.Dispose();
+    }
+
+    private static string GetNavButtonStyle(bool enabled)
+    {
+        if (!enabled)
+        {
+            return "padding:8px 12px; border:none; background:#e2e8f0; color:#94a3b8; border-radius:10px; cursor:not-allowed; font-weight:600;";
+        }
+
+        return "padding:8px 12px; border:none; background:#0f172a; color:#fff; border-radius:10px; cursor:pointer; font-weight:600;";
+    }
+
     private sealed record AttachmentMetaDto(int Id, string Filename, string Mime);
+
+    private sealed record AttachmentViewerContextDto(
+        int CurrentId,
+        List<AttachmentMetaDto> Attachments
+    );
 }

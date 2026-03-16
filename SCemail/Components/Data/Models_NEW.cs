@@ -81,8 +81,10 @@ namespace SCemail.Components.Data
         public int EmailId { get; set; }
         public string NomeFile { get; set; } = default!;
         public string? MimeType { get; set; }
-        public byte[] Content { get; set; } = default!;
+        public string Path { get; set; } = default!;
 
+
+        public byte[] Content { get; set; } = Array.Empty<byte>();
         public EmailInviata Email { get; set; } = default!;
     }
     public record EmailListItem_NEW(

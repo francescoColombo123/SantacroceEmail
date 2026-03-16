@@ -40,6 +40,8 @@ namespace SCemail.Components.Data
         public string? Oggetto { get; set; }
         public string? CorpoHtml { get; set; }
         public DateTime? LastSaved { get; set; }
+        public bool Letto { get; set; }  
+
         public ICollection<BozzaAllegato> Allegati { get; set; } = new List<BozzaAllegato>();
     }
 

@@ -74,6 +74,32 @@ public sealed class EmailTasksController : ControllerBase
     }
 
     // -------------------------
+    // HOME BADGES (home page)
+    // -------------------------
+    [HttpGet("/api/tasks/homeBadges")]
+    public async Task<ActionResult<TaskHomeBadgesDto>> GetHomeBadges([FromQuery] string utente)
+    {
+        if (string.IsNullOrWhiteSpace(utente))
+            return BadRequest("utente mancante");
+
+        var dto = await _repo.GetHomeBadgesAsync(utente);
+        return Ok(dto);
+    }
+
+    // -------------------------
+    // MARK SEEN (quando apro il task)
+    // -------------------------
+    [HttpPut("{taskId:int}/inbox/seen")]
+    public async Task<IActionResult> MarkSeen(int taskId, [FromQuery] string utente)
+    {
+        if (string.IsNullOrWhiteSpace(utente))
+            return BadRequest("utente mancante");
+
+        await _repo.MarkSeenAsync(taskId, utente);
+        return NoContent();
+    }
+
+    // -------------------------
     // COMMENTI
     // -------------------------
     [HttpGet("{taskId:int}/comments")]

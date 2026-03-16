@@ -11,57 +11,35 @@
     <div class="card shadow-sm">
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
             <h5 class="mb-0">⚙️ Configurazione Caselle Email</h5>
-            <button type="button" class="btn btn-light btn-sm"
-                    @onclick="TornaHome">
-                ⬅️ Torna alla Home
-            </button>
-    
+
+            <div class="d-flex gap-2">
+                <button type="button" class="btn btn-light btn-sm"
+                        @onclick="ApriModalNuovaCasella">
+                    ➕ Nuova Casella
+                </button>
+
+                <button type="button" class="btn btn-light btn-sm"
+                        @onclick="TornaHome">
+                    ⬅️ Torna alla Home
+                </button>
+            </div>
         </div>
+
         <div class="card-body">
-            <EditForm Model="@form" OnValidSubmit="@SalvaCasella">
-                <DataAnnotationsValidator />
-                <ValidationSummary />
-
-                <div class="row g-3 align-items-end">
-                    <!-- Email -->
-                    <div class="col-md-4">
-                        <label class="form-label">Email</label>
-                        <InputText class="form-control" @bind-Value="form.Email" required />
-                    </div>
-
-                    <!-- Password -->
-                    <div class="col-md-4">
-                        <label class="form-label">Password</label>
-                        <div class="input-group">
-                            <InputText class="form-control"
-                                       @bind-Value="form.Password"
-                                       type="@(showPwd ? "text" : "password")"
-                                       required />
-                            <button type="button" class="btn btn-outline-secondary"
-                                    @onclick="TogglePwd">
-                                @(showPwd ? "🙈 Nascondi" : "👁 Mostra")
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- Provider -->
-                    <div class="col-md-2">
-                        <label class="form-label">Provider</label>
-                        <select class="form-select" @onchange="OnProviderChanged">
-                            <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
-                            <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
-                        </select>
-                    </div>
-
-                    <!-- Bottone Salva -->
-                    <div class="col-md-2 d-flex justify-content-end">
-                        <button type="submit" class="btn btn-success w-100">
-                            ➕ Aggiungi Casella
-                        </button>
-                    </div>
+            <div class="row g-3 align-items-end">
+                <div class="col-md-6">
+                    <label class="form-label">Cerca casella email</label>
+                    <input class="form-control"
+                           placeholder="Es. euroc"
+                           @bind="searchText"
+                           @bind:event="oninput" />
                 </div>
-            </EditForm>
-
+                <div class="col-md-6 text-md-end">
+                    <small class="text-muted">
+                        Totale: @CaselleFiltrate.Count() caselle
+                    </small>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -82,53 +60,121 @@
                     </tr>
                 </thead>
                 <tbody>
-                    @foreach (var c in _caselle)
+                    @if (CaselleFiltrate.Any())
                     {
-                        var statoClasse = c.Stato switch
+                        @foreach (var c in CaselleFiltrate)
                         {
-                            StatoConnessione.Ok => "btn btn-sm btn-success",
-                            StatoConnessione.Errore => "btn btn-sm btn-danger",
-                            _ => "btn btn-sm btn-secondary"
-                        };
+                            var statoClasse = c.Stato switch
+                            {
+                                StatoConnessione.Ok => "btn btn-sm btn-success",
+                                StatoConnessione.Errore => "btn btn-sm btn-danger",
+                                _ => "btn btn-sm btn-secondary"
+                            };
 
-                        <tr title="@c.LastError">
-                            <td>@c.Email</td>
-                            <td>@c.Provider</td>
-                            <td>@c.ImapHost:@c.ImapPort (SSL: @c.UseSsl)</td>
-                            <td style="width: 250px;">
-                                <input type="text"
-                                       class="form-control form-control-sm"
-                                       value="@c.Password"
-                                       @onchange="(e => AggiornaPasswordDiretta(c, e))" />
+                            <tr title="@c.LastError">
+                                <td>@c.Email</td>
+                                <td>@c.Provider</td>
+                                <td>@c.ImapHost:@c.ImapPort (SSL: @c.UseSsl)</td>
+                                <td style="width: 250px;">
+                                    <input type="text"
+                                           class="form-control form-control-sm"
+                                           value="@c.Password"
+                                           @onchange="(e => AggiornaPasswordDiretta(c, e))" />
+                                </td>
+                                <td class="text-center">
+                                    @if (c.InTest)
+                                    {
+                                        <div class="spinner-border text-info spinner-border-sm" role="status">
+                                            <span class="visually-hidden">Verifica...</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <button class="@statoClasse" disabled
+                                                title="@(c.Stato == StatoConnessione.Ok
+                                                                                                    ? "Connessione OK"
+                                                                                                    : c.LastError ?? "Errore di connessione")">
+                                            @(c.Stato == StatoConnessione.Ok ? "🟢" :
+                                                                            c.Stato == StatoConnessione.Errore ? "🔴" : "⚪")
+                            </button>
+                                                        }
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center py-4 text-muted">
+                                Nessuna casella trovata.
                             </td>
-                            <td class="text-center">
-                                @if (c.InTest)
-                                {
-                                    <!-- 🌀 Mostra spinner mentre è in corso -->
-                                    <div class="spinner-border text-info spinner-border-sm" role="status">
-                                        <span class="visually-hidden">Verifica...</span>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <button class="@statoClasse" disabled
-                                    title="@(c.Stato == StatoConnessione.Ok
-                                                                        ? "Connessione OK"
-                                                                        : c.LastError ?? "Errore di connessione")">
-                                        @(
-                                        c.Stato == StatoConnessione.Ok ? "🟢" :
-                                                                c.Stato == StatoConnessione.Errore ? "🔴" : "⚪"
-                                        )
-                                    </button>
-                                }
-                            </td>
-                    </tr>
-                                        }
+                        </tr>
+                    }
                 </tbody>
             </table>
         </div>
     </div>
 </div>
+
+@if (showAddModal)
+{
+    <div class="custom-modal-backdrop" @onclick="ChiudiModalNuovaCasella"></div>
+
+    <div class="custom-modal-wrapper">
+        <div class="custom-modal card shadow">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">➕ Nuova Casella Email</h5>
+                <button type="button" class="btn btn-light btn-sm" @onclick="ChiudiModalNuovaCasella">✖</button>
+            </div>
+
+            <div class="card-body">
+                <EditForm Model="@form" OnValidSubmit="@SalvaCasella">
+                    <DataAnnotationsValidator />
+                    <ValidationSummary />
+
+                    <div class="row g-3">
+                        <div class="col-md-12">
+                            <label class="form-label">Email</label>
+                            <InputText class="form-control" @bind-Value="form.Email" />
+                        </div>
+
+                        <div class="col-md-12">
+                            <label class="form-label">Password</label>
+                            <div class="input-group">
+                                <InputText class="form-control"
+                                           @bind-Value="form.Password"
+                                           type="@(showPwd ? "text" : "password")" />
+                                <button type="button"
+                                        class="btn btn-outline-secondary"
+                                        @onclick="TogglePwd">
+                                    @(showPwd ? "🙈 Nascondi" : "👁 Mostra")
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="col-md-12">
+                            <label class="form-label">Provider</label>
+                            <select class="form-select" @onchange="OnProviderChanged">
+                                <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
+                                <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
+                            </select>
+                        </div>
+
+                        <div class="col-12 d-flex justify-content-end gap-2 mt-3">
+                            <button type="button" class="btn btn-secondary" @onclick="ChiudiModalNuovaCasella">
+                                Annulla
+                            </button>
+
+                            <button type="submit" class="btn btn-success">
+                                Salva Casella
+                            </button>
+                        </div>
+                    </div>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+}
 
 <style>
     .table td, .table th {
@@ -138,23 +184,67 @@
     .table-hover tbody tr:hover {
         background-color: #f9fafc;
     }
+
+    .custom-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        z-index: 1040;
+    }
+
+    .custom-modal-wrapper {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1050;
+        padding: 1rem;
+    }
+
+    .custom-modal {
+        width: 100%;
+        max-width: 700px;
+        border-radius: 12px;
+        overflow: hidden;
+    }
 </style>
 
 @code {
     private bool showPwd = false;
-    private void TogglePwd() => showPwd = !showPwd;
+    private bool showAddModal = false;
+    private string searchText = "";
     private string? _cp;
     private System.Threading.Timer? _refreshTimer;
+
+    private void TogglePwd() => showPwd = !showPwd;
+
+    private void ApriModalNuovaCasella()
+    {
+        form = new ConfigForm();
+        showPwd = false;
+        showAddModal = true;
+    }
+
+    private void ChiudiModalNuovaCasella()
+    {
+        showAddModal = false;
+        showPwd = false;
+    }
+
+    private IEnumerable<CasellaPosta> CaselleFiltrate =>
+        _caselle.Where(c =>
+            string.IsNullOrWhiteSpace(searchText) ||
+            (!string.IsNullOrWhiteSpace(c.Email) &&
+             c.Email.Contains(searchText, StringComparison.OrdinalIgnoreCase)));
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
         {
-            // ✅ Avvia subito il primo test parallelo
             var tasks = _caselle.Select(c => TestConnessione(c));
             await Task.WhenAll(tasks);
 
-            // ✅ Timer di refresh UI (ogni 15 secondi)
             _refreshTimer = new System.Threading.Timer(async _ =>
             {
                 try
@@ -163,14 +253,13 @@
                     {
                         var tasks = _caselle.Select(c => TestConnessione(c));
                         await Task.WhenAll(tasks);
-                        StateHasChanged(); // 🔁 forza aggiornamento UI
+                        StateHasChanged();
                     });
                 }
                 catch { }
-            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15)); // ogni 15 sec
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
         }
     }
-
 
     private async Task AggiornaPasswordDiretta(CasellaPosta c, ChangeEventArgs e)
     {
@@ -197,7 +286,6 @@
         }
     }
 
-
     protected override void OnInitialized()
     {
         var uri = new Uri(Nav.Uri);
@@ -213,7 +301,7 @@
         else
             Nav.NavigateTo("/");
     }
-    // ViewModel
+
     private class ConfigForm
     {
         public string Email { get; set; } = "";
@@ -230,65 +318,78 @@
     protected override async Task OnInitializedAsync()
     {
         await using var db = DbFactory.CreateDbContext();
-        _caselle = await db.CasellePosta.AsNoTracking().OrderBy(c => c.Email).ToListAsync();
+        _caselle = await db.CasellePosta
+            .AsNoTracking()
+            .OrderBy(c => c.Email)
+            .ToListAsync();
     }
 
     private void OnProviderChanged(ChangeEventArgs e)
     {
         form.Provider = e.Value?.ToString() ?? "Gmail";
-        // SSL gestito in automatico dal provider scelto, non serve più all’utente
     }
 
     private async Task SalvaCasella()
-{
-    try
     {
-        if (string.IsNullOrWhiteSpace(form.Email) || string.IsNullOrWhiteSpace(form.Password))
+        try
         {
-            Snackbar.Add("Compila tutti i campi obbligatori.", Severity.Warning);
-            return;
+            if (string.IsNullOrWhiteSpace(form.Email) || string.IsNullOrWhiteSpace(form.Password))
+            {
+                Snackbar.Add("Compila tutti i campi obbligatori.", Severity.Warning);
+                return;
+            }
+
+            await using var db = DbFactory.CreateDbContext();
+
+            bool exists = await db.CasellePosta
+                .AsNoTracking()
+                .AnyAsync(c => c.Email.ToUpper() == form.Email.ToUpper());
+
+            if (exists)
+            {
+                Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
+                return;
+            }
+
+            var entity = new CasellaPosta
+            {
+                Email = form.Email,
+                Password = form.Password,
+                Provider = form.Provider,
+                ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
+                    ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
+                        ? "imaps.pec.aruba.it"
+                        : "imap.aruba.it")
+                    : "imap.gmail.com",
+                ImapPort = 993,
+                UseSsl = "Y",
+                CreatedAt = DateTime.Now
+            };
+
+            db.CasellePosta.Add(entity);
+            await db.SaveChangesAsync();
+
+            _caselle.Add(entity);
+            _caselle = _caselle.OrderBy(c => c.Email).ToList();
+
+            ChiudiModalNuovaCasella();
+
+            Snackbar.Add("✅ Casella email aggiunta correttamente.", Severity.Success);
+
+            _ = Task.Run(async () =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    await TestConnessione(entity);
+                    StateHasChanged();
+                });
+            });
         }
-
-        await using var db = DbFactory.CreateDbContext();
-
-            bool exists = (await db.CasellePosta
-        .AsNoTracking()
-        .CountAsync(c => c.Email.ToUpper() == form.Email.ToUpper())) > 0;
-
-
-        if (exists)
+        catch (Exception ex)
         {
-            Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
-            return;
+            Snackbar.Add($"Errore durante il salvataggio: {ex.Message}", Severity.Error);
         }
-
-        var entity = new CasellaPosta
-        {
-            Email = form.Email,
-            Password = form.Password,
-            Provider = form.Provider,
-            ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
-            ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
-                ? "imaps.pec.aruba.it"
-                : "imap.aruba.it")
-            : "imap.gmail.com",
-            ImapPort = 993,
-            UseSsl = "Y",
-            CreatedAt = DateTime.Now
-        };
-
-        db.CasellePosta.Add(entity);
-        await db.SaveChangesAsync();
-
-        _caselle.Add(entity);
-        form = new ConfigForm(); // reset form
-        Snackbar.Add("✅ Casella email aggiunta correttamente.", Severity.Success);
     }
-    catch (Exception ex)
-    {
-        Snackbar.Add($"Errore durante il salvataggio: {ex.Message}", Severity.Error);
-    }
-}
 
     private async Task AggiornaPassword(CasellaPosta casella)
     {
@@ -322,6 +423,7 @@
             await client.AuthenticateAsync(c.Email, c.Password);
 
             c.Stato = StatoConnessione.Ok;
+            c.LastError = null;
             await client.DisconnectAsync(true);
         }
         catch (Exception ex)
@@ -334,5 +436,10 @@
             c.InTest = false;
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
     }
 }

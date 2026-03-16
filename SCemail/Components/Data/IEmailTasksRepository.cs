@@ -1,4 +1,5 @@
 ﻿using SCemail.Components.Shared;
+using static SCemail.Components.Data.MailService_NEW;
 
 namespace SCemail.Components.Data;
 
@@ -18,4 +19,7 @@ public interface IEmailTasksRepository
 
     Task<List<TaskCommentDto>> GetCommentsAsync(int taskId);
     Task<int> AddCommentAsync(int taskId, string utente, string testo, int? replyTo);
+    Task<TaskHomeBadgesDto> GetHomeBadgesAsync(string utente);
+    Task MarkSeenAsync(int taskId, string utente);
+
 }

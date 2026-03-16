@@ -1,0 +1,55 @@
+﻿@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">Aggiungi utente a @CasellaEmail</MudText>
+
+        <MudSelect T="string" Label="Utente" @bind-Value="Model.Username" Dense="true">
+            @foreach (var u in UtentiDisponibili)
+            {
+                <MudSelectItem T="string" Value="@u">@u</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudTextField @bind-Value="Model.Nome" Label="Nome" Dense="true" Class="mt-2" />
+        <MudTextField @bind-Value="Model.Titolo" Label="Titolo" Dense="true" Class="mt-2" />
+        <MudTextField @bind-Value="Model.Recapito" Label="Recapito" Dense="true" Class="mt-2" />
+        <MudSwitch @bind-Value="Model.IsAdmin" T="bool" Color="Color.Primary" Class="mt-2">
+            Amministratore
+        </MudSwitch>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Annulla" Color="Color.Secondary">Annulla</MudButton>
+        <MudButton OnClick="Conferma" Color="Color.Primary" Variant="Variant.Filled">Salva</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public int CasellaId { get; set; }
+    [Parameter] public string CasellaEmail { get; set; } = "";
+    [Parameter] public List<string> UtentiDisponibili { get; set; } = new();
+
+    private AggiungiAbilitazioneResult Model { get; set; } = new();
+
+    private void Annulla() => MudDialog.Cancel();
+
+    private void Conferma()
+    {
+        if (string.IsNullOrWhiteSpace(Model.Username))
+            return;
+
+        MudDialog.Close(DialogResult.Ok(Model));
+    }
+
+    public class AggiungiAbilitazioneResult
+    {
+        public string Username { get; set; } = "";
+        public string Nome { get; set; } = "";
+        public string Titolo { get; set; } = "";
+        public string Recapito { get; set; } = "";
+        public bool IsAdmin { get; set; }
+    }
+}

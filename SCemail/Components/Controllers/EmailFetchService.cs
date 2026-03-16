@@ -49,6 +49,14 @@ public class EmailFetchService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        var enabled = _config.GetValue<bool?>("EmailFetch:Enabled") ?? true;
+
+        _logger.LogInformation("EmailFetchService avviato - intervallo {Minuti} minuti", _interval.TotalMinutes);
+        if (!enabled)
+        {
+            _logger.LogWarning("EmailFetchService DISABILITATO via config (EmailFetch:Enabled=false).");
+            return;
+        }
         _logger.LogInformation("EmailFetchService avviato - intervallo {Minuti} minuti", _interval.TotalMinutes);
 
         while (!stoppingToken.IsCancellationRequested)

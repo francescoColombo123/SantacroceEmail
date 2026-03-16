@@ -1,0 +1,452 @@
+﻿@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.JSInterop
+@inject HttpClient Http
+@inject IJSRuntime JS
+
+@if (_visible)
+{
+    <div class="attov-backdrop" @onclick="Close">
+        <div class="attov-modal" @onclick:stopPropagation="true">
+            <div class="attov-header">
+                <div class="attov-head-left">
+                    <div class="attov-kicker">Visualizzatore allegati</div>
+                    <div class="attov-title">Anteprima allegato</div>
+
+                    @if (_currentMeta is not null)
+                    {
+                        <div class="attov-filename" title="@_currentMeta.Filename">
+                            @_currentMeta.Filename
+                        </div>
+                    }
+                </div>
+
+                <div class="attov-head-right">
+                    @if (_attachments.Count > 1 && _currentMeta is not null)
+                    {
+                        <div class="attov-nav">
+                            <button @onclick="GoPrevious"
+                                    disabled="@(!_hasPrevious)"
+                                    class="attov-nav-btn">
+                                ←
+                            </button>
+
+                            <span class="attov-counter">
+                                @(_currentIndex + 1) / @_attachments.Count
+                            </span>
+
+                            <button @onclick="GoNext"
+                                    disabled="@(!_hasNext)"
+                                    class="attov-nav-btn">
+                                →
+                            </button>
+                        </div>
+                    }
+
+                    @if (_currentMeta is not null)
+                    {
+                        <a href="@_downloadUrl"
+                           target="_blank"
+                           rel="noopener"
+                           class="attov-download">
+                            Scarica
+                        </a>
+                    }
+
+                    <button class="attov-close" @onclick="Close">✕</button>
+                </div>
+            </div>
+
+            <div class="attov-body">
+                @if (_loading)
+                {
+                    <div class="attov-state">
+                        <div>Caricamento allegato...</div>
+                    </div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_error))
+                {
+                    <div class="attov-error">
+                        <div style="font-weight:700; margin-bottom:6px;">Impossibile aprire l’allegato</div>
+                        <div>@_error</div>
+                    </div>
+                }
+                else if (_currentMeta is null)
+                {
+                    <div class="attov-state">
+                        Allegato non disponibile.
+                    </div>
+                }
+                else if (_isPreviewable)
+                {
+                    @if (_isImage)
+                    {
+                        <div class="attov-preview-wrap">
+                            <img src="@_inlineUrl"
+                                 alt="@_currentMeta.Filename"
+                                 class="attov-image" />
+                        </div>
+                    }
+                    else if (_isPdf)
+                    {
+                        <div class="attov-preview-wrap attov-pdf-wrap">
+                            <canvas id="pdfCanvasOverlay" class="attov-pdf-canvas"></canvas>
+                        </div>
+                    }
+                    else
+                    {
+                        <iframe src="@_inlineUrl"
+                                title="Anteprima allegato"
+                                class="attov-frame"
+                                loading="lazy">
+                        </iframe>
+                    }
+                }
+                else
+                {
+                    <div class="attov-state">
+                        Questo file (<b>@_currentMeta.Mime</b>) non è visualizzabile direttamente nel browser.
+                        Puoi comunque scaricarlo.
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+<style>
+    .attov-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15,23,42,.45);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        padding: 24px;
+    }
+
+    .attov-modal {
+        width: min(1200px, 96vw);
+        height: min(88vh, 920px);
+        background: #fff;
+        border-radius: 22px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(15,23,42,.28);
+        display: flex;
+        flex-direction: column;
+    }
+
+    .attov-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 18px 20px;
+        border-bottom: 1px solid #eef2f7;
+        background: linear-gradient(180deg,#fbfcfe 0%,#f7f9fc 100%);
+    }
+
+    .attov-kicker {
+        font-size: 12px;
+        color: #64748b;
+        margin-bottom: 4px;
+    }
+
+    .attov-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #0f172a;
+    }
+
+    .attov-filename {
+        margin-top: 6px;
+        font-size: 14px;
+        color: #334155;
+        max-width: 680px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .attov-head-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .attov-nav {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        padding: 8px 10px;
+        border-radius: 999px;
+    }
+
+    .attov-nav-btn,
+    .attov-close {
+        border: none;
+        background: #0f172a;
+        color: #fff;
+        border-radius: 10px;
+        padding: 8px 12px;
+        cursor: pointer;
+        font-weight: 700;
+    }
+
+        .attov-nav-btn:disabled {
+            background: #cbd5e1;
+            color: #94a3b8;
+            cursor: not-allowed;
+        }
+
+    .attov-counter {
+        min-width: 60px;
+        text-align: center;
+        font-size: 13px;
+        color: #475569;
+    }
+
+    .attov-download {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: #2563eb;
+        color: #fff;
+        text-decoration: none;
+        border-radius: 10px;
+        font-weight: 600;
+    }
+
+    .attov-body {
+        flex: 1;
+        min-height: 0;
+        background: #f8fafc;
+        padding: 16px;
+    }
+
+    .attov-preview-wrap {
+        width: 100%;
+        height: 100%;
+        min-height: 420px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        overflow: auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    .attov-pdf-wrap {
+        align-items: flex-start;
+        padding: 16px;
+    }
+
+    .attov-pdf-canvas {
+        max-width: 100%;
+        background: #fff;
+        box-shadow: 0 4px 12px rgba(15,23,42,.12);
+        border-radius: 10px;
+    }
+
+    .attov-image {
+        max-width: 100%;
+        max-height: 76vh;
+        object-fit: contain;
+        border-radius: 10px;
+    }
+
+    .attov-frame {
+        width: 100%;
+        height: 100%;
+        min-height: 76vh;
+        border: none;
+        background: #fff;
+    }
+
+    .attov-state {
+        width: 100%;
+        height: 100%;
+        min-height: 420px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 24px;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        color: #334155;
+    }
+
+    .attov-error {
+        padding: 16px 18px;
+        border: 1px solid #fecaca;
+        background: #fff1f2;
+        border-radius: 14px;
+        color: #7f1d1d;
+    }
+</style>
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [Parameter] public string? Src { get; set; }
+    [Parameter] public List<int> Ids { get; set; } = new();
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private bool _visible = true;
+    private bool _loading = true;
+    private string? _error;
+
+    private List<AttachmentMetaDto> _attachments = new();
+    private AttachmentMetaDto? _currentMeta;
+    private int _currentIndex = -1;
+    private int? _lastRenderedPdfId;
+
+    private bool _hasPrevious => _currentIndex > 0;
+    private bool _hasNext => _currentIndex >= 0 && _currentIndex < _attachments.Count - 1;
+    private bool _isSent => string.Equals(Src, "sent", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isImage =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isPdf =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+
+    private bool _isPreviewable =>
+        _currentMeta is not null &&
+        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
+        (
+            _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
+            _currentMeta.Mime.Equals("text/html", StringComparison.OrdinalIgnoreCase)
+        );
+
+    private string _querySuffix
+    {
+        get
+        {
+            var query = new List<string>();
+
+            if (Ids.Any())
+                query.Add($"ids={Uri.EscapeDataString(string.Join(",", Ids))}");
+
+            if (!string.IsNullOrWhiteSpace(Src))
+                query.Add($"src={Uri.EscapeDataString(Src)}");
+
+            return query.Count > 0 ? "?" + string.Join("&", query) : "";
+        }
+    }
+
+    private string _inlineUrl => _currentMeta is null
+        ? ""
+        : _isSent
+            ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
+            : $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
+
+    private string _downloadUrl => _currentMeta is null
+        ? ""
+        : _isSent
+            ? $"/api/attachments/{_currentMeta.Id}/downloadInternal{_querySuffix}"
+            : $"/api/attachments/{_currentMeta.Id}/download{_querySuffix}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _lastRenderedPdfId = null;
+        await LoadContextAsync(Id);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_currentMeta is not null && _isPdf && _lastRenderedPdfId != _currentMeta.Id)
+        {
+            _lastRenderedPdfId = _currentMeta.Id;
+            await JS.InvokeVoidAsync("pdfPreview.render", "pdfCanvasOverlay", _inlineUrl);
+        }
+    }
+
+    private async Task LoadContextAsync(int attachmentId)
+    {
+        _loading = true;
+        _error = null;
+        _attachments = new();
+        _currentMeta = null;
+        _currentIndex = -1;
+
+        try
+        {
+            var context = await Http.GetFromJsonAsync<AttachmentViewerContextDto>(
+                $"/api/attachments/{attachmentId}/context{_querySuffix}");
+
+            if (context is null || context.Attachments is null || context.Attachments.Count == 0)
+            {
+                _error = "Metadati non disponibili.";
+                return;
+            }
+
+            _attachments = context.Attachments;
+            _currentIndex = _attachments.FindIndex(x => x.Id == context.CurrentId);
+
+            if (_currentIndex < 0)
+            {
+                _error = "Allegato corrente non trovato nel contesto.";
+                return;
+            }
+
+            _currentMeta = _attachments[_currentIndex];
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task GoPrevious()
+    {
+        if (!_hasPrevious)
+            return;
+
+        _currentIndex--;
+        _currentMeta = _attachments[_currentIndex];
+        _lastRenderedPdfId = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task GoNext()
+    {
+        if (!_hasNext)
+            return;
+
+        _currentIndex++;
+        _currentMeta = _attachments[_currentIndex];
+        _lastRenderedPdfId = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task Close()
+    {
+        _visible = false;
+        await OnClose.InvokeAsync();
+    }
+
+    private sealed record AttachmentMetaDto(int Id, string Filename, string Mime);
+
+    private sealed record AttachmentViewerContextDto(
+        int CurrentId,
+        List<AttachmentMetaDto> Attachments
+    );
+}
