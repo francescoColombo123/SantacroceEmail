@@ -16,7 +16,8 @@
 
         <!-- Mittente -->
         <MudSelect T="string" Label="Da"
-                   @bind-Value="_selectedCasella"
+                   Value="_selectedCasella"
+                   ValueChanged="OnCasellaChanged"
                    FullWidth="true"
                    Dense="true"
                    Disabled="_fromLocked">
@@ -654,8 +655,14 @@
         _showCc = _ccList.Any();
         _showBcc = _bccList.Any();
         _composeSubject = Oggetto ?? string.Empty;
-        _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente);
-        _bodyHtml = "";
+        if (!string.IsNullOrWhiteSpace(_selectedCasella))
+        {
+            _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+        }
+        else
+        {
+            _firmaHtml = null;
+        }
         _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
 
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
@@ -678,7 +685,30 @@
             StateHasChanged();
         }
     }
+    private async Task OnCasellaChanged(string? value)
+    {
+        _selectedCasella = value;
 
+        if (string.IsNullOrWhiteSpace(_selectedCasella))
+        {
+            _firmaHtml = null;
+            StateHasChanged();
+            return;
+        }
+
+        try
+        {
+            _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore caricamento firma per {Utente} e casella {Casella}", Utente, _selectedCasella);
+            _firmaHtml = null;
+            Snackbar.Add("Errore nel caricamento della firma.", Severity.Warning);
+        }
+
+        StateHasChanged();
+    }
     private async Task StartUndoableAction(
      PendingActionKind kind,
      string label,

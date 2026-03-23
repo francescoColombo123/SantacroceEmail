@@ -139,7 +139,23 @@ public class EmailFetchService : BackgroundService
             }
         }
     }
+    private static string NormalizeMessageId(string? messageId)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+            return "";
 
+        var s = messageId.Trim();
+
+        if (s.StartsWith("<")) s = s[1..];
+        if (s.EndsWith(">")) s = s[..^1];
+
+        s = s.Trim().ToLowerInvariant();
+
+        if (s.Length > 500)
+            s = s[..500];
+
+        return s;
+    }
     private async Task FetchEmailsForAccount(
      int casellaId, string email, string password, string host, int port, bool useSsl,
      OracleConnection dbConn, CancellationToken ct, bool nightMode)
@@ -168,7 +184,7 @@ public class EmailFetchService : BackgroundService
 
             await client.AuthenticateAsync(email, password, ct);
             _logger.LogInformation("Autenticato su {Email}", email);
-
+            var seenMessageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             // ✅ da qui in poi il tuo codice “solo INBOX” (già deduplicato)
             var status = StatusItems.Count | StatusItems.Recent | StatusItems.Unread;
 
@@ -177,7 +193,7 @@ public class EmailFetchService : BackgroundService
 
             foldersToProcess.Add(client.Inbox);
 
-            TryAddSpecial(client, SpecialFolder.All, foldersToProcess, email);
+            //TryAddSpecial(client, SpecialFolder.All, foldersToProcess, email);
             TryAddSpecial(client, SpecialFolder.Junk, foldersToProcess, email);
 
             // dedup + noselect
@@ -216,8 +232,7 @@ public class EmailFetchService : BackgroundService
                         _logger.LogInformation("🆕 '{Folder}': nuove da processare={N}", folder.FullName, newSummaries.Count);
                 }
 
-                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, ct);
-
+                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, seenMessageIds, ct);
                 // ✅ B) BACKFILL SOLO DI NOTTE (UNA VOLTA)
                 if (nightMode)
                 {
@@ -225,7 +240,7 @@ public class EmailFetchService : BackgroundService
                     if (backSummaries.Count > 0)
                         _logger.LogInformation("⏪ '{Folder}': backfill da processare={N}", folder.FullName, backSummaries.Count);
 
-                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, ct);
+                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, seenMessageIds, ct);
                 }
 
                 await folder.CloseAsync(false, ct);
@@ -288,200 +303,250 @@ public class EmailFetchService : BackgroundService
     OracleConnection dbConn,
     int casellaId,
     string accountEmail,
+    HashSet<string> seenMessageIds,
     CancellationToken ct)
     {
         if (summaries == null || summaries.Count == 0) return;
 
-        foreach (var s in summaries)
+        foreach (var s in summaries.OrderBy(x => x.UniqueId.Id))
         {
+            var envMid = NormalizeMessageId(s.Envelope?.MessageId);
+
+            if (!string.IsNullOrWhiteSpace(envMid))
+            {
+                if (!seenMessageIds.Add(envMid))
+                {
+                    _logger.LogDebug(
+                        "SKIP duplicata in memoria [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                        accountEmail, folder.FullName, (long)s.UniqueId.Id, envMid);
+                    continue;
+                }
+
+                var existsByEnvelope = await GetExistingEmailIdByMessageId(dbConn, casellaId, envMid, ct);
+                if (existsByEnvelope.HasValue)
+                {
+                    _logger.LogDebug(
+                        "SKIP duplicata già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                        accountEmail, folder.FullName, (long)s.UniqueId.Id, envMid);
+                    continue;
+                }
+            }
+
             var full = await folder.GetMessageAsync(s.UniqueId, ct);
 
-            var mid = full.MessageId?.Trim();
+            var mid = NormalizeMessageId(full.MessageId);
             if (string.IsNullOrWhiteSpace(mid))
                 mid = BuildStableFallbackMessageId(full);
 
-            var existingId = await GetExistingEmailIdByMessageId(dbConn, casellaId, mid, ct);
+            // aggiungo al set SOLO se non avevo già aggiunto envMid
+            if (string.IsNullOrWhiteSpace(envMid))
+            {
+                if (!seenMessageIds.Add(mid))
+                {
+                    _logger.LogDebug(
+                        "SKIP duplicata post-fetch in memoria [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                        accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
+                    continue;
+                }
+            }
 
-            int emailId;
+            var existingId = await GetExistingEmailIdByMessageId(dbConn, casellaId, mid, ct);
             if (existingId.HasValue)
             {
-                emailId = existingId.Value;
-                await TouchExistingEmail(dbConn, emailId, (long)s.UniqueId.Id, ct);
+                _logger.LogDebug(
+                    "SKIP duplicata post-fetch già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                    accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
+                continue;
+            }
+
+            var uid = (long)s.UniqueId.Id;
+            var emailDateBase = s.InternalDate?.DateTime ?? full.Date.DateTime;
+            DateTime emailDateRome;
+            if (s.InternalDate.HasValue)
+            {
+                emailDateRome = TimeZoneInfo.ConvertTime(s.InternalDate.Value, RomeTz).DateTime;
             }
             else
             {
-                var uid = (long)s.UniqueId.Id;
-                var emailUtc = s.InternalDate?.UtcDateTime ?? full.Date.UtcDateTime;
-
-                emailId = await SaveEmail(dbConn, casellaId, mid, full, ct, folder.FullName, uid, emailUtc);
+                var msgOffset = full.Date;
+                emailDateRome = TimeZoneInfo.ConvertTime(msgOffset, RomeTz).DateTime;
             }
 
-            var emailUtc2 = s.InternalDate?.UtcDateTime ?? full.Date.UtcDateTime;
-            await ApplyRulesAsync(dbConn, emailId, full, emailUtc2, ct);
+            int emailId = await SaveEmail(
+                dbConn,
+                casellaId,
+                mid,
+                full,
+                ct,
+                folder.FullName,
+                uid,
+                emailDateRome
+            );
+
+            await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, ct);
 
             var atts = await SaveAttachmentsMetadata(dbConn, emailId, s.Body, ct);
             await DownloadAndStoreAttachmentsAsync(folder, s.UniqueId, casellaId, emailId, atts, s.Body, dbConn, ct);
 
-            if (existingId.HasValue)
-            {
-                _logger.LogDebug(
-                    "↪︎ GIÀ PRESENTE id={Id} [{Acc}] {Folder} uid={Uid}",
-                    emailId, accountEmail, folder.FullName, (long)s.UniqueId.Id
-                );
-            }
-            else
-            {
-                _logger.LogInformation(
-                    "🆕 NUOVA id={Id} [{Acc}] {Folder} uid={Uid} subj='{Subj}'",
-                    emailId, accountEmail, folder.FullName, (long)s.UniqueId.Id, full.Subject
-                );
-            }
+            _logger.LogInformation(
+                "🆕 NUOVA id={Id} [{Acc}] {Folder} uid={Uid} mid={Mid} subj='{Subj}'",
+                emailId, accountEmail, folder.FullName, uid, mid, full.Subject
+            );
         }
     }
 
-    private async Task<long> GetLastSavedUid(OracleConnection conn, int casellaId, string folderPath, CancellationToken ct)
-    {
-        const string sql = @"
-            SELECT NVL(MAX(MESSAGE_UID), 0)
-              FROM SGAPP.EMAIL_RICEVUTE
-             WHERE CASELLA_ID = :p_cid
-               AND FOLDER_PATH = :p_fp";
-
-        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
-        cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value =
-            string.IsNullOrEmpty(folderPath) ? "" :
-            (folderPath.Length <= 512 ? folderPath : folderPath[..512]);
-
-        var obj = await cmd.ExecuteScalarAsync(ct);
-        if (obj == null || obj == DBNull.Value) return 0L;
-        return Convert.ToInt64(obj);
-    }
-
-    private async Task<bool> EmailExists(OracleConnection conn, int casellaId, string folderPath, long uid, CancellationToken ct)
-    {
-        const string sql = @"
-            SELECT COUNT(1)
-              FROM SGAPP.EMAIL_RICEVUTE
-             WHERE CASELLA_ID = :p_cid
-               AND FOLDER_PATH = :p_fp
-               AND MESSAGE_UID = :p_uid";
-
-        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
-        cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value =
-            string.IsNullOrEmpty(folderPath) ? "" :
-            (folderPath.Length <= 512 ? folderPath : folderPath[..512]);
-        cmd.Parameters.Add("p_uid", OracleDbType.Int64).Value = uid;
-
-        var countObj = await cmd.ExecuteScalarAsync(ct);
-        var count = Convert.ToInt32(countObj);
-        return count > 0;
-    }
 
     private async Task<int> SaveEmail(
-     OracleConnection conn,
-     int casellaId,
-     string messageId,
-     MimeMessage message,
-     CancellationToken ct,
-     string folderPath,
-     long? messageUid,
-     DateTime? internalDateUtc = null)
+  OracleConnection conn,
+  int casellaId,
+  string messageId,
+  MimeMessage message,
+  CancellationToken ct,
+  string folderPath,
+  long? messageUid,
+  DateTime? internalDateRome = null)
     {
+        messageId = NormalizeMessageId(messageId);
+        if (string.IsNullOrWhiteSpace(messageId))
+            messageId = BuildStableFallbackMessageId(message);
+
         string? threadKey = null;
 
-        // 1️⃣ Se ha In-Reply-To, cerca quel messaggio nel DB
-        if (!string.IsNullOrEmpty(message.InReplyTo))
-        {
-            const string sqlFind = @"
-        SELECT THREAD_KEY 
-        FROM SGAPP.EMAIL_RICEVUTE 
-        WHERE MESSAGE_ID = :p_mid
-        UNION ALL
-        SELECT THREAD_KEY 
-        FROM SGAPP.EMAIL_INVIATE 
-        WHERE MESSAGE_ID = :p_mid";
+        const string sqlFindThreadKey = @"
+SELECT THREAD_KEY
+FROM (
+    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_RICEZIONE AS DATA_REF
+    FROM SGAPP.EMAIL_RICEVUTE
+    UNION ALL
+    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_INVIO AS DATA_REF
+    FROM SGAPP.EMAIL_INVIATE
+)
+WHERE MESSAGE_ID = :p_mid
+ORDER BY DATA_REF DESC
+FETCH FIRST 1 ROWS ONLY";
 
-            await using var cmdFind = new OracleCommand(sqlFind, conn) { BindByName = true };
-            cmdFind.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = message.InReplyTo;
-            var obj = await cmdFind.ExecuteScalarAsync(ct);
-            if (obj != null && obj != DBNull.Value)
-                threadKey = obj.ToString();
+        const string sqlFindThreadKeyLoose = @"
+SELECT THREAD_KEY
+FROM (
+    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_RICEZIONE AS DATA_REF
+    FROM SGAPP.EMAIL_RICEVUTE
+    UNION ALL
+    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_INVIO AS DATA_REF
+    FROM SGAPP.EMAIL_INVIATE
+)
+WHERE MESSAGE_ID LIKE :p_like
+ORDER BY DATA_REF DESC
+FETCH FIRST 1 ROWS ONLY";
+
+        async Task<string?> TryResolveThreadKeyAsync(string rawId)
+        {
+            var norm = NormalizeMessageId(rawId);
+            if (string.IsNullOrWhiteSpace(norm))
+                return null;
+
+            // 1) match esatto
+            await using (var cmd = new OracleCommand(sqlFindThreadKey, conn) { BindByName = true })
+            {
+                cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = norm.ToLowerInvariant();
+                var obj = await cmd.ExecuteScalarAsync(ct);
+                if (obj != null && obj != DBNull.Value)
+                    return obj.ToString();
+            }
+
+            // 2) match loose
+            var beforeAt = norm.Split('@')[0];
+            var cleaned = new string(beforeAt.Where(char.IsLetterOrDigit).ToArray());
+
+            if (!string.IsNullOrWhiteSpace(cleaned) && cleaned.Length >= 8)
+            {
+                await using var cmd2 = new OracleCommand(sqlFindThreadKeyLoose, conn) { BindByName = true };
+                cmd2.Parameters.Add("p_like", OracleDbType.Varchar2, 500).Value = "%" + cleaned.ToLowerInvariant() + "%";
+
+                var obj2 = await cmd2.ExecuteScalarAsync(ct);
+                if (obj2 != null && obj2 != DBNull.Value)
+                    return obj2.ToString();
+            }
+
+            return null;
         }
 
-        // 2️⃣ Se non trovato ma ha References, prova l’ultimo ID
-        if (string.IsNullOrEmpty(threadKey) && message.References != null && message.References.Any())
+        if (!string.IsNullOrWhiteSpace(message.InReplyTo))
         {
-            var lastRef = message.References.Last();
-            const string sqlFindRef = @"
-        SELECT THREAD_KEY 
-        FROM SGAPP.EMAIL_RICEVUTE 
-        WHERE MESSAGE_ID = :p_mid
-        UNION ALL
-        SELECT THREAD_KEY 
-        FROM SGAPP.EMAIL_INVIATE 
-        WHERE MESSAGE_ID = :p_mid";
-            await using var cmdFindRef = new OracleCommand(sqlFindRef, conn) { BindByName = true };
-            cmdFindRef.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = lastRef;
-            var obj2 = await cmdFindRef.ExecuteScalarAsync(ct);
-            if (obj2 != null && obj2 != DBNull.Value)
-                threadKey = obj2.ToString();
+            threadKey = await TryResolveThreadKeyAsync(message.InReplyTo);
         }
 
-        // 3️⃣ Se ancora nulla, crea un nuovo thread con MessageId proprio
-        if (string.IsNullOrEmpty(threadKey))
+        if (string.IsNullOrWhiteSpace(threadKey) && message.References != null && message.References.Any())
+        {
+            foreach (var refIdRaw in message.References.Reverse())
+            {
+                threadKey = await TryResolveThreadKeyAsync(refIdRaw);
+                if (!string.IsNullOrWhiteSpace(threadKey))
+                    break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(threadKey))
             threadKey = messageId;
 
-        // ✅ Inserimento email
         const string sql = @"
-        INSERT INTO SGAPP.EMAIL_RICEVUTE
-            (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI,CC, CCN, OGGETTO,
-             CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
-             IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY)
-        VALUES
-            (:p_cid, :p_mid, :p_dt, :p_from, :p_to,:p_cc, :p_ccn, :p_subj,
-             :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
-             :p_inreply, :p_refs, :p_thread)
-        RETURNING ID INTO :p_id";
+INSERT INTO SGAPP.EMAIL_RICEVUTE
+    (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, CC, CCN, OGGETTO,
+     CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
+     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY)
+VALUES
+    (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_cc, :p_ccn, :p_subj,
+     :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
+     :p_inreply, :p_refs, :p_thread)
+RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
 
         cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
         cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId;
-        cmd.Parameters.Add("p_dt", OracleDbType.Date).Value = (internalDateUtc ?? message.Date.UtcDateTime);
+        cmd.Parameters.Add("p_dt", OracleDbType.Date).Value =
+            (object?)(internalDateRome ?? TimeZoneInfo.ConvertTime(message.Date, RomeTz).DateTime)
+            ?? DBNull.Value;
         cmd.Parameters.Add("p_from", OracleDbType.Varchar2, 500).Value = message.From?.ToString() ?? "";
         cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = message.To?.ToString() ?? "";
         cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = message.Cc?.ToString() ?? "";
         cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = message.Bcc?.ToString() ?? "";
-        var emailUtc = internalDateUtc ?? message.Date.UtcDateTime;
+
+        var emailRome = internalDateRome ?? TimeZoneInfo.ConvertTime(message.Date, RomeTz).DateTime;
 
         string subject = message.Subject?.Trim() ?? "";
         if (string.IsNullOrWhiteSpace(subject))
         {
             var from = message.From?.ToString()?.Trim();
             if (string.IsNullOrWhiteSpace(from)) from = "Sconosciuto";
-
-            subject = $"(Senza oggetto) da {from} - {emailUtc:yyyy-MM-dd HH:mm}";
+            subject = $"(Senza oggetto) da {from} - {emailRome:yyyy-MM-dd HH:mm}";
         }
+
         var fp = NormalizeFolderPath(folderPath);
         if (subject.Length > 1000) subject = subject[..1000];
+
         cmd.Parameters.Add("p_subj", OracleDbType.Varchar2, 1000).Value = subject;
         cmd.Parameters.Add("p_html", OracleDbType.Clob).Value = (object?)message.HtmlBody ?? DBNull.Value;
         cmd.Parameters.Add("p_text", OracleDbType.Clob).Value = (object?)message.TextBody ?? DBNull.Value;
         cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value = fp;
-
         cmd.Parameters.Add("p_uid", OracleDbType.Int64).Value = (object?)messageUid ?? DBNull.Value;
-        cmd.Parameters.Add("p_inreply", OracleDbType.Varchar2, 500)
-            .Value = message.InReplyTo ?? (object)DBNull.Value;
-        cmd.Parameters.Add("p_refs", OracleDbType.Clob)
-            .Value = message.References != null && message.References.Any()
-                ? string.Join(" ", message.References)
-                : (object)DBNull.Value;
-        cmd.Parameters.Add("p_thread", OracleDbType.Varchar2, 500)
-            .Value = threadKey ?? (object)DBNull.Value;
 
-        var outId = new OracleParameter("p_id", OracleDbType.Int32) { Direction = ParameterDirection.Output };
+        cmd.Parameters.Add("p_inreply", OracleDbType.Varchar2, 500).Value =
+            !string.IsNullOrWhiteSpace(message.InReplyTo)
+                ? NormalizeMessageId(message.InReplyTo)
+                : (object)DBNull.Value;
+
+        cmd.Parameters.Add("p_refs", OracleDbType.Clob).Value =
+            message.References != null && message.References.Any()
+                ? string.Join(" ", message.References.Select(NormalizeMessageId))
+                : (object)DBNull.Value;
+
+        cmd.Parameters.Add("p_thread", OracleDbType.Varchar2, 500).Value =
+            threadKey ?? (object)DBNull.Value;
+
+        var outId = new OracleParameter("p_id", OracleDbType.Int32)
+        {
+            Direction = ParameterDirection.Output
+        };
         cmd.Parameters.Add(outId);
 
         try
@@ -493,27 +558,33 @@ public class EmailFetchService : BackgroundService
 
             return Convert.ToInt32(outId.Value?.ToString());
         }
-        catch (OracleException ex) when (ex.Number == 1) // ORA-00001 unique constraint
+        catch (OracleException ex) when (ex.Number == 1)
         {
-            // esiste già: ritorno l'ID esistente
             var existingId = await GetExistingEmailIdByMessageId(conn, casellaId, messageId, ct);
             if (existingId.HasValue)
                 return existingId.Value;
 
-            // se per qualche motivo non lo trova, rilancio
             throw;
         }
-
     }
-    private async Task TouchExistingEmail(OracleConnection conn, int emailId, long uid, CancellationToken ct)
+    private async Task TouchExistingEmail(
+     OracleConnection conn,
+     int emailId,
+     string currentFolderPath,
+     long uid,
+     CancellationToken ct)
     {
+        var fp = NormalizeFolderPath(currentFolderPath);
+
         const string sql = @"
-                            UPDATE SGAPP.EMAIL_RICEVUTE
-                               SET LAST_EVENT_AT = SYSTIMESTAMP,
-                                   MESSAGE_UID   = NVL(MESSAGE_UID, :p_uid)
-                             WHERE ID = :p_id";
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET LAST_EVENT_AT = SYSTIMESTAMP,
+       FOLDER_PATH   = NVL(FOLDER_PATH, :p_fp),
+       MESSAGE_UID   = NVL(MESSAGE_UID, :p_uid)
+ WHERE ID = :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value = fp;
         cmd.Parameters.Add("p_uid", OracleDbType.Int64).Value = uid;
         cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId;
         await cmd.ExecuteNonQueryAsync(ct);
@@ -522,21 +593,19 @@ public class EmailFetchService : BackgroundService
 
     private static string BuildStableFallbackMessageId(MimeMessage m)
     {
-        // qualcosa di stabile:
-        var from = m.From?.ToString() ?? "";
-        var to = m.To?.ToString() ?? "";
-        var subj = m.Subject ?? "";
+        var from = (m.From?.ToString() ?? "").Trim().ToLowerInvariant();
+        var to = (m.To?.ToString() ?? "").Trim().ToLowerInvariant();
+        var subj = (m.Subject ?? "").Trim().ToLowerInvariant();
         var date = m.Date.UtcDateTime.ToString("O");
 
-        // non usare corpo (pesante), basta header “stabili”
-        var key = $"{from}|{to}|{subj}|{date}".Trim();
+        var key = $"{from}|{to}|{subj}|{date}";
 
         using var sha = System.Security.Cryptography.SHA256.Create();
         var bytes = System.Text.Encoding.UTF8.GetBytes(key);
-        var hash = Convert.ToHexString(sha.ComputeHash(bytes));
+        var hash = Convert.ToHexString(sha.ComputeHash(bytes)).ToLowerInvariant();
+
         return $"fallback:{hash}";
     }
-
     private async Task<List<(int AllegatoId, string FileName, string Mime, string PartSpec)>> SaveAttachmentsMetadata(
      OracleConnection conn, int emailId, BodyPart? body, CancellationToken ct)
     {
@@ -623,7 +692,7 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
                 CollectAttachmentParts(child, acc);
         }
     }
-    private async Task ApplyRulesAsync(OracleConnection conn, int emailId, MimeMessage message, DateTime emailDateUtc, CancellationToken ct)
+    private async Task ApplyRulesAsync(OracleConnection conn, int emailId, MimeMessage message, DateTime emailDateRome, CancellationToken ct)
     {
         const string sql = @"
         SELECT ID, MITTENTE_LIKE, DEST_LIKE, OGGETTO_LIKE, ASSEGNA_A, SOLO_INVIO
@@ -632,8 +701,7 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
         AND CREATED_AT <= :p_mail_dt";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-        cmd.Parameters.Add("p_mail_dt", OracleDbType.Date).Value = emailDateUtc;
-
+        cmd.Parameters.Add("p_mail_dt", OracleDbType.Date).Value = emailDateRome;
         await using var reader = await cmd.ExecuteReaderAsync(ct);
 
         while (await reader.ReadAsync(ct))
@@ -1260,18 +1328,22 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.BACKFILL_UID, SYSDATE)";
     }
 
     private async Task<int?> GetExistingEmailIdByMessageId(
-    OracleConnection conn, int casellaId, string messageId, CancellationToken ct)
+     OracleConnection conn, int casellaId, string messageId, CancellationToken ct)
     {
+        messageId = NormalizeMessageId(messageId);
+        if (string.IsNullOrWhiteSpace(messageId))
+            return null;
+
         const string sql = @"
 SELECT ID
   FROM SGAPP.EMAIL_RICEVUTE
  WHERE CASELLA_ID = :p_cid
-   AND MESSAGE_ID = :p_mid
+   AND LOWER(MESSAGE_ID) = :p_mid
  FETCH FIRST 1 ROWS ONLY";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
-        cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId;
+        cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId.ToLowerInvariant();
 
         var obj = await cmd.ExecuteScalarAsync(ct);
         if (obj == null || obj == DBNull.Value) return null;

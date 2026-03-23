@@ -1,0 +1,59 @@
+﻿@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.h6" Class="mb-3">
+            @Title
+        </MudText>
+
+        <MudTextField T="string"
+                      Label="Firma"
+                      Value="@Firma"
+                      ValueChanged="@(v => Firma = v)"
+                      Variant="Variant.Outlined"
+                      FullWidth="true"
+                      Lines="8"
+                      Immediate="true" />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   OnClick="Annulla">
+            Annulla
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="Salva">
+            Salva
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter]
+    private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public string? Title { get; set; }
+
+    [Parameter]
+    public string? Value { get; set; }
+
+    private string? Firma;
+
+    protected override void OnInitialized()
+    {
+        Firma = Value;
+    }
+
+    private void Salva()
+    {
+        MudDialog.Close(DialogResult.Ok(Firma));
+    }
+
+    private void Annulla()
+    {
+        MudDialog.Cancel();
+    }
+}

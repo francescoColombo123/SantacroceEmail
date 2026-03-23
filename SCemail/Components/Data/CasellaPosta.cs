@@ -21,6 +21,7 @@ namespace SCemail.Components.Data
 
         [Column("STATO_CONN")]
         public string? StatoConn { get; set; } // OK | ERRORE
+        public string? FirmaDefault { get; set; }  
 
         public ICollection<CasellaAbilitazione> Abilitazioni { get; set; } = new List<CasellaAbilitazione>();
         public ICollection<EmailRicevuta> EmailRicevute { get; set; } = new List<EmailRicevuta>();

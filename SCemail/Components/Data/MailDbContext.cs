@@ -234,6 +234,7 @@ namespace SCemail.Components.Data
                 e.Property(x => x.NomeBk).HasColumnName("NOME_BK");
                 e.Property(x => x.TitoloBk).HasColumnName("TITOLO_BK");
                 e.Property(x => x.RecapitoBk).HasColumnName("RECAPITO_BK");
+                e.Property(x => x.FirmaDefault).HasColumnName("FIRMA_DEFAULT");
 
                 // ✅ Relazione corretta
                 e.HasMany(c => c.Abilitazioni)
@@ -377,8 +378,7 @@ namespace SCemail.Components.Data
                     .WithMany(c => c.EmailRicevute)
                     .HasForeignKey(x => x.CasellaId);
 
-                e.HasIndex(x => new { x.CasellaId, x.FolderPath, x.MessageUid })
-                    .HasDatabaseName("IX_EMAIL_UID");
+                
             });
 
             mb.Entity<EmailInviata>(e =>

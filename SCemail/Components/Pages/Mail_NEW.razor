@@ -354,12 +354,14 @@ else
                                                         @StripHtml(d.Preview)
                                                     </div>
 
-                                                    <div class="ml-tools" @onclick:stopPropagation="true">
-                                                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
-                                                                       Color="Color.Error"
-                                                                       Size="Size.Small"
-                                                                       Title="Elimina bozza"
-                                                                       OnClick="@(() => DeleteDraft(d.Id))" />
+                                                    <div class="ml-right" @onclick:stopPropagation="true">
+                                                        <div class="ml-tools">
+                                                            <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                                                           Color="Color.Error"
+                                                                           Size="Size.Small"
+                                                                           Title="Elimina bozza"
+                                                                           OnClick="@(() => DeleteDraft(d.Id))" />
+                                                        </div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -447,20 +449,36 @@ else
 
                                                             <!-- Riga 2: preview + pulsanti + allegati -->
                                                             <div class="ml-line2">
+
                                                                 <div class="ml-preview" title="@item.Preview">
                                                                     @item.Preview
                                                                 </div>
 
-                                                                <div class="ml-tools" @onclick:stopPropagation="true">
-                                                                    <!-- Pulsanti (assegna / archivia) -->
-                                                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                                   Color="Color.Primary"
-                                                                                   Size="Size.Small"
-                                                                                   Title="Assegna"
-                                                                                   OnClick="@(() => Forward(item))" />
+                                                                <div class="ml-right">
 
-                                                                    @if (_folder != "unassigned")
+                                                                    @if (item.Allegati?.Any() == true)
                                                                     {
+                                                                        <div class="ml-att">
+                                                                            @foreach (var a in item.Allegati)
+                                                                            {
+                                                                                <MudTooltip Text="@a.NomeFile">
+                                                                                    <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                                   Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                                   Size="Size.Small"
+                                                                                                   OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
+                                                                                </MudTooltip>
+                                                                            }
+                                                                        </div>
+                                                                    }
+
+                                                                    <div class="ml-tools" @onclick:stopPropagation="true">
+
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                       Color="Color.Primary"
+                                                                                       Size="Size.Small"
+                                                                                       Title="Assegna"
+                                                                                       OnClick="@(() => Forward(item))" />
+
                                                                         @if (_folder is "inbox" or "mentions")
                                                                         {
                                                                             <MudIconButton Icon="@Icons.Material.Filled.Archive"
@@ -475,27 +493,14 @@ else
                                                                             <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
                                                                                            Color="Color.Primary"
                                                                                            Size="Size.Small"
-                                                                                           Title="Ripristina in Posta in arrivo"
+                                                                                           Title="Ripristina"
                                                                                            OnClick="@(() => Unarchive(item))" />
                                                                         }
-                                                                    }
-                                                                    <!-- Allegati: 1 icona per file -->
-                                                                    @if (item.Allegati?.Any() == true)
-                                                                    {
-                                                                        <div class="ml-att">
-                                                                            @foreach (var a in item.Allegati)
-                                                                            {
-                                                                                <MudTooltip Text="@a.NomeFile">
-                                                                                    <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
-                                                                                                   Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
-                                                                                                   Size="Size.Small" OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
 
-                                                                                </MudTooltip>
+                                                                    </div>
 
-                                                                            }
-                                                                        </div>
-                                                                    }
                                                                 </div>
+
                                                             </div>
                                                         </div>
                                                     </li>
@@ -587,32 +592,8 @@ else
                                                                             @item.Preview
                                                                         </div>
 
-                                                                        <div class="ml-tools" @onclick:stopPropagation="true">
-                                                                            <!-- Pulsanti (assegna / archivia) -->
-                                                                            <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                                           Color="Color.Primary"
-                                                                                           Size="Size.Small"
-                                                                                           Title="Assegna"
-                                                                                           OnClick="@(() => Forward(item))" />
+                                                                        <div class="ml-right" @onclick:stopPropagation="true">
 
-                                                                            @if (_folder is "inbox" or "mentions")
-                                                                            {
-                                                                                <MudIconButton Icon="@Icons.Material.Filled.Archive"
-                                                                                               Color="Color.Success"
-                                                                                               Size="Size.Small"
-                                                                                               Title="Archivia"
-                                                                                               OnClick="@(() => Archive(item))" />
-                                                                            }
-
-                                                                            @if (_folder == "myarchive")
-                                                                            {
-                                                                                <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
-                                                                                               Color="Color.Primary"
-                                                                                               Size="Size.Small"
-                                                                                               Title="Ripristina in Posta in arrivo"
-                                                                                               OnClick="@(() => Unarchive(item))" />
-                                                                            }
-                                                                            <!-- Allegati: 1 icona per file -->
                                                                             @if (item.Allegati?.Any() == true)
                                                                             {
                                                                                 <div class="ml-att">
@@ -623,12 +604,37 @@ else
                                                                                                            Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
                                                                                                            Size="Size.Small"
                                                                                                            OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
-
                                                                                         </MudTooltip>
-
                                                                                     }
                                                                                 </div>
                                                                             }
+
+                                                                            <div class="ml-tools">
+                                                                                <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                               Color="Color.Primary"
+                                                                                               Size="Size.Small"
+                                                                                               Title="Assegna"
+                                                                                               OnClick="@(() => Forward(item))" />
+
+                                                                                @if (_folder is "inbox" or "mentions")
+                                                                                {
+                                                                                    <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                                   Color="Color.Success"
+                                                                                                   Size="Size.Small"
+                                                                                                   Title="Archivia"
+                                                                                                   OnClick="@(() => Archive(item))" />
+                                                                                }
+
+                                                                                @if (_folder == "myarchive")
+                                                                                {
+                                                                                    <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                                                                   Color="Color.Primary"
+                                                                                                   Size="Size.Small"
+                                                                                                   Title="Ripristina in Posta in arrivo"
+                                                                                                   OnClick="@(() => Unarchive(item))" />
+                                                                                }
+                                                                            </div>
+
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -710,55 +716,56 @@ else
                                                 </div>
 
                                                 <!-- Riga 2: preview + pulsanti + allegati -->
-                                                <div class="ml-line2">
-                                                    <div class="ml-preview" title="@item.Preview">
-                                                        @item.Preview
-                                                    </div>
+                                                    <div class="ml-line2">
+                                                        <div class="ml-preview" title="@item.Preview">
+                                                            @item.Preview
+                                                        </div>
 
-                                                    <div class="ml-tools" @onclick:stopPropagation="true">
-                                                        <!-- Pulsanti (assegna / archivia) -->
-                                                        <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                       Color="Color.Primary"
-                                                                       Size="Size.Small"
-                                                                       Title="Assegna"
-                                                                       OnClick="@(() => Forward(item))" />
+                                                        <div class="ml-right" @onclick:stopPropagation="true">
 
-                                                        @if (_folder is "inbox" or "mentions")
-                                                        {
-                                                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
-                                                                           Color="Color.Success"
-                                                                           Size="Size.Small"
-                                                                           Title="Archivia"
-                                                                           OnClick="@(() => Archive(item))" />
-                                                        }
-
-                                                        @if (_folder == "myarchive")
-                                                        {
-                                                            <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
-                                                                           Color="Color.Primary"
-                                                                           Size="Size.Small"
-                                                                           Title="Ripristina in Posta in arrivo"
-                                                                           OnClick="@(() => Unarchive(item))" />
-                                                        }
-                                                        <!-- Allegati: 1 icona per file -->
-                                                        @if (item.Allegati?.Any() == true)
-                                                        {
-                                                            <div class="ml-att">
-                                                                @foreach (var a in item.Allegati)
-                                                                {
-                                                                    <MudTooltip Text="@a.NomeFile">
-                                                                        <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
-                                                                                       Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
-                                                                                       Size="Size.Small"
+                                                            @if (item.Allegati?.Any() == true)
+                                                            {
+                                                                <div class="ml-att">
+                                                                    @foreach (var a in item.Allegati)
+                                                                    {
+                                                                        <MudTooltip Text="@a.NomeFile">
+                                                                            <MudIconButton Icon="@GetAttachmentIcon(a.NomeFile)"
+                                                                                           Class="@GetAttachmentCss(GetAttachmentIcon(a.NomeFile))"
+                                                                                           Size="Size.Small"
                                                                                            OnClick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, item.Allegati.Select(x => x.Id).ToList()))" />
+                                                                        </MudTooltip>
+                                                                    }
+                                                                </div>
+                                                            }
 
-                                                                    </MudTooltip>
+                                                            <div class="ml-tools">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                               Color="Color.Primary"
+                                                                               Size="Size.Small"
+                                                                               Title="Assegna"
+                                                                               OnClick="@(() => Forward(item))" />
 
+                                                                @if (_folder is "inbox" or "mentions")
+                                                                {
+                                                                    <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                   Color="Color.Success"
+                                                                                   Size="Size.Small"
+                                                                                   Title="Archivia"
+                                                                                   OnClick="@(() => Archive(item))" />
+                                                                }
+
+                                                                @if (_folder == "myarchive")
+                                                                {
+                                                                    <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
+                                                                                   Color="Color.Primary"
+                                                                                   Size="Size.Small"
+                                                                                   Title="Ripristina in Posta in arrivo"
+                                                                                   OnClick="@(() => Unarchive(item))" />
                                                                 }
                                                             </div>
-                                                        }
+
+                                                        </div>
                                                     </div>
-                                                </div>
                                             </div>
                                         </li>
 
@@ -4488,12 +4495,32 @@ else
 
     .ml-line2 {
         display: grid;
-        grid-template-columns: 1fr auto; /* preview | tools */
-        gap: 10px;
+        grid-template-columns: 1fr auto;
         align-items: center;
+        gap: 10px;
         min-width: 0;
     }
 
+    .ml-right {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-shrink: 0;
+    }
+
+    .ml-att {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+    }
+
+    .ml-tools {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: flex-end;
+        min-width: 72px; /* 👈 stabilizza larghezza pulsanti */
+    }
     .ml-preview {
         font-size: 12px;
         color: #6b7ba3;

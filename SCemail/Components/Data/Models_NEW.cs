@@ -101,7 +101,8 @@ namespace SCemail.Components.Data
     string? MessageId = null,
     int? CasellaId = null,
     string? CasellaEmail = null,
-         
+    string? ThreadKey = null,
+
     string? AssegnatoA = null,
      string? Destinatari = null,   // TO
     string? Cc = null,            // CC
