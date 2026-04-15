@@ -1,10 +1,12 @@
 ﻿@page "/configurazione"
 @using MailKit.Net.Imap
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
 @using SCemail.Components.Data
 @inject IDbContextFactory<MailDbContext> DbFactory
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <div class="container my-5">
     <!-- Card Configurazione -->
@@ -57,6 +59,7 @@
                         <th>IMAP</th>
                         <th>Password</th>
                         <th class="text-center">Stato</th>
+                        <th class="text-center">Azioni</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -99,13 +102,28 @@
                             </button>
                                                         }
                                 </td>
+                                <td class="text-center">
+                                    <div class="d-flex justify-content-center gap-2">
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-primary"
+                                                @onclick="() => ApriModalModificaCasella(c)">
+                                            ✏️ Modifica
+                                        </button>
+
+                                        <button type="button"
+                                                class="btn btn-sm btn-outline-danger"
+                                                @onclick="() => RimuoviCasella(c)">
+                                            🗑 Rimuovi
+                                        </button>
+                                    </div>
+                                </td>
                             </tr>
                         }
                     }
                     else
                     {
                         <tr>
-                            <td colspan="5" class="text-center py-4 text-muted">
+                            <td colspan="6" class="text-center py-4 text-muted">
                                 Nessuna casella trovata.
                             </td>
                         </tr>
@@ -123,7 +141,7 @@
     <div class="custom-modal-wrapper">
         <div class="custom-modal card shadow">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">➕ Nuova Casella Email</h5>
+                <h5 class="mb-0">@(isEditMode ? "✏️ Modifica Casella Email" : "➕ Nuova Casella Email")</h5>
                 <button type="button" class="btn btn-light btn-sm" @onclick="ChiudiModalNuovaCasella">✖</button>
             </div>
 
@@ -166,7 +184,7 @@
                             </button>
 
                             <button type="submit" class="btn btn-success">
-                                Salva Casella
+                                @(isEditMode ? "Salva modifiche" : "Salva Casella")
                             </button>
                         </div>
                     </div>
@@ -213,15 +231,38 @@
 @code {
     private bool showPwd = false;
     private bool showAddModal = false;
+    private bool isEditMode = false;
+    private int? editingId = null;
+
     private string searchText = "";
     private string? _cp;
     private System.Threading.Timer? _refreshTimer;
+
+    private ConfigForm form = new();
+    private List<CasellaPosta> _caselle = new();
 
     private void TogglePwd() => showPwd = !showPwd;
 
     private void ApriModalNuovaCasella()
     {
         form = new ConfigForm();
+        editingId = null;
+        isEditMode = false;
+        showPwd = false;
+        showAddModal = true;
+    }
+
+    private void ApriModalModificaCasella(CasellaPosta c)
+    {
+        form = new ConfigForm
+        {
+            Email = c.Email ?? "",
+            Password = c.Password ?? "",
+            Provider = c.Provider ?? "Gmail"
+        };
+
+        editingId = c.Id;
+        isEditMode = true;
         showPwd = false;
         showAddModal = true;
     }
@@ -230,6 +271,8 @@
     {
         showAddModal = false;
         showPwd = false;
+        isEditMode = false;
+        editingId = null;
     }
 
     private IEnumerable<CasellaPosta> CaselleFiltrate =>
@@ -237,6 +280,23 @@
             string.IsNullOrWhiteSpace(searchText) ||
             (!string.IsNullOrWhiteSpace(c.Email) &&
              c.Email.Contains(searchText, StringComparison.OrdinalIgnoreCase)));
+
+    protected override void OnInitialized()
+    {
+        var uri = new Uri(Nav.Uri);
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("cp", out var cp))
+            _cp = cp;
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = DbFactory.CreateDbContext();
+        _caselle = await db.CasellePosta
+            .AsNoTracking()
+            .OrderBy(c => c.Email)
+            .ToListAsync();
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -286,14 +346,6 @@
         }
     }
 
-    protected override void OnInitialized()
-    {
-        var uri = new Uri(Nav.Uri);
-        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
-        if (query.TryGetValue("cp", out var cp))
-            _cp = cp;
-    }
-
     private void TornaHome()
     {
         if (!string.IsNullOrEmpty(_cp))
@@ -312,18 +364,6 @@
         public string Recapito { get; set; } = "";
     }
 
-    private ConfigForm form = new();
-    private List<CasellaPosta> _caselle = new();
-
-    protected override async Task OnInitializedAsync()
-    {
-        await using var db = DbFactory.CreateDbContext();
-        _caselle = await db.CasellePosta
-            .AsNoTracking()
-            .OrderBy(c => c.Email)
-            .ToListAsync();
-    }
-
     private void OnProviderChanged(ChangeEventArgs e)
     {
         form.Provider = e.Value?.ToString() ?? "Gmail";
@@ -340,6 +380,67 @@
             }
 
             await using var db = DbFactory.CreateDbContext();
+
+            if (isEditMode && editingId.HasValue)
+            {
+                var existing = await db.CasellePosta.FirstOrDefaultAsync(c => c.Id == editingId.Value);
+                if (existing is null)
+                {
+                    Snackbar.Add("Casella non trovata.", Severity.Error);
+                    return;
+                }
+
+                bool duplicateEmail = await db.CasellePosta
+                    .AsNoTracking()
+                    .AnyAsync(c => c.Id != editingId.Value &&
+                                   c.Email.ToUpper() == form.Email.ToUpper());
+
+                if (duplicateEmail)
+                {
+                    Snackbar.Add($"Esiste già una casella con email '{form.Email}'.", Severity.Warning);
+                    return;
+                }
+
+                existing.Email = form.Email;
+                existing.Password = form.Password;
+                existing.Provider = form.Provider;
+                existing.ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
+                    ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
+                        ? "imaps.pec.aruba.it"
+                        : "imap.aruba.it")
+                    : "imap.gmail.com";
+                existing.ImapPort = 993;
+                existing.UseSsl = "Y";
+
+                await db.SaveChangesAsync();
+
+                var local = _caselle.FirstOrDefault(x => x.Id == existing.Id);
+                if (local is not null)
+                {
+                    local.Email = existing.Email;
+                    local.Password = existing.Password;
+                    local.Provider = existing.Provider;
+                    local.ImapHost = existing.ImapHost;
+                    local.ImapPort = existing.ImapPort;
+                    local.UseSsl = existing.UseSsl;
+                }
+
+                _caselle = _caselle.OrderBy(c => c.Email).ToList();
+
+                ChiudiModalNuovaCasella();
+                Snackbar.Add("✅ Casella email modificata correttamente.", Severity.Success);
+
+                _ = Task.Run(async () =>
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await TestConnessione(local ?? existing);
+                        StateHasChanged();
+                    });
+                });
+
+                return;
+            }
 
             bool exists = await db.CasellePosta
                 .AsNoTracking()
@@ -388,6 +489,39 @@
         catch (Exception ex)
         {
             Snackbar.Add($"Errore durante il salvataggio: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task RimuoviCasella(CasellaPosta c)
+    {
+        try
+        {
+            var conferma = await JS.InvokeAsync<bool>("confirm",
+                $"Vuoi davvero rimuovere la casella '{c.Email}'?");
+
+            if (!conferma)
+                return;
+
+            await using var db = DbFactory.CreateDbContext();
+            var existing = await db.CasellePosta.FirstOrDefaultAsync(x => x.Id == c.Id);
+
+            if (existing is null)
+            {
+                Snackbar.Add("Casella non trovata.", Severity.Warning);
+                return;
+            }
+
+            db.CasellePosta.Remove(existing);
+            await db.SaveChangesAsync();
+
+            _caselle.RemoveAll(x => x.Id == c.Id);
+
+            Snackbar.Add($"🗑 Casella '{c.Email}' rimossa correttamente.", Severity.Success);
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"❌ Errore durante la rimozione: {ex.Message}", Severity.Error);
         }
     }
 

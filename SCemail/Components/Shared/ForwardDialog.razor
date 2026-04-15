@@ -1,5 +1,7 @@
 ﻿@using MudBlazor
 @using SCemail.Components.Data
+@using System.Text.RegularExpressions
+@inject AccessiService AccessiService
 
 <MudDialog>
     <DialogContent>
@@ -17,9 +19,9 @@
             }
         </MudSelect>
 
-        <MudTextField @bind-Value="_comment"
-                      Label="Commento"
-                      Placeholder="Scrivi un commento…"
+        <MudTextField @bind-Value="_assignedComment"
+                      Label="Commento per utente assegnato"
+                      Placeholder="Scrivi un commento per l’assegnato…"
                       Lines="3"
                       Variant="Variant.Outlined"
                       Class="mt-3"
@@ -28,23 +30,134 @@
 
         @if (RequireComment)
         {
-            <MudText Typo="Typo.caption" Class="mt-1" Style="color: var(--mud-palette-text-secondary);">
-                Il commento è obbligatorio per l’assegnazione (utente non admin).
+            <MudText Typo="Typo.caption"
+                     Class="mt-1"
+                     Style="color: var(--mud-palette-text-secondary);">
+                Il commento è obbligatorio per l’assegnazione.
             </MudText>
+        }
+
+        <div class="mention-wrap">
+             <MudTextField T="string"
+                  Label="Altri commenti e menzioni"
+                  Placeholder=@("Scrivi un commento. Per menzionare qualcuno digita @ e scegli un utente…")
+                  Value="_mentionsComment"
+                  ValueChanged="OnMentionsChanged"
+                  Lines="4"
+                  Variant="Variant.Outlined"
+                  Class="mt-3 mention-textarea"
+                  Immediate="true" />
+
+            @if (_loadingUsers)
+            {
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    Caricamento utenti…
+                </MudText>
+            }
+
+            @if (_mentionOpen && _mentionSuggestions.Any())
+            {
+                <MudPaper Class="mention-popup" Outlined="true" Elevation="8">
+                    @foreach (var u in _mentionSuggestions)
+                    {
+                        <div class="mention-item" @onclick="() => SelectMention(u)">
+                            <div class="mention-avatar">@u.Substring(0, 1).ToUpper()</div>
+                            <div class="mention-name">@u</div>
+                        </div>
+                    }
+                </MudPaper>
+            }
+        </div>
+
+        @if (_mentionedUsers.Any())
+        {
+            <div class="mentioned-users mt-2">
+                @foreach (var u in _mentionedUsers)
+                {
+                    <MudChip T="string"
+                             Size="Size.Small"
+                             Variant="Variant.Outlined"
+                             Color="Color.Primary">
+                        @u
+                    </MudChip>
+                }
+            </div>
         }
     </DialogContent>
 
     <DialogActions>
         <MudButton Variant="Variant.Text" OnClick="Cancel">Annulla</MudButton>
         <MudSpacer />
+
         <MudButton Color="Color.Primary"
                    Variant="Variant.Filled"
-                   OnClick="OkAssign"
+                   OnClick="OkAssignAndFollow"
                    Disabled="@IsConfirmDisabled">
-            Assegna
+            Assegna e segui
         </MudButton>
     </DialogActions>
 </MudDialog>
+
+<style>
+    .mention-wrap {
+        position: relative;
+        margin-top: 12px;
+    }
+
+    .mention-popup {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        z-index: 2000;
+        max-height: 240px;
+        overflow-y: auto;
+        border-radius: 12px;
+        background: white;
+        border: 1px solid #d8def5;
+        box-shadow: 0 10px 24px rgba(0,0,0,0.12);
+        padding: 6px;
+    }
+
+    .mention-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background .15s ease;
+    }
+
+        .mention-item:hover {
+            background: #f5f7ff;
+        }
+
+    .mention-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #e8eeff;
+        color: #355ad8;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 12px;
+        flex: 0 0 28px;
+    }
+
+    .mention-name {
+        font-size: 14px;
+        font-weight: 500;
+    }
+
+    .mentioned-users {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+</style>
 
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
@@ -54,28 +167,144 @@
     [Parameter] public string Title { get; set; } = "Assegna internamente";
 
     private string? _user;
-    private string? _comment;
+    private string? _assignedComment;
+    private string? _mentionsComment;
+
+    private bool _mentionOpen;
+    private bool _loadingUsers;
+    private List<string> _mentionSuggestions = new();
+    private List<string> _allUsers = new();
+    private List<string> _mentionedUsers = new();
 
     public sealed class ForwardResult
     {
         public string User { get; init; } = default!;
-        public string? Comment { get; init; }
-        public bool SoloInvio { get; init; } // lasciato per compatibilità, ma non usato
+        public string? AssignedComment { get; init; }
+        public string? MentionsComment { get; init; }
+        public List<string> MentionedUsers { get; init; } = new();
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _loadingUsers = true;
+
+        try
+        {
+            if (Users is { Count: > 0 })
+                _allUsers = NormalizeUsers(Users);
+            else
+                _allUsers = NormalizeUsers(await AccessiService.GetUserListAsync());
+        }
+        finally
+        {
+            _loadingUsers = false;
+        }
+    }
+
+    private static List<string> NormalizeUsers(IEnumerable<string> users)
+    {
+        return users
+            .Where(u => !string.IsNullOrWhiteSpace(u))
+            .Select(u => u.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(u => u)
+            .ToList();
     }
 
     private bool IsConfirmDisabled =>
         string.IsNullOrWhiteSpace(_user) ||
-        (RequireComment && string.IsNullOrWhiteSpace(_comment));
+        (RequireComment && string.IsNullOrWhiteSpace(_assignedComment));
 
-    void Cancel() => MudDialog.Cancel();
+    private void Cancel() => MudDialog.Cancel();
 
-    void OkAssign()
+    private void OnMentionsChanged(string value)
+    {
+        _mentionsComment = value ?? string.Empty;
+        UpdateMentionSuggestions(_mentionsComment);
+        ExtractMentionedUsers();
+    }
+
+    private void UpdateMentionSuggestions(string text)
+    {
+        _mentionSuggestions.Clear();
+        _mentionOpen = false;
+
+        if (string.IsNullOrWhiteSpace(text) || !_allUsers.Any())
+            return;
+
+        var match = Regex.Match(text, @"(?:^|\s)@([a-zA-Z0-9._-]*)$");
+        if (!match.Success)
+            return;
+
+        var query = match.Groups[1].Value;
+
+        if (string.IsNullOrEmpty(query))
+        {
+            _mentionSuggestions = _allUsers
+                .Take(8)
+                .ToList();
+
+            _mentionOpen = _mentionSuggestions.Count > 0;
+            return;
+        }
+
+        _mentionSuggestions = _allUsers
+            .Where(u => u.StartsWith(query, StringComparison.OrdinalIgnoreCase))
+            .Take(8)
+            .ToList();
+
+        _mentionOpen = _mentionSuggestions.Count > 0;
+    }
+    
+
+    private void SelectMention(string selectedUser)
+    {
+        if (string.IsNullOrWhiteSpace(_mentionsComment))
+        {
+            _mentionsComment = $"@{selectedUser} ";
+        }
+        else
+        {
+            _mentionsComment = Regex.Replace(
+                _mentionsComment,
+                @"(?:^|\s)@([a-zA-Z0-9._-]*)$",
+                m => $"{(m.Value.StartsWith(" ") ? " " : "")}@{selectedUser} "
+            );
+        }
+
+        _mentionOpen = false;
+        _mentionSuggestions.Clear();
+
+        ExtractMentionedUsers();
+        StateHasChanged();
+    }
+
+    private void ExtractMentionedUsers()
+    {
+        if (string.IsNullOrWhiteSpace(_mentionsComment))
+        {
+            _mentionedUsers.Clear();
+            return;
+        }
+
+        _mentionedUsers = Regex.Matches(
+                _mentionsComment,
+                @"(?<![a-zA-Z0-9._-])@([a-zA-Z0-9._-]+)",
+                RegexOptions.IgnoreCase)
+            .Select(m => m.Groups[1].Value.Trim().ToLowerInvariant())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private void OkAssignAndFollow()
     {
         var result = new ForwardResult
         {
             User = _user!,
-            Comment = _comment,
-            SoloInvio = false // ✅ sempre interno
+            AssignedComment = _assignedComment,
+            MentionsComment = _mentionsComment,
+            MentionedUsers = _mentionedUsers.ToList()
         };
 
         MudDialog.Close(DialogResult.Ok(result));

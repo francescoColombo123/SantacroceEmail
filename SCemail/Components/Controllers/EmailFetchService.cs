@@ -385,8 +385,15 @@ public class EmailFetchService : BackgroundService
 
             await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, ct);
 
-            var atts = await SaveAttachmentsMetadata(dbConn, emailId, s.Body, ct);
-            await DownloadAndStoreAttachmentsAsync(folder, s.UniqueId, casellaId, emailId, atts, s.Body, dbConn, ct);
+            var body = s.Body;
+            if (body == null)
+            {
+                var fetched = await folder.FetchAsync(new[] { s.UniqueId }, MessageSummaryItems.BodyStructure, ct);
+                body = fetched.FirstOrDefault()?.Body;
+            }
+
+            var atts = await SaveAttachmentsMetadata(dbConn, emailId, body, full, ct);
+            await DownloadAndStoreAttachmentsAsync(folder, s.UniqueId, casellaId, emailId, atts, body, dbConn, ct);
 
             _logger.LogInformation(
                 "🆕 NUOVA id={Id} [{Acc}] {Folder} uid={Uid} mid={Mid} subj='{Subj}'",
@@ -607,13 +614,42 @@ UPDATE SGAPP.EMAIL_RICEVUTE
         return $"fallback:{hash}";
     }
     private async Task<List<(int AllegatoId, string FileName, string Mime, string PartSpec)>> SaveAttachmentsMetadata(
-     OracleConnection conn, int emailId, BodyPart? body, CancellationToken ct)
+    OracleConnection conn,
+    int emailId,
+    BodyPart? body,
+    MimeMessage fullMessage,
+    CancellationToken ct)
     {
         var res = new List<(int, string, string, string)>();
-        if (body is null) return res;
-
         var list = new List<(string FileName, string Mime, string PartSpec)>();
-        CollectAttachmentParts(body, list);
+
+        // Prima provo dal BodyStructure IMAP
+        if (body != null)
+            CollectAttachmentParts(body, list);
+
+        // FALLBACK: se non trova nulla, provo dal messaggio completo
+        if (list.Count == 0 && fullMessage?.Attachments != null)
+        {
+            int fallbackIndex = 1;
+
+            foreach (var att in fullMessage.Attachments)
+            {
+                if (att is MimePart mp)
+                {
+                    var fileName = string.IsNullOrWhiteSpace(mp.FileName) ? $"allegato_{fallbackIndex}" : mp.FileName;
+                    var mime = mp.ContentType?.MimeType ?? "application/octet-stream";
+
+                    // partSpec fittizio per avere almeno la riga DB
+                    list.Add((fileName, mime, $"fallback-{fallbackIndex}"));
+                    fallbackIndex++;
+                }
+                else if (att is MessagePart)
+                {
+                    list.Add(($"allegato_{fallbackIndex}.eml", "message/rfc822", $"fallback-{fallbackIndex}"));
+                    fallbackIndex++;
+                }
+            }
+        }
 
         foreach (var a in list)
         {
@@ -640,10 +676,11 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
                     continue;
                 }
             }
+
             const string sql = @"
-            INSERT INTO SGAPP.EMAIL_ALLEGATI (EMAIL_ID, NOME_FILE, MIME_TYPE, PART_SPEC)
-            VALUES (:p_eid, :p_name, :p_mime, :p_part)
-            RETURNING ID INTO :p_id";
+INSERT INTO SGAPP.EMAIL_ALLEGATI (EMAIL_ID, NOME_FILE, MIME_TYPE, PART_SPEC)
+VALUES (:p_eid, :p_name, :p_mime, :p_part)
+RETURNING ID INTO :p_id";
 
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
             cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
@@ -651,36 +688,41 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
             cmd.Parameters.Add("p_mime", OracleDbType.Varchar2, 255).Value = a.Mime ?? "application/octet-stream";
             cmd.Parameters.Add("p_part", OracleDbType.Varchar2, 64).Value = a.PartSpec ?? "";
 
-            var outId = new OracleParameter("p_id", OracleDbType.Int32) { Direction = ParameterDirection.Output };
+            var outId = new OracleParameter("p_id", OracleDbType.Int32)
+            {
+                Direction = ParameterDirection.Output
+            };
             cmd.Parameters.Add(outId);
 
             await cmd.ExecuteNonQueryAsync(ct);
 
-            var id = (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od) ? od.ToInt32() : Convert.ToInt32(outId.Value);
+            var id = (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od)
+                ? od.ToInt32()
+                : Convert.ToInt32(outId.Value);
+
             res.Add((id, a.FileName ?? "allegato", a.Mime ?? "application/octet-stream", a.PartSpec ?? ""));
         }
 
         return res;
     }
 
-
     private static void CollectAttachmentParts(BodyPart part, List<(string FileName, string Mime, string PartSpec)> acc)
     {
         if (part is BodyPartBasic basic)
         {
-            var fileName = basic.FileName;
-            var disp = basic.ContentDisposition?.Disposition;
+            var fileName = basic.FileName?.Trim();
+            var mime = basic.ContentType?.MimeType ?? "application/octet-stream";
+            var disp = basic.ContentDisposition?.Disposition?.Trim();
 
-             var isAttachment =
-                string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrEmpty(fileName) && !string.Equals(disp, "inline", StringComparison.OrdinalIgnoreCase));
-
+            var isAttachment =
+                !string.IsNullOrWhiteSpace(fileName) ||
+                string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase);
 
             if (isAttachment)
             {
                 acc.Add((
                     string.IsNullOrWhiteSpace(fileName) ? "allegato" : fileName,
-                    basic.ContentType?.MimeType ?? "application/octet-stream",
+                    mime,
                     basic.PartSpecifier
                 ));
             }
@@ -722,18 +764,17 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
     }
 
     private async Task DownloadAndStoreAttachmentsAsync(
-     IMailFolder folder,
-     UniqueId uid,
-     int casellaId,
-     int emailId,
-     List<(int AllegatoId, string FileName, string Mime, string PartSpec)> attachments,
-     BodyPart? bodyStructure,
-     OracleConnection conn,
-     CancellationToken ct)
+    IMailFolder folder,
+    UniqueId uid,
+    int casellaId,
+    int emailId,
+    List<(int AllegatoId, string FileName, string Mime, string PartSpec)> attachments,
+    BodyPart? bodyStructure,
+    OracleConnection conn,
+    CancellationToken ct)
     {
         if (attachments == null || attachments.Count == 0) return;
 
-        // se bodyStructure è null, lo ricarico al volo (fallback)
         if (bodyStructure == null)
         {
             var sums = await folder.FetchAsync(new[] { uid }, MessageSummaryItems.BodyStructure, ct);
@@ -758,18 +799,62 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
                 filePath = Path.Combine(emailDir, $"{a.AllegatoId}_{safeName}");
                 var relPath = Path.Combine(casellaId.ToString(), emailId.ToString(), $"{a.AllegatoId}_{safeName}");
 
+                // fallback: allegato letto dal messaggio completo
+                if (!string.IsNullOrWhiteSpace(a.PartSpec) &&
+                    a.PartSpec.StartsWith("fallback-", StringComparison.OrdinalIgnoreCase))
+                {
+                    var full = await folder.GetMessageAsync(uid, ct);
+                    var allAtts = full.Attachments.ToList();
+
+                    var suffix = a.PartSpec.Substring("fallback-".Length);
+
+                    if (int.TryParse(suffix, out var fallbackIndex))
+                    {
+                        var idx = fallbackIndex - 1;
+
+                        if (idx >= 0 && idx < allAtts.Count)
+                        {
+                            var fallbackEntity = allAtts[idx];
+
+                            long fallbackSize;
+                            await using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                            {
+                                if (fallbackEntity is MimePart fallbackMp)
+                                    await fallbackMp.Content.DecodeToAsync(fs, ct);
+                                else if (fallbackEntity is MessagePart fallbackMsgPart)
+                                    await fallbackMsgPart.Message.WriteToAsync(fs, ct);
+                                else
+                                    await fallbackEntity.WriteToAsync(fs, ct);
+
+                                await fs.FlushAsync(ct);
+                                fallbackSize = fs.Length;
+                            }
+
+                            await UpdateAttachmentPathAsync(conn, a.AllegatoId, relPath, fallbackSize, false, ct);
+                            continue;
+                        }
+                    }
+
+                    _logger.LogWarning(
+                        "Fallback attachment non trovato: emailId={EmailId} allegatoId={AllegatoId} partSpec='{PartSpec}'",
+                        emailId, a.AllegatoId, a.PartSpec);
+                    continue;
+                }
+
                 var bp = FindBodyPartBySpecifier(bodyStructure, a.PartSpec);
                 if (bp == null)
                 {
-                    _logger.LogWarning("BodyPart non trovato: emailId={EmailId} allegatoId={AllegatoId} partSpec='{PartSpec}'",
+                    _logger.LogWarning(
+                        "BodyPart non trovato: emailId={EmailId} allegatoId={AllegatoId} partSpec='{PartSpec}'",
                         emailId, a.AllegatoId, a.PartSpec ?? "(null)");
                     continue;
                 }
 
-                var entity = await folder.GetBodyPartAsync(uid, bp, ct);
-                if (entity == null)
+                var imapEntity = await folder.GetBodyPartAsync(uid, bp, ct);
+                if (imapEntity == null)
                 {
-                    _logger.LogWarning("GetBodyPartAsync ha restituito NULL: emailId={EmailId} allegatoId={AllegatoId} partSpec='{PartSpec}'",
+                    _logger.LogWarning(
+                        "GetBodyPartAsync ha restituito NULL: emailId={EmailId} allegatoId={AllegatoId} partSpec='{PartSpec}'",
                         emailId, a.AllegatoId, a.PartSpec ?? "(null)");
                     continue;
                 }
@@ -777,20 +862,23 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
                 long size;
                 await using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
                 {
-                    if (entity is MimePart mp) await mp.Content.DecodeToAsync(fs, ct);
-                    else if (entity is MessagePart msgPart) await msgPart.Message.WriteToAsync(fs, ct);
-                    else await entity.WriteToAsync(fs, ct);
+                    if (imapEntity is MimePart mp)
+                        await mp.Content.DecodeToAsync(fs, ct);
+                    else if (imapEntity is MessagePart msgPart)
+                        await msgPart.Message.WriteToAsync(fs, ct);
+                    else
+                        await imapEntity.WriteToAsync(fs, ct);
 
                     await fs.FlushAsync(ct);
                     size = fs.Length;
                 }
 
                 const string upd = @"
-UPDATE SGAPP.EMAIL_ALLEGATI
-   SET FILE_PATH = :p_path,
-       FILE_SIZE = :p_size
- WHERE ID = :p_id
-   AND FILE_PATH IS NULL";
+                UPDATE SGAPP.EMAIL_ALLEGATI
+                   SET FILE_PATH = :p_path,
+                       FILE_SIZE = :p_size
+                 WHERE ID = :p_id
+                   AND FILE_PATH IS NULL";
 
                 await using var cmd = new OracleCommand(upd, conn) { BindByName = true };
                 cmd.Parameters.Add("p_path", OracleDbType.Varchar2, 1024).Value = relPath;
@@ -800,7 +888,13 @@ UPDATE SGAPP.EMAIL_ALLEGATI
             }
             catch (Exception ex)
             {
-                try { if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath)) File.Delete(filePath); } catch { }
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+                        File.Delete(filePath);
+                }
+                catch { }
+
                 _logger.LogError(ex, "Errore salvataggio allegato ID={AllegatoId} email={EmailId}", a.AllegatoId, emailId);
             }
         }

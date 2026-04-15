@@ -106,7 +106,10 @@ namespace SCemail.Components.Data
     string? AssegnatoA = null,
      string? Destinatari = null,   // TO
     string? Cc = null,            // CC
-    string? Ccn = null            // BCC/CCN
+    string? Ccn = null,           // BCC/CCN
+    string? LettoSeguita = null,  // Y / N
+    DateTime? LettoSeguitaIl = null,
+        bool CanArchive = true
 
  );
 

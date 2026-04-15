@@ -58,7 +58,6 @@ namespace SCemail.Components.Data
             const string sql = @"
         SELECT LOWER(UTENTE)
         FROM INFOUSER
-        WHERE REGEXP_LIKE(UTENTE, '^[a-z]\.[a-z]+$')
         ORDER BY UTENTE";
 
             await using var cmd = new OracleCommand(sql, conn);

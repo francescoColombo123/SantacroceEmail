@@ -14,6 +14,7 @@
 @using static SCemail.Components.Data.MailService_NEW
 @inject NavigationManager Nav
 @inject MailService_NEW MailSvc
+@inject MailService MailSvc1
 @inject SCemail.Components.Data.AccessiService AccessiSrv
 @inject PostItService postItService
 @inject IDialogService DialogService
@@ -47,7 +48,6 @@ else
                 </MudButton>
 
                 <ul class="folder-list folder-icons">
-                    @* Se admin → aggiunge la cartella Amministrazione *@
                     @if (_isAdmin)
                     {
                         <li @onclick="@(() => ChangeFolder("admin"))"
@@ -57,6 +57,7 @@ else
                             </MudTooltip>
                         </li>
                     }
+
                     @if (_hasAdminCaselle)
                     {
                         <li @onclick="@(() => ChangeFolder("unassigned"))"
@@ -68,8 +69,15 @@ else
                                 </div>
                             </MudTooltip>
                         </li>
+
+                        <li @onclick="@(() => ChangeFolder("mailfollowed"))"
+                            class="@IsActive("mailfollowed")">
+                            <MudTooltip Text="Mail seguite" Placement="Placement.Right">
+                                <MudIcon Icon="@Icons.Material.Filled.Visibility" />
+                            </MudTooltip>
+                        </li>
                     }
-                    @* Cartelle normali *@
+
                     @foreach (var f in _folders)
                     {
                         <li @onclick="@(() => ChangeFolder(f.UiName))"
@@ -89,16 +97,13 @@ else
                             </MudTooltip>
                         </li>
                     }
+
                     <li @onclick="@(() => ChangeFolder("mentions"))"
                         class="@IsActive("mentions")">
                         <MudTooltip Text="Menzioni" Placement="Placement.Right">
                             <MudIcon Icon="@Icons.Material.Filled.Campaign" />
                         </MudTooltip>
                     </li>
-
-
-
-
                 </ul>
 
             </div>
@@ -121,7 +126,7 @@ else
                                 <MudIconButton Icon="@Icons.Material.Filled.Delete"
                                                Size="Size.Small"
                                                Color="Color.Error"
-                                               OnClick="@(() => EliminaPostIt(p.Id))" />
+                                               OnClick="@(() => ConfermaEliminaPostIt(p.Id))" />
                             </div>
 
                             <div class="postit-title">@p.Titolo</div>
@@ -386,15 +391,15 @@ else
                                 {
                                     <!-- BLOCCO TOP: MAIL RICEVUTE -->
                                     <div class="inbox-block">
-                                        <div class="inbox-block-head">MAIL RICEVUTE</div>
+                                        <div class="inbox-block-head">EMAIL ASSEGNATE (Posta in Arrivo)</div>
 
                                         <div id="inboxScroll" class="inbox-block-body">
                                             <ul class="mail-ul">
                                                 @foreach (var item in _emails)
                                                 {
                                                     <li @key="item.Id"
-                                                        class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
-                                                        @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
+                                                        class="mail-row2 @GetRowClass(item)"
+                                                        @onclick="@(() => OpenEmailAndMarkRead(item, null))">
 
                                                         <div class="status-strip"></div>
 
@@ -473,13 +478,16 @@ else
 
                                                                     <div class="ml-tools" @onclick:stopPropagation="true">
 
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                                       Color="Color.Primary"
-                                                                                       Size="Size.Small"
-                                                                                       Title="Assegna"
-                                                                                       OnClick="@(() => Forward(item))" />
+                                                                        @if (CanAssignInCurrentFolder())
+                                                                        {
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                           Color="Color.Primary"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Assegna"
+                                                                                           OnClick="@(() => Forward(item))" />
+                                                                        }
 
-                                                                        @if (_folder is "inbox" or "mentions")
+                                                                        @if (CanArchiveInCurrentFolder())
                                                                         {
                                                                             <MudIconButton Icon="@Icons.Material.Filled.Archive"
                                                                                            Color="Color.Success"
@@ -487,8 +495,24 @@ else
                                                                                            Title="Archivia"
                                                                                            OnClick="@(() => Archive(item))" />
                                                                         }
+                                                                        else if (_folder == "mentions" && item.CanArchive)
+                                                                        {
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                           Color="Color.Success"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Archivia"
+                                                                                           OnClick="@(() => Archive(item))" />
+                                                                        }
+                                                                        else if (_folder == "mentions")
+                                                                        {
+                                                                            <MudIconButton Icon="@Icons.Material.Filled.Archive"
+                                                                                           Color="Color.Default"
+                                                                                           Size="Size.Small"
+                                                                                           Title="Puoi archiviare solo dopo aver risposto alla menzione"
+                                                                                           Disabled="true" />
+                                                                        }
 
-                                                                        @if (_folder == "myarchive")
+                                                                        @if (CanUnarchiveInCurrentFolder())
                                                                         {
                                                                             <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
                                                                                            Color="Color.Primary"
@@ -532,8 +556,8 @@ else
                                                         @foreach (var item in sec.Emails)
                                                         {
                                                             <li @key="item.Id"
-                                                                class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
-                                                                @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
+                                                                class="mail-row2 @GetRowClass(item)"
+                                                                @onclick="@(() => OpenEmailAndMarkRead(item, sec.Nome))">
 
                                                                 <div class="status-strip"></div>
 
@@ -610,13 +634,16 @@ else
                                                                             }
 
                                                                             <div class="ml-tools">
-                                                                                <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                                               Color="Color.Primary"
-                                                                                               Size="Size.Small"
-                                                                                               Title="Assegna"
-                                                                                               OnClick="@(() => Forward(item))" />
+                                                                                @if (CanAssignInCurrentFolder())
+                                                                                {
+                                                                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                                   Color="Color.Primary"
+                                                                                                   Size="Size.Small"
+                                                                                                   Title="Assegna"
+                                                                                                   OnClick="@(() => Forward(item))" />
+                                                                                }
 
-                                                                                @if (_folder is "inbox" or "mentions")
+                                                                                @if (CanArchiveInCurrentFolder())
                                                                                 {
                                                                                     <MudIconButton Icon="@Icons.Material.Filled.Archive"
                                                                                                    Color="Color.Success"
@@ -625,7 +652,7 @@ else
                                                                                                    OnClick="@(() => Archive(item))" />
                                                                                 }
 
-                                                                                @if (_folder == "myarchive")
+                                                                                @if (CanUnarchiveInCurrentFolder())
                                                                                 {
                                                                                     <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
                                                                                                    Color="Color.Primary"
@@ -661,8 +688,8 @@ else
                                     @foreach (var item in _emails)
                                     {
                                         <li @key="item.Id"
-                                            class="mail-row2 @(item.Aperto == "Y" ? "read" : "unread")"
-                                                @onclick="@(() => OpenEmailAndMarkRead(item, ""))">
+                                                class="mail-row2 @GetRowClass(item)"
+                                                @onclick="@(() => OpenEmailAndMarkRead(item, null))">
 
                                             <div class="status-strip"></div>
 
@@ -739,13 +766,16 @@ else
                                                             }
 
                                                             <div class="ml-tools">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
-                                                                               Color="Color.Primary"
-                                                                               Size="Size.Small"
-                                                                               Title="Assegna"
-                                                                               OnClick="@(() => Forward(item))" />
+                                                                @if (CanAssignInCurrentFolder())
+                                                                {
+                                                                    <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
+                                                                                   Color="Color.Primary"
+                                                                                   Size="Size.Small"
+                                                                                   Title="Assegna"
+                                                                                   OnClick="@(() => Forward(item))" />
+                                                                }
 
-                                                                @if (_folder is "inbox" or "mentions")
+                                                                @if (CanArchiveInCurrentFolder())
                                                                 {
                                                                     <MudIconButton Icon="@Icons.Material.Filled.Archive"
                                                                                    Color="Color.Success"
@@ -754,7 +784,7 @@ else
                                                                                    OnClick="@(() => Archive(item))" />
                                                                 }
 
-                                                                @if (_folder == "myarchive")
+                                                                @if (CanUnarchiveInCurrentFolder())
                                                                 {
                                                                     <MudIconButton Icon="@Icons.Material.Filled.Unarchive"
                                                                                    Color="Color.Primary"
@@ -773,7 +803,7 @@ else
                                 </ul>
                                 }
 
-                                /*@if (_loadingList)
+                                @if (_loadingList)
                                 {
                                     <div class="load-more">
                                         <div class="dots-loader small">
@@ -781,7 +811,7 @@ else
                                         </div>
                                         <span class="load-text">Carico…</span>
                                     </div>
-                                }*/
+                                }
                             }
                         </div>
                     </div>
@@ -952,7 +982,7 @@ else
         </main>
         @if (_showPostItPopup)
         {
-            <div class="postit-composer">
+            <div class="postit-composer" @onkeydown="HandlePostItKeyDown">
 
                 <div class="composer-header">
                     <span>@(_isEditMode ? "✏️ Modifica post-it" : "📝 Nuovo post-it")</span>
@@ -964,6 +994,7 @@ else
 
                 <div class="composer-body">
                     <MudTextField T="string"
+                                  @ref="_postItTitleRef"
                                   Placeholder="Titolo"
                                   Variant="Variant.Outlined"
                                   Dense="true"
@@ -971,12 +1002,14 @@ else
                                   ValueChanged="v => _popupTitle = v" />
 
                     <MudTextField T="string"
+                                  @ref="_postItTextRef"
                                   Lines="4"
                                   Placeholder="Scrivi il post-it…"
                                   Variant="Variant.Outlined"
                                   Dense="true"
                                   Value="@_popupText"
-                                  ValueChanged="v => _popupText = v" />
+                                  ValueChanged="v => _popupText = v"
+                                  OnKeyDown="HandlePostItTextKeyDown" />
                 </div>
 
                 <div class="composer-actions">
@@ -985,7 +1018,8 @@ else
                         Annulla
                     </MudButton>
 
-                    <MudButton Color="Color.Primary"
+                    <MudButton @ref="_postItSaveRef"
+                               Color="Color.Primary"
                                Variant="Variant.Filled"
                                Disabled="@string.IsNullOrWhiteSpace(_popupText)"
                                OnClick="SalvaPostIt">
@@ -1134,6 +1168,7 @@ else
         "all" => "Tutti i messaggi",
         "drafts" => "Bozze",
         "unassigned" => "Email non assegnate (caselle admin)",
+        "mailfollowed" => "Mail seguite",
 
         _ => "Posta"
     };
@@ -1724,22 +1759,27 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // ✅ inbox: attacco listener a più div
-        if (!_isLoading && !_scrollListenersAttached && _folder == "inbox")
+        if (!_isLoading && !_scrollListenersAttached)
         {
-            await JS.InvokeVoidAsync("scrollSections.attach", "inboxScroll", _scrollDotNetRef, "OnAnyScrollBottom", 120);
+            await Task.Delay(50);
 
-            foreach (var sec in _sezioniVm)
-                await JS.InvokeVoidAsync("scrollSections.attach", sec.ScrollDivId, _scrollDotNetRef, "OnAnyScrollBottom", 120);
+            await JS.InvokeVoidAsync("scrollSections.attach", "mailScroll", _scrollDotNetRef, "OnAnyScrollBottom", 120);
+
+            if (_folder == "inbox")
+            {
+                await JS.InvokeVoidAsync("scrollSections.attach", "inboxScroll", _scrollDotNetRef, "OnAnyScrollBottom", 120);
+
+                foreach (var sec in _sezioniVm)
+                    await JS.InvokeVoidAsync("scrollSections.attach", sec.ScrollDivId, _scrollDotNetRef, "OnAnyScrollBottom", 120);
+            }
 
             _scrollListenersAttached = true;
         }
 
-        if (!_isLoading && !_listenerAttached && _scrollDiv.Context != null)
+        if (_showPostItPopup && _focusPostItTitle && _postItTitleRef is not null)
         {
-            await JS.InvokeVoidAsync("initMailScrollListener", _dotNetRef, _scrollDiv);
-            _listenerAttached = true;
-            Console.WriteLine("🟢 Scroll listener JS inizializzato");
+            _focusPostItTitle = false;
+            await _postItTitleRef.FocusAsync();
         }
     }
     public void Dispose()
@@ -1767,14 +1807,43 @@ else
     [JSInvokable]
     public async Task OnAnyScrollBottom(string elementId)
     {
-        if (_scrollLoadLocks.Contains(elementId)) return;
+        Console.WriteLine($"SCROLL BOTTOM da: {elementId} | folder={_folder}");
+
+        if (_scrollLoadLocks.Contains(elementId))
+            return;
+
         _scrollLoadLocks.Add(elementId);
 
         try
         {
+            if (elementId == "mailScroll")
+            {
+                Console.WriteLine("👉 mailScroll triggerato");
+
+                if (_folder == "sent")
+                {
+                    if (!_sentLoading && _sentHasMore)
+                        await LoadMoreSentAsync();
+                    return;
+                }
+
+                if (_folder == "drafts")
+                {
+                    if (!_loadingDrafts && _hasMoreDrafts)
+                        await LoadMoreDrafts(_searchText);
+                    return;
+                }
+
+                if (!_loadingEmails && _hasMore)
+                    await LoadMoreEmails(_caselleIds, filtro: _searchWord);
+
+                return;
+            }
+
             if (elementId == "inboxScroll")
             {
-                // carica altre inbox
+                Console.WriteLine("👉 inboxScroll triggerato");
+
                 if (!_loadingEmails && _hasMore)
                     await LoadMoreEmails(_caselleIds, filtro: _searchWord);
 
@@ -1783,7 +1852,10 @@ else
 
             var sec = _sezioniVm.FirstOrDefault(s => s.ScrollDivId == elementId);
             if (sec != null)
+            {
+                Console.WriteLine($"👉 sezione triggerata: {sec.Nome}");
                 await LoadMoreSezione(sec);
+            }
         }
         finally
         {
@@ -1791,13 +1863,63 @@ else
         }
     }
 
+    private void ResetFolderState()
+    {
+        // lista principale
+        _currentIndex = 0;
+        _hasMore = true;
+        _emails.Clear();
+
+        // dettaglio
+        _selectedId = null;
+        _thread.Clear();
+        _comments.Clear();
+
+        // sent
+        _sentStart = 0;
+        _sentHasMore = true;
+        _sentLoading = false;
+        _sent.Clear();
+        _sentSelectedId = null;
+        _sentDetail = null;
+        _sentSearch = null;
+
+        // drafts
+        _draftIndex = 0;
+        _hasMoreDrafts = true;
+        _loadingDrafts = false;
+        _drafts.Clear();
+
+        // inbox sections
+        _sezioni.Clear();
+        _sezioniVm.Clear();
+
+        // filtri UI
+        _searchWord = null;
+        _searchText = null;
+        _addrInput = null;
+        _selectedAddressChip = null;
+        _showAddrSuggestions = false;
+        _addrSuggestions.Clear();
+
+        // ui/scroll
+        _loadingEmails = false;
+        _loadingList = false;
+        _loadingDetail = false;
+
+        _scrollListenersAttached = false;
+        _scrollLoadLocks.Clear();
+    }
+    
     protected override async Task OnParametersSetAsync()
     {
-
         var uri = Nav.ToAbsoluteUri(Nav.Uri);
         var q = QueryHelpers.ParseQuery(uri.Query);
         _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
         _folder = q.TryGetValue("folder", out var f) ? f.ToString().ToLower() : "inbox";
+
+        ResetFolderState();
+
         _allUsers = await MailSvc.GetUserListAsync();
 
         _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
@@ -1816,10 +1938,7 @@ else
         // per esempio:
         //_isAdmin = await AccessiSrv.IsAdminAsync(_utente);
         // oppure lascialo se lo gestisci altrove
-        if (_folder == "sent")
-        {
-            await LoadMoreSentAsync(reset: true);
-        }
+        
         if (_folder == "admin" && _isAdmin)
         {
             Nav.NavigateTo($"/admin-dashboard?cp={_cp}", true);
@@ -1835,94 +1954,86 @@ else
             var unreadAll = 0;
 
             _folders = new()
-        {
-            new FolderItem_NEW("inbox",     "Posta in arrivo", Icons.Material.Filled.Inbox,   1, unreadInbox),
+    {
+        new FolderItem_NEW("inbox",     "Posta in arrivo", Icons.Material.Filled.Inbox,   1, unreadInbox),
+        new FolderItem_NEW("sent",      "Inviate",         Icons.Material.Filled.Send,    2, 0),
+        new FolderItem_NEW("myarchive", "Mio archivio",    Icons.Material.Filled.Archive, 2, unreadArchive),
+        new FolderItem_NEW("all",       "Tutti i messaggi", Icons.Material.Filled.AllInbox, 3, unreadAll),
+        new FolderItem_NEW("drafts",    "Bozze",           Icons.Material.Filled.Drafts, 4, _draftsUnreadCount)
+    };
 
-            new FolderItem_NEW("sent",      "Inviate",          Icons.Material.Filled.Send,    2, 0),
-
-            new FolderItem_NEW("myarchive", "Mio archivio",    Icons.Material.Filled.Archive, 2, unreadArchive),
-            new FolderItem_NEW("all",       "Tutti i messaggi", Icons.Material.Filled.AllInbox, 3, unreadAll),
-            new FolderItem_NEW("drafts", "Bozze", Icons.Material.Filled.Drafts, 4, _draftsUnreadCount)
-
-        };
-
-        _adminCaselleIds.Clear();
-        _unassignedCount = 0;
+            _adminCaselleIds.Clear();
+            _unassignedCount = 0;
 
             using (var db = DbFactory.CreateDbContext())
             {
                 _adminCaselleIds = await db.Database
-    .SqlQuery<int>($@"
-        SELECT DISTINCT CASELLA_ID
-        FROM SGAPP.CASELLA_ABILITAZIONI
-        WHERE USERNAME = {_utente}
-          AND NVL(IS_ADMIN,0) = 1
-    ")
-    .ToListAsync();
+                    .SqlQuery<int>($@"
+                SELECT DISTINCT CASELLA_ID
+                FROM SGAPP.CASELLA_ABILITAZIONI
+                WHERE USERNAME = {_utente}
+                  AND NVL(IS_ADMIN,0) = 1
+            ")
+                    .ToListAsync();
             }
 
-        // opzionale ma consigliato: incrocio con caselle abilitate (sicurezza)
-        if (_adminCaselleIds.Count > 0 && _caselleIds?.Any() == true)
-            _adminCaselleIds = _adminCaselleIds.Intersect(_caselleIds).ToList();
+            if (_adminCaselleIds.Count > 0 && _caselleIds?.Any() == true)
+                _adminCaselleIds = _adminCaselleIds.Intersect(_caselleIds).ToList();
 
-        // ✅ count non assegnate (solo se ha admin caselle)
-        if (_adminCaselleIds.Count > 0)
+            if (_adminCaselleIds.Count > 0)
                 _unassignedCount = await MailSvc.CountUnassignedForAdminAsync(_adminCaselleIds);
-            // ⬇️ IMPORTANTE: se sono in admin NON carico le mail normali
-            if (_folder != "admin")
+
+            // ✅ carico SOLO la cartella giusta
+            if (_folder == "sent")
             {
-                // Carica la lista normale di email
+                await LoadMoreSentAsync(reset: true);
+            }
+            else if (_folder == "drafts")
+            {
+                await LoadMoreDrafts();
+            }
+            else if (_folder != "admin")
+            {
                 await LoadMoreEmails(_caselleIds);
             }
-            else
-            {
-                if (_isAdmin)
-                {
-                    // Carica la dashboard admin
-                    _loadingDashboard = true;
-                    _emailInLavorazione = await GetEmailInLavorazioneAsync();
-                    _emailConcluse = await GetEmailCompletateAsync();
 
-                    _emailInLavorazioneFiltrate = _emailInLavorazione;
-                    _emailConcluseFiltrate = _emailConcluse;
-
-                    utenti = _emailInLavorazione
-                       .Concat(_emailConcluse)
-                       .Select(x => x.AssegnatoA)
-                       .Where(x => !string.IsNullOrWhiteSpace(x))
-                       .Distinct()
-                       .OrderBy(x => x)
-                       .ToList();
-
-                    utentiFiltrati = utenti;
-                    _loadingDashboard = false;
-                }
-            }
             if (_folder == "inbox")
             {
-                // 1) carico elenco sezioni attive
                 _sezioni = await MailSvc.GetSezioniInboxAsync(soloAttive: true);
 
-                // 2) preparo VM per ciascuna sezione
                 _sezioniVm = _sezioni
                     .Select(s => new SezioneVm
                     {
-                        IdSezione = s.Id,      // <-- se il campo si chiama diverso, adegua
+                        IdSezione = s.Id,
                         Nome = s.Nome ?? $"Sezione {s.Ordine}",
                         PageSize = _pageSize
                     })
                     .ToList();
 
-                // 3) carico la prima pagina di ogni sezione (così vedi subito contenuto)
                 foreach (var sec in _sezioniVm)
                     await LoadMoreSezione(sec);
             }
-
         }
 
         _isLoading = false;
     }
 
+    private string GetRowClass(EmailListItem_NEW item)
+{
+    if (_folder == "mailfollowed")
+        return item.LettoSeguita == "Y" ? "read" : "unread";
+
+    return item.Aperto == "Y" ? "read" : "unread";
+}
+
+    private bool CanAssignInCurrentFolder()
+        => _folder is "inbox" or "mentions" or "unassigned";
+
+    private bool CanArchiveInCurrentFolder()
+        => _folder is "inbox" or "mailfollowed";
+
+    private bool CanUnarchiveInCurrentFolder()
+        => _folder == "myarchive";
     private async Task LoadMoreSezione(SezioneVm sec)
     {
         if (sec.Loading || !sec.HasMore) return;
@@ -2276,14 +2387,20 @@ else
         if (result.Data is true)
             Snackbar.Add("Risposta a tutti inviata ✅", Severity.Success);
     }
+    
     private async Task Archive(EmailListItem_NEW item)
     {
+        if (_folder == "mentions" && !item.CanArchive)
+        {
+            Snackbar.Add("Puoi archiviare questa menzione solo dopo aver risposto.", Severity.Warning);
+            return;
+        }
+
         await MailSvc.ArchiveEmailAsync(item.Id, _utente!);
 
         Snackbar.Add("Email archiviata ✔", Severity.Success);
 
-        // ✅ se archivi da inbox o mentions, toglila dalla lista corrente
-        if (_folder is "inbox" or "mentions")
+        if (_folder is "inbox" or "mentions" or "mailfollowed")
             _emails.RemoveAll(x => x.Id == item.Id);
 
         StateHasChanged();
@@ -2351,7 +2468,24 @@ else
         }).ToList();
     }
 
+    private async Task ConfermaEliminaPostIt(long id)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            "Conferma eliminazione",
+            (MarkupString)"Vuoi eliminare questo post-it?",
+            yesText: "Elimina",
+            noText: "Annulla");
 
+        if (confirm == true)
+            await EliminaPostIt(id);
+    }
+
+    private async Task EliminaPostIt(int id)
+    {
+        await postItService.DeleteAsync(id);
+        _postIts = await postItService.GetByUtenteAsync(_utente!);
+        StateHasChanged();
+    }
 
     private async Task MoveToFolder(int emailId, string newFolder)
     {
@@ -2385,6 +2519,7 @@ else
 
     private bool _loadingEmails = false;
 
+   
     public async Task LoadMoreEmails(List<int>? casellaIds = null, string? filtro = null)
     {
         if (_loadingEmails)
@@ -2400,90 +2535,118 @@ else
                 return;
 
             casellaIds ??= _caselleIds ?? await AccessiSrv.GetCaselleAbilitateAsync(_utente);
+            casellaIds = casellaIds.Distinct().ToList();
+
             string? filtroEffettivo = (filtro ?? _searchWord ?? _searchText)?.Trim();
-            // 🔔 MENTIONS (intoccato)
+
+            // 🔔 MENTIONS
             if (_folder == "mentions")
             {
-                var (page, total) =
-                    await MailSvc.GetMentionedEmailsPagedSafeAsync(
-                        _utente!,
-                        _currentIndex,
-                        _pageSize
-                    );
+                var (page, total) = await MailSvc.GetMentionedEmailsPagedSafeAsync(
+                    _utente!,
+                    _currentIndex,
+                    _pageSize
+                );
 
                 if (_currentIndex == 0)
                     _emails = page;
                 else
                     _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
-                _currentIndex += _pageSize;
-                _hasMore = _emails.Count < total;
+                _currentIndex += page.Count;
+                _hasMore = page.Count == _pageSize;
 
                 _mentionsCount = _emails.Count(x => x.Aperto == "N");
                 return;
             }
 
+            // 👀 MAIL SEGUITE
+            if (_folder == "mailfollowed")
+            {
+                var (pageFollowed, totalFollowed) = await MailSvc.GetFollowedEmailsPagedAsync(
+                    utente: _utente!,
+                    start: _currentIndex,
+                    pageSize: _pageSize,
+                    word: filtroEffettivo,
+                    address: _selectedAddressChip?.Email
+                );
+
+                if (_currentIndex == 0)
+                    _emails = pageFollowed;
+                else
+                    _emails.AddRange(pageFollowed.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                _currentIndex += pageFollowed.Count;
+                _hasMore = _emails.Count < totalFollowed;
+
+                return;
+            }
+
+            // 📭 NON ASSEGNATE
             if (_folder == "unassigned")
             {
-                if (string.IsNullOrWhiteSpace(_utente))
-                {
-                    _emails.Clear();
-                    _hasMore = false;
-                    return;
-                }
-
                 var wordUnassigned = filtroEffettivo;
                 var addrUnassigned = _selectedAddressChip?.Email;
 
-                var (pageUnassigned, totalUnassigned) =
-                    await MailSvc.GetUnassignedForAdminPagedAsync(
-                        utente: _utente!,
-                        start: _currentIndex,
-                        pageSize: _pageSize,
-                        word: wordUnassigned,
-                        address: addrUnassigned
-                    );
+                var (pageUnassigned, totalUnassigned) = await MailSvc.GetUnassignedForAdminPagedAsync(
+                    utente: _utente!,
+                    start: _currentIndex,
+                    pageSize: _pageSize,
+                    word: wordUnassigned,
+                    address: addrUnassigned
+                );
 
-                if (_currentIndex == 0) _emails = pageUnassigned;
-                else _emails.AddRange(pageUnassigned.Where(x => !_emails.Any(e => e.Id == x.Id)));
+                if (_currentIndex == 0)
+                    _emails = pageUnassigned;
+                else
+                    _emails.AddRange(pageUnassigned.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
-                _currentIndex += _pageSize;
+                _currentIndex += pageUnassigned.Count;
                 _hasMore = _emails.Count < totalUnassigned;
 
-                _unassignedCount = totalUnassigned; // ✅ così count coerente col filtro
+                _unassignedCount = totalUnassigned;
                 return;
             }
+
+            // 📝 BOZZE
             if (_folder == "drafts")
             {
                 await LoadMoreDrafts(filtroEffettivo);
                 return;
             }
 
-            // 🔍 RICERCA VELOCE (MITTENTE + OGGETTO)
             var word = filtroEffettivo;
-            var addr = _selectedAddressChip?.Email; // <-- solo se scelto da rubrica
+            var addr = _selectedAddressChip?.Email;
 
+            // 🔎 RICERCA AVANZATA
             if ((!string.IsNullOrWhiteSpace(word) && word.Length >= 2) || !string.IsNullOrWhiteSpace(addr))
             {
-               var (page, total) = await MailSvc.SearchEmailsAdvancedAsync(
-                        casellaIds: casellaIds,
-                        start: _currentIndex,
-                        pageSize: _pageSize,
-                        word: word,
-                        address: addr,
-                        folderUi: _folder,
-                        utente: _utente
-                    );
+                var (page, total) = await MailSvc.SearchEmailsAdvancedAsync(
+                    casellaIds: casellaIds,
+                    start: _currentIndex,
+                    pageSize: _pageSize,
+                    word: word,
+                    address: addr,
+                    folderUi: _folder,
+                    utente: _utente
+                );
 
-                if (_currentIndex == 0) _emails = page;
-                else _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
+                if (_currentIndex == 0)
+                    _emails = page;
+                else
+                    _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
-                _currentIndex += _pageSize;
-                _hasMore = _emails.Count < total;
+                _currentIndex += page.Count;
+
+                if (_folder == "all")
+                    _hasMore = page.Count == _pageSize;
+                else
+                    _hasMore = _emails.Count < total;
+
                 return;
             }
 
-            // 📥 CARICAMENTO NORMALE
+            // 📬 CARICAMENTO NORMALE
             var (normalPage, totalCount) = await MailSvc.GetEmailPageAsync(
                 casellaIds,
                 _currentIndex,
@@ -2498,8 +2661,13 @@ else
             else
                 _emails.AddRange(normalPage.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
-            _currentIndex += _pageSize;
-            _hasMore = _emails.Count < totalCount;
+            _currentIndex += normalPage.Count;
+
+            // ✅ ALL: niente count reale, quindi uso la dimensione pagina
+            if (_folder == "all")
+                _hasMore = normalPage.Count == _pageSize;
+            else
+                _hasMore = _emails.Count < totalCount;
         }
         finally
         {
@@ -2508,6 +2676,7 @@ else
             StateHasChanged();
         }
     }
+
     private async Task<int?> GetRealAttachmentIdAsync(int emailId, string nomeFile, string? mimeType = null)
     {
         using var db = DbFactory.CreateDbContext();
@@ -2568,10 +2737,7 @@ else
         {
             var requireComment = true;
 
-            // se sono admin globale ok
             if (_isAdmin) requireComment = false;
-
-            // se sono nella folder unassigned -> è per definizione admin-per-casella
             if (_folder == "unassigned") requireComment = false;
 
             var parameters = new DialogParameters
@@ -2592,35 +2758,55 @@ else
             if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
                 return;
 
-            // ✅ Sicurezza: se non-admin commento obbligatorio (doppio check)
-            if (!_isAdmin && string.IsNullOrWhiteSpace(fr.Comment))
+            if (requireComment && string.IsNullOrWhiteSpace(fr.AssignedComment))
             {
                 Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
                 return;
             }
 
-            // ✅ Assegnazione interna: forzo SoloInvio = false (anche se nel DTO c'è ancora)
             await MailSvc.AssignEmailAsync(
                 msg.Id,
                 fr.User,
                 soloInvio: false,
-                fr.Comment,
+                fr.AssignedComment,
                 eseguitoDa: _utente
             );
+
+            int? commentId = null;
+
+            if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+            {
+                commentId = await MailSvc1.AddCommentAsync(
+                    emailId: msg.Id,
+                    autore: _utente!,
+                    testo: fr.MentionsComment
+                );
+            }
+
+            var utentiSeguiti = fr.MentionedUsers
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            foreach (var u in utentiSeguiti)
+            {
+                await MailSvc1.EnsureEmailSeguitaAsync(msg.Id, u, commentId);
+            }
 
             if (_folder == "unassigned")
             {
                 _emails.RemoveAll(x => x.Id == msg.Id);
-
-                // rapido:
                 _unassignedCount = Math.Max(0, _unassignedCount - 1);
-
-                // se vuoi PERFETTO DB:
-                // _unassignedCount = await MailSvc.CountUnassignedAsync(_adminCaselleIds);
-
                 StateHasChanged();
             }
-            Snackbar.Add($"Email assegnata a {fr.User} ✅", Severity.Success);
+
+            Snackbar.Add(
+                utentiSeguiti.Any()
+                    ? $"Email assegnata a {fr.User} e aggiunti {utentiSeguiti.Count} seguiti ✅"
+                    : $"Email assegnata a {fr.User} ✅",
+                Severity.Success
+            );
+            Nav.NavigateTo(Nav.Uri, true);
         }
         catch (Exception ex)
         {
@@ -2628,7 +2814,6 @@ else
             Snackbar.Add($"Errore nell'assegnazione: {ex.Message}", Severity.Error);
         }
     }
-
     private async Task Forward(EmailListItem_NEW item)
     {
         try
@@ -2673,30 +2858,64 @@ else
         try
         {
             // UI: marca letta
-            if (item.Aperto != "Y")
+            if (_folder == "mailfollowed")
             {
-                var updated = item with { Aperto = "Y" };
-                var idx = _emails.FindIndex(e => e.Id == item.Id);
-                if (idx >= 0) _emails[idx] = updated;
-                StateHasChanged();
+                if (item.LettoSeguita != "Y")
+                {
+                    var updated = item with { LettoSeguita = "Y", LettoSeguitaIl = DateTime.Now };
+                    var idx = _emails.FindIndex(e => e.Id == item.Id);
+                    if (idx >= 0) _emails[idx] = updated;
+                    StateHasChanged();
+                }
+            }
+            else
+            {
+                if (item.Aperto != "Y")
+                {
+                    var updated = item with { Aperto = "Y" };
+                    var idx = _emails.FindIndex(e => e.Id == item.Id);
+                    if (idx >= 0) _emails[idx] = updated;
+                    StateHasChanged();
+                }
             }
 
-            // DB: fire-and-forget (senza Task.Run se puoi)
+            // DB: fire-and-forget
             _ = SafeForget(async () =>
             {
+                if (_folder == "mailfollowed")
+                {
+                    await MailSvc.MarkEmailSeguitaAsReadAsync(item.Id, _utente!);
+                }
+
                 await MailSvc.SegnaLettaAsync(item.Id, item.AssegnatoA);
                 await MailSvc.MarkOpenedAsync(item.Id);
                 await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
             });
 
-            // ✅ Passo SOLO dove stavo
+            var query = new Dictionary<string, string?>
+            {
+                ["fromFolder"] = _folder,
+                ["fromSection"] = fromSection
+            };
+
+            // PASSA GLI IDS PER TUTTE LE LISTE NORMALI
+            // NON passarli solo se stai aprendo da una sezione
+            if (string.IsNullOrWhiteSpace(fromSection))
+            {
+                var idsCorrenti = _emails
+                    .Select(x => x.Id)
+                    .Distinct()
+                    .ToList();
+
+                if (idsCorrenti.Count > 0)
+                {
+                    query["ids"] = string.Join(",", idsCorrenti);
+                }
+            }
+
             var url = QueryHelpers.AddQueryString(
                 $"/mail-detail/{item.Id}/{_cp}",
-                new Dictionary<string, string?>
-                {
-                    ["fromFolder"] = _folder,
-                    ["fromSection"] = fromSection
-                });
+                query);
 
             Nav.NavigateTo(url);
         }
@@ -2731,6 +2950,11 @@ else
         await postItService.UpdateTitleAsync(id, titolo);
     }
 
+    private MudTextField<string>? _postItTitleRef;
+    private MudTextField<string>? _postItTextRef;
+    private MudButton? _postItSaveRef;
+    private bool _focusPostItTitle;
+
     private void ApriNuovoPostIt()
     {
         _isEditMode = false;
@@ -2738,8 +2962,8 @@ else
         _popupTitle = "";
         _popupText = "";
         _showPostItPopup = true;
+        _focusPostItTitle = true;
     }
-
 
     private void ApriPostIt(PostItDto p)
     {
@@ -2748,8 +2972,27 @@ else
         _popupTitle = p.Titolo;
         _popupText = p.Testo;
         _showPostItPopup = true;
+        _focusPostItTitle = true;
     }
 
+    private async Task HandlePostItKeyDown(KeyboardEventArgs e)
+    {
+        if (!_showPostItPopup)
+            return;
+
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_popupText))
+        {
+            await SalvaPostIt();
+        }
+    }
+
+    private async Task HandlePostItTextKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Tab" && !string.IsNullOrWhiteSpace(_popupText) && _postItSaveRef is not null)
+        {
+            await _postItSaveRef.FocusAsync();
+        }
+    }
     private async Task SalvaPostIt()
     {
         if (string.IsNullOrWhiteSpace(_popupText))
@@ -2773,6 +3016,7 @@ else
     {
         _showPostItPopup = false;
         _editingPostItId = null;
+        _focusPostItTitle = false;
     }
 
     private async Task NewEmail()

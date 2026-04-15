@@ -22,7 +22,7 @@ namespace SCemail.Components.Data
         public DbSet<EmailDestinatario> EmailDestinatari { get; set; } = null!;
         public DbSet<EmailInboxSezione> EmailInboxSezioni => Set<EmailInboxSezione>();
         public DbSet<EmailInboxSezioneMap> EmailInboxSezioneMap => Set<EmailInboxSezioneMap>();
-
+        public DbSet<EmailSeguita> EmailSeguite => Set<EmailSeguita>();
         public DbSet<EmailTask> EmailTasks => Set<EmailTask>();
         public DbSet<EmailBozza> EmailBozze => Set<EmailBozza>();
         public DbSet<BozzaAllegato> BozzaAllegati => Set<BozzaAllegato>();
@@ -204,7 +204,23 @@ namespace SCemail.Components.Data
                     .OnDelete(DeleteBehavior.SetNull);
             });
 
+            mb.Entity<EmailSeguita>(entity =>
+            {
+                entity.ToTable("EMAIL_SEGUITE");
 
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Id).HasColumnName("ID");
+                entity.Property(e => e.EmailId).HasColumnName("EMAIL_ID");
+                entity.Property(e => e.Utente).HasColumnName("UTENTE");
+                entity.Property(e => e.CreataIl).HasColumnName("CREATA_IL");
+                entity.Property(e => e.Letto).HasColumnName("LETTO");
+                entity.Property(e => e.LettoIl).HasColumnName("LETTO_IL");
+                entity.Property(e => e.UltimoCommentoId).HasColumnName("ULTIMO_COMMENTO_ID");
+
+                entity.HasIndex(e => new { e.EmailId, e.Utente })
+                      .IsUnique();
+            });
 
             mb.Entity<UserTaskItem>(e =>
             {

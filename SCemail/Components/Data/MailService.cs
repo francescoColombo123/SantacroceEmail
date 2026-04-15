@@ -234,22 +234,26 @@ namespace SCemail.Components.Data
 
             await using var db = _dbFactory.CreateDbContext();
 
+            var tipoEvento = isMention ? "MENTION" : "UPDATE";
+
+            // Cerco la riga per email + utente + tipo evento
             var row = await db.emailMenzionis
                 .FirstOrDefaultAsync(m =>
                     m.EmailId == emailId &&
-                    m.Utente == utente);
+                    m.Utente == utente &&
+                    m.TipoEvento == tipoEvento);
 
             if (row == null)
             {
                 row = new EmailMenzione
                 {
                     EmailId = emailId,
-                    Utente = utente
+                    Utente = utente,
+                    TipoEvento = tipoEvento
                 };
                 db.emailMenzionis.Add(row);
             }
 
-            row.TipoEvento = isMention ? "MENTION" : "UPDATE";
             row.Visto = "N";
             row.CommentoId = commentoId;
             row.DataMenzione = DateTime.Now;
@@ -358,6 +362,29 @@ namespace SCemail.Components.Data
             return (bytes, mime, name);
         }
 
+        public async Task MarkEmailSeguiteAsUnreadAsync(
+    int emailId,
+    int commentId,
+    string autore,
+    CancellationToken ct = default)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var autoreNorm = autore.Trim().ToLowerInvariant();
+
+            var rows = await db.EmailSeguite
+                .Where(x => x.EmailId == emailId && x.Utente != autoreNorm)
+                .ToListAsync(ct);
+
+            foreach (var row in rows)
+            {
+                row.Letto = "N";
+                row.LettoIl = null;
+                row.UltimoCommentoId = commentId;
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
 
         // ================== DRAFTS, SEND, DETAIL, CONVERSATION ==================
 
@@ -543,7 +570,87 @@ Cordiali saluti.<br/>
 
             _logger.LogInformation($"✉️ Email inviata da {casella.Email} ({nomeMittente}) a {to}");
         }
+        public async Task EnsureEmailSeguiteAsync(
+            int emailId,
+            IEnumerable<string> utenti,
+            int? ultimoCommentoId = null,
+            CancellationToken ct = default)
+        {
+            foreach (var utente in utenti
+                         .Where(u => !string.IsNullOrWhiteSpace(u))
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                await EnsureEmailSeguitaAsync(emailId, utente, ultimoCommentoId, ct);
+            }
+        }
 
+        public async Task EnsureEmailSeguitaAsync(
+     int emailId,
+     string utente,
+     int? ultimoCommentoId = null,
+     CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(utente))
+                return;
+
+            await using var db = _dbFactory.CreateDbContext();
+
+            var utenteNorm = utente.Trim().ToLowerInvariant();
+
+            var existing = await db.EmailSeguite
+                .FirstOrDefaultAsync(x =>
+                    x.EmailId == emailId &&
+                    x.Utente == utenteNorm, ct);
+
+            if (existing == null)
+            {
+                db.EmailSeguite.Add(new EmailSeguita
+                {
+                    EmailId = emailId,
+                    Utente = utenteNorm,
+                    CreataIl = DateTime.Now,
+                    Letto = "N",
+                    LettoIl = null,
+                    UltimoCommentoId = ultimoCommentoId
+                });
+            }
+            else
+            {
+                existing.Letto = "N";
+                existing.LettoIl = null;
+
+                if (ultimoCommentoId.HasValue)
+                    existing.UltimoCommentoId = ultimoCommentoId;
+            }
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        public async Task MarkEmailSeguitaAsReadAsync(
+            int emailId,
+            string utente,
+            CancellationToken ct = default)
+        {
+            if (string.IsNullOrWhiteSpace(utente))
+                return;
+
+            await using var db = _dbFactory.CreateDbContext();
+
+            var utenteNorm = utente.Trim().ToLowerInvariant();
+
+            var seguita = await db.EmailSeguite
+                .FirstOrDefaultAsync(x =>
+                    x.EmailId == emailId &&
+                    x.Utente == utenteNorm, ct);
+
+            if (seguita == null)
+                return;
+
+            seguita.Letto = "Y";
+            seguita.LettoIl = DateTime.Now;
+
+            await db.SaveChangesAsync(ct);
+        }
         private static string GetSocietaByEmail(string email)
         {
             if (email.EndsWith("@grupposantacroce.com", StringComparison.OrdinalIgnoreCase))
