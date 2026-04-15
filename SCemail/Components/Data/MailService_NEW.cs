@@ -29,22 +29,26 @@ namespace SCemail.Components.Data
         private readonly ILogger<MailService_NEW> _logger;
         private readonly AccessiService _accessiService;
         private readonly string _connectionString;
-
+        private readonly IConfiguration _config;
         private readonly IOptions<AttachmentsOptions> _attachmentsOpt;
-        public MailService_NEW(IDbContextFactory<MailDbContext> dbFactory,
-                           ILogger<MailService_NEW> logger,
-                           HttpClient http, IConfiguration config, AccessiService accessiService, IOptions<AttachmentsOptions> attachmentsOpt
-                           )
+        public MailService_NEW(
+            IDbContextFactory<MailDbContext> dbFactory,
+            ILogger<MailService_NEW> logger,
+            HttpClient http,
+            IConfiguration config,
+            AccessiService accessiService,
+            IOptions<AttachmentsOptions> attachmentsOpt)
         {
             _dbFactory = dbFactory;
             _logger = logger;
             _http = http;
+            _config = config;
             _connectionString = config.GetConnectionString("OracleDb")
                 ?? throw new InvalidOperationException("Connection string 'OracleDb' mancante nel file di configurazione.");
             _accessiService = accessiService;
             _attachmentsOpt = attachmentsOpt;
-
         }
+
         public async Task<List<string>> GetEmailAddressesByIdsAsync(List<int> ids)
         {
             if (ids == null || ids.Count == 0)
@@ -703,6 +707,18 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 .OrderBy(u => u)
                 .ToListAsync(ct);
         }
+        private DateTime? GetMailUiMinDate()
+        {
+            var raw = _config["MailUi:MinDate"];
+
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+
+            if (DateTime.TryParse(raw, out var dt))
+                return dt.Date;
+
+            return null;
+        }
 
         public async Task<List<EmailDetail_NEW>> GetConversationByThreadAsync(int emailId)
         {
@@ -788,15 +804,25 @@ ORDER BY DATA";
             }
 
             // 3️⃣ Recupera allegati per ogni messaggio
-            const string attachSql = @"
-        SELECT ID, NOME_FILE
+            const string attachSqlRicevute = @"
+        SELECT ID, NOME_FILE, MIME_TYPE
         FROM SGAPP.EMAIL_ALLEGATI
+        WHERE EMAIL_ID = :id_email";
+
+            const string attachSqlInviate = @"
+        SELECT ID, NOME_FILE, MIME_TYPE
+        FROM SGAPP.INVIATA_ALLEGATI
         WHERE EMAIL_ID = :id_email";
 
             foreach (var mail in list)
             {
                 mail.Allegati = new List<AllegatoItem_NEW>();
-                await using var aCmd = new OracleCommand(attachSql, conn);
+
+                var sqlAllegati = mail.Tipo == "I"
+                    ? attachSqlInviate
+                    : attachSqlRicevute;
+
+                await using var aCmd = new OracleCommand(sqlAllegati, conn);
                 aCmd.Parameters.Add("id_email", OracleDbType.Int32).Value = mail.Id;
 
                 await using var aReader = await aCmd.ExecuteReaderAsync();
@@ -805,7 +831,8 @@ ORDER BY DATA";
                     mail.Allegati.Add(new AllegatoItem_NEW
                     {
                         Id = aReader.GetInt32(0),
-                        NomeFile = aReader.IsDBNull(1) ? "" : aReader.GetString(1)
+                        NomeFile = aReader.IsDBNull(1) ? "" : aReader.GetString(1),
+                        MimeType = aReader.IsDBNull(2) ? null : aReader.GetString(2)
                     });
                 }
             }
@@ -1351,6 +1378,13 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
             var whereSql = @"
 WHERE 1=1";
 
+            var minDate = GetMailUiMinDate();
+
+            if (minDate.HasValue)
+            {
+                whereSql += @"
+                  AND e.DATA_RICEZIONE >= :minDate";
+            }
             if (folderUi == "inbox")
             {
                 whereSql += @"
@@ -1449,7 +1483,8 @@ ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
 OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
                 await using var cmdAll = new OracleCommand(listSqlAll, conn) { BindByName = true };
-
+                if (minDate.HasValue)
+    cmdAll.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
                 if (!string.IsNullOrWhiteSpace(filtro))
                     cmdAll.Parameters.Add("filtro", OracleDbType.Varchar2).Value = $"%{filtro.Trim().ToLower()}%";
 
@@ -1580,7 +1615,8 @@ ORDER BY DATA_RICEZIONE DESC, ID DESC
 OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
             await using var cmd = new OracleCommand(listSql, conn) { BindByName = true };
-
+            if (minDate.HasValue)
+                cmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
             if (folderUi == "inbox" || folderUi == "myarchive")
                 cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
 
@@ -1653,7 +1689,8 @@ FROM (
 WHERE RN = 1";
 
             await using var countCmd = new OracleCommand(countSql, conn) { BindByName = true };
-
+            if (minDate.HasValue)
+                countCmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
             if (folderUi == "inbox" || folderUi == "myarchive")
                 countCmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
 
@@ -3545,6 +3582,8 @@ WHERE NVL(e.ELIMINATO,'N') = 'N'
             var w = (word ?? "").Trim().ToLowerInvariant();
             bool hasWord = !string.IsNullOrWhiteSpace(w) && w.Length >= 2;
 
+            var minDate = GetMailUiMinDate();
+
             var inList = string.Join(",", caselleAdmin.Select(x => x.ToString()));
 
             // COUNT thread-based
@@ -3563,17 +3602,21 @@ FROM (
             SELECT 1
             FROM SGAPP.EMAIL_ASSEGNAZIONI x
             WHERE x.EMAIL_ID = e.ID
-      )
-";
+      )";
+
+            if (minDate.HasValue)
+            {
+                countSql += @"
+      AND e.DATA_RICEZIONE >= :p_minDate";
+            }
 
             if (hasWord)
             {
                 countSql += @"
       AND (
-            LOWER(NVL(e.OGGETTO,''))  LIKE '%' || :p_word || '%'
+            LOWER(NVL(e.OGGETTO,''))   LIKE '%' || :p_word || '%'
          OR LOWER(NVL(e.MITTENTE,'')) LIKE '%' || :p_word || '%'
-      )
-";
+      )";
             }
 
             countSql += @"
@@ -3583,6 +3626,9 @@ WHERE RN = 1";
             int total;
             await using (var countCmd = new OracleCommand(countSql, conn) { BindByName = true })
             {
+                if (minDate.HasValue)
+                    countCmd.Parameters.Add("p_minDate", OracleDbType.Date).Value = minDate.Value.Date;
+
                 if (hasWord)
                     countCmd.Parameters.Add("p_word", OracleDbType.Varchar2).Value = w;
 
@@ -3628,17 +3674,21 @@ WITH ranked AS (
             SELECT 1
             FROM SGAPP.EMAIL_ASSEGNAZIONI x
             WHERE x.EMAIL_ID = e.ID
-      )
-";
+      )";
+
+            if (minDate.HasValue)
+            {
+                sql += @"
+      AND e.DATA_RICEZIONE >= :p_minDate";
+            }
 
             if (hasWord)
             {
                 sql += @"
       AND (
-            LOWER(NVL(e.OGGETTO,''))  LIKE '%' || :p_word || '%'
+            LOWER(NVL(e.OGGETTO,''))   LIKE '%' || :p_word || '%'
          OR LOWER(NVL(e.MITTENTE,'')) LIKE '%' || :p_word || '%'
-      )
-";
+      )";
             }
 
             sql += @"
@@ -3680,10 +3730,12 @@ SELECT
 FROM paged p
 JOIN SGAPP.CASELLEPOSTA c ON c.ID = p.CASELLA_ID
 LEFT JOIN att ON att.EMAIL_ID = p.ID
-ORDER BY p.DATA_RICEZIONE DESC, p.ID DESC
-";
+ORDER BY p.DATA_RICEZIONE DESC, p.ID DESC";
 
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
+            if (minDate.HasValue)
+                cmd.Parameters.Add("p_minDate", OracleDbType.Date).Value = minDate.Value.Date;
 
             if (hasWord)
                 cmd.Parameters.Add("p_word", OracleDbType.Varchar2).Value = w;

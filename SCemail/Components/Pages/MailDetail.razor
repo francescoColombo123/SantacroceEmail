@@ -44,7 +44,9 @@
                     }
 
                     <div class="head-texts">
-                        <h3 class="subj">@_email?.Oggetto</h3>
+                        <MudTooltip Text="@(_email?.Oggetto ?? "")" Placement="Placement.Bottom">
+                            <h3 class="subj">@_email?.Oggetto</h3>
+                        </MudTooltip>
 
                         <div class="head-meta-row">
                             <div class="meta">
@@ -147,17 +149,21 @@
                         </div>
 
                         <div class="gmail-body">
-                            @{
-                                if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
-                                {
-                                    var safe = StripActiveContent(mail.CorpoHtml); // no CleanQuotedPartHtml qui
-                                                                                   <iframe class="mail-iframe" sandbox="" srcdoc="@safe"></iframe>
-                                }
-                                else
-                                {
-                                    var txt = mail.CorpoTesto ?? "";
+                            @if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+                            {
+                                var safe = StripActiveContent(mail.CorpoHtml);
+
+                                <div class="mail-body-frame-wrap">
+                                    <iframe class="mail-iframe" sandbox="" srcdoc="@safe"></iframe>
+                                </div>
+                            }
+                            else
+                            {
+                                var txt = mail.CorpoTesto ?? "";
+
+                                <div class="mail-body-text-wrap">
                                     @((MarkupString)$"<pre style='white-space:pre-wrap;margin:0;font-family:inherit'>{System.Net.WebUtility.HtmlEncode(txt)}</pre>")
-                                }
+                                </div>
                             }
                         </div>
 
@@ -1756,11 +1762,11 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 16px;
+        gap: 12px;
         border-bottom: 1px solid #e8eefc;
         padding: 10px 4px 12px 4px;
         margin-bottom: 10px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
     }
 
     .head-left {
@@ -1769,6 +1775,7 @@
         gap: 8px;
         min-width: 0;
         flex: 1 1 auto;
+        overflow: hidden;
     }
 
     .nav-mail-arrows .mud-button-root {
@@ -1795,6 +1802,7 @@
         flex-direction: column;
         min-width: 0;
         flex: 1 1 auto;
+        overflow: hidden;
     }
 
     .subj {
@@ -1806,6 +1814,7 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        max-width: 100%;
     }
 
     .email-body {
@@ -1866,7 +1875,7 @@
     }
         /* Sopra la textarea */
         .mention-popup.top {
-            bottom: calc(100% + 4px);
+            bottom: calc(100% + 4px); 
         }
 
         /* (opzionale) Se vuoi aprirla sotto in futuro */
@@ -1886,42 +1895,42 @@
 
 
     @@media (max-width: 1100px) {
-        .email-head
+        .email-head {
+            align-items: flex-start;
+        }
 
-    {
-        align-items: flex-start;
-    }
-
-    .head-actions {
-        width: 100%;
-        justify-content: flex-end;
-        flex-wrap: wrap;
-    }
-
+        .head-actions {
+            flex-wrap: nowrap;
+        }
     }
 
     @@media (max-width: 700px) {
-        .subj
+        .email-head {
+            flex-wrap: wrap;
+        }
 
-    {
-        font-size: 20px;
-        white-space: normal;
-    }
+        .subj {
+            font-size: 20px;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: unset;
+        }
 
-    .head-left {
-        width: 100%;
-    }
+        .head-left {
+            width: 100%;
+        }
 
-    .head-actions {
-        width: 100%;
-        justify-content: flex-start;
-    }
+        .head-actions {
+            width: 100%;
+            justify-content: flex-start;
+            flex-wrap: wrap;
+            margin-left: 0;
+        }
 
-    .move-select-wrap {
-        width: 100%;
-        min-width: 0;
-    }
-
+        .move-select-wrap {
+            width: 100%;
+            min-width: 0;
+        }
     }
 @@media (max-width:980px){.detail-shell{grid-template-columns:1fr;height:auto}.comments-list{max-height:40vh}}
 
@@ -2014,8 +2023,8 @@
     .email-thread {
         display: flex;
         flex-direction: column;
-        gap: 24px;
-        padding: 16px 12px;
+        gap: 12px;
+        padding: 10px 8px;
         background: #f8fafc;
     }
 
@@ -2023,14 +2032,13 @@
         background: #fff;
         border: 1px solid #e0e6f0;
         border-radius: 10px;
-        padding: 14px 18px;
+        padding: 10px 12px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-        transition: background 0.2s;
     }
 
-        .gmail-msg:hover {
-            background: #fdfefe;
-        }
+    .gmail-msg:hover {
+        background: #fdfefe;
+    }
 
     .gmail-head {
         display: flex;
@@ -2070,12 +2078,21 @@
     }
 
     .gmail-body {
-        margin-top: 6px;
-        font-size: 14px;
-        line-height: 1.6;
-        color: #222;
-        word-wrap: break-word;
+        margin-top: 8px;
     }
+
+    .mail-body-frame-wrap,
+    .mail-body-text-wrap {
+        max-height: 600px;
+        min-height: 240px;
+        overflow-y: auto;
+        overflow-x: hidden;
+        border: 1px solid #e6edf8;
+        border-radius: 10px;
+        background: #fafcff;
+        padding: 8px;
+    }
+
 
     .gmail-attachments {
         margin-top: 10px;
@@ -2207,6 +2224,7 @@
         gap: 6px;
         flex: 0 0 auto;
         flex-wrap: nowrap;
+        margin-left: 8px;
     }
 
     .msg-actions {
@@ -2241,10 +2259,11 @@
     .mail-iframe {
         width: 100%;
         border: 0;
-        min-height: 700px;
+        min-height: 460px;
         display: block;
+        background: #fff;
+        border-radius: 8px;
     }
-
     .attach-grid {
         display: flex;
         flex-wrap: wrap;
