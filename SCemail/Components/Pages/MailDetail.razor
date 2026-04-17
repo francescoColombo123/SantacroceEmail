@@ -444,6 +444,12 @@
         if (last == null || string.IsNullOrWhiteSpace(_utente))
             return;
 
+        if (_fromFolder == "mentions" && !last.CanArchive)
+        {
+            Snackbar.Add("Puoi archiviare questa menzione solo dopo aver risposto.", Severity.Warning);
+            return;
+        }
+
         var archivedId = last.Id;
 
         var currentIndex = _currentNavIndex;
@@ -525,7 +531,8 @@
         if (last == null) return;
 
         var requireComment = true;
-
+       
+       
         if (await AccessiSrv.IsAdminAsync(_utente))
             requireComment = false;
 
@@ -555,12 +562,13 @@
 
         // assegnazione classica
         await MailSvc1.AssignEmailAsync(
-            last.Id,
-            fr.User,
-            soloInvio: false,
-            fr.AssignedComment,
-            _utente
-        );
+    last.Id,
+    fr.User,
+    soloInvio: false,
+    commento: fr.AssignedComment,
+    eseguitoDa: _utente,
+    keepExecutorUnarchived: fr.FollowMe
+);
 
         int? commentId = null;
 
@@ -989,7 +997,7 @@
         {
             _sezioneSelezionata = await MailSvc1.GetSezioneCorrenteAsync(_email.Id, _utente);
 
-            _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id);
+            _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
 
             _thread = _thread
                 .GroupBy(t => t.MessageId)
@@ -1762,6 +1770,7 @@
             _mentionSuggestions.Clear();
 
             _comments = await MailSvc.GetCommentsByEmailAsync(Id);
+            Nav.NavigateTo(Nav.Uri, true);
         }
         catch (Exception ex)
         {

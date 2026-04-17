@@ -294,6 +294,7 @@
         await using var db = DbFactory.CreateDbContext();
         _caselle = await db.CasellePosta
             .AsNoTracking()
+             .Where(c => c.Attiva == "Y")
             .OrderBy(c => c.Email)
             .ToListAsync();
     }
@@ -496,14 +497,18 @@
     {
         try
         {
-            var conferma = await JS.InvokeAsync<bool>("confirm",
-                $"Vuoi davvero rimuovere la casella '{c.Email}'?");
+            var conferma = await JS.InvokeAsync<bool>(
+                "confirm",
+                $"Vuoi davvero disattivare la casella '{c.Email}' e rimuovere le relative abilitazioni?"
+            );
 
             if (!conferma)
                 return;
 
             await using var db = DbFactory.CreateDbContext();
-            var existing = await db.CasellePosta.FirstOrDefaultAsync(x => x.Id == c.Id);
+
+            var existing = await db.CasellePosta
+                .FirstOrDefaultAsync(x => x.Id == c.Id);
 
             if (existing is null)
             {
@@ -511,17 +516,35 @@
                 return;
             }
 
-            db.CasellePosta.Remove(existing);
+            // 1. rimuovo le abilitazioni collegate
+            var abilitazioni = await db.CasellaAbilitazioni
+                .Where(a => a.CasellaId == c.Id)
+                .ToListAsync();
+
+            if (abilitazioni.Any())
+                db.CasellaAbilitazioni.RemoveRange(abilitazioni);
+
+            // 2. disattivo la casella invece di cancellarla
+            existing.Attiva = "N";
+
             await db.SaveChangesAsync();
 
             _caselle.RemoveAll(x => x.Id == c.Id);
 
-            Snackbar.Add($"🗑 Casella '{c.Email}' rimossa correttamente.", Severity.Success);
+            Snackbar.Add(
+                $"🗑 Casella '{c.Email}' disattivata e abilitazioni rimosse correttamente.",
+                Severity.Success
+            );
+
             StateHasChanged();
         }
         catch (Exception ex)
         {
-            Snackbar.Add($"❌ Errore durante la rimozione: {ex.Message}", Severity.Error);
+            var msg = ex.InnerException?.InnerException?.Message
+                      ?? ex.InnerException?.Message
+                      ?? ex.Message;
+
+            Snackbar.Add($"❌ Errore durante la rimozione: {msg}", Severity.Error);
         }
     }
 

@@ -246,6 +246,7 @@ namespace SCemail.Components.Data
                 e.Property(x => x.ImapHost).HasColumnName("IMAP_HOST").HasMaxLength(255);
                 e.Property(x => x.ImapPort).HasColumnName("IMAP_PORT");
                 e.Property(x => x.UseSsl).HasColumnName("USE_SSL");
+                e.Property(x => x.Attiva).HasColumnName("ATTIVA").HasMaxLength(1);
                 e.Property(x => x.CreatedAt).HasColumnName("CREATED_AT");
                 e.Property(x => x.NomeBk).HasColumnName("NOME_BK");
                 e.Property(x => x.TitoloBk).HasColumnName("TITOLO_BK");

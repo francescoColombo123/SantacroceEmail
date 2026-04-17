@@ -100,7 +100,10 @@ public class EmailFetchService : BackgroundService
         {
             await conn.OpenAsync(ct);
 
-            const string sql = @"SELECT ID, EMAIL, PASSWORD, IMAP_HOST, IMAP_PORT, USE_SSL FROM SGAPP.CASELLEPOSTA";
+            const string sql = @"
+SELECT ID, EMAIL, PASSWORD, IMAP_HOST, IMAP_PORT, USE_SSL
+FROM SGAPP.CASELLEPOSTA
+WHERE NVL(ATTIVA, 'Y') = 'Y'";
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
 
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -1129,9 +1132,11 @@ WHEN NOT MATCHED THEN
     private async Task<(string Email, string Password, string Host, int Port, bool UseSsl)?> LoadMailboxAsync(
     OracleConnection conn, int casellaId, CancellationToken ct)
     {
-        const string sql = @"SELECT EMAIL, PASSWORD, IMAP_HOST, IMAP_PORT, USE_SSL
-                           FROM SGAPP.CASELLEPOSTA
-                          WHERE ID = :p_id";
+        const string sql = @"
+            SELECT EMAIL, PASSWORD, IMAP_HOST, IMAP_PORT, USE_SSL
+            FROM SGAPP.CASELLEPOSTA
+            WHERE ID = :p_id
+              AND NVL(ATTIVA, 'Y') = 'Y'";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
         cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = casellaId;

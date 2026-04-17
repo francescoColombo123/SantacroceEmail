@@ -799,21 +799,20 @@
 
         if (!string.IsNullOrWhiteSpace(initialFrom))
         {
+            // aggiunge la casella originale anche se non è nelle abilitazioni
             EnsureFromAddressAvailable(initialFrom);
 
             _selectedCasella = _caselleDisponibili
                 .FirstOrDefault(x => x.Equals(initialFrom, StringComparison.OrdinalIgnoreCase))
-                ?? initialFrom;
-
-            // se arriva da reply/replyall/detail, la blocchiamo
-            _fromLocked = !string.IsNullOrWhiteSpace(CasellaMittente);
+                ?? _caselleDisponibili.FirstOrDefault();
         }
         else if (_caselleDisponibili.Any())
         {
             _selectedCasella = _caselleDisponibili.First();
-            _fromLocked = false;
         }
 
+        // mai bloccare il campo: l’utente può cambiare verso una delle sue caselle
+        _fromLocked = false;
         InitReplyRecipients();
         _showCc = _ccList.Any();
         _showBcc = _bccList.Any();
@@ -1644,6 +1643,12 @@
         {
             _caselleDisponibili.Insert(0, normalized);
         }
+
+        _caselleDisponibili = _caselleDisponibili
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
 

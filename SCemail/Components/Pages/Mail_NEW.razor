@@ -64,10 +64,11 @@ else
                             class="@IsActive("unassigned")">
 
                             <MudTooltip Text="Email non assegnate (caselle admin)" Placement="Placement.Right">
-                                <div class="folder-icon-wrap @(_unassignedCount > 0 ? "is-alert" : "")">
+                                <div class="unassigned-icon-wrap @(_unassignedCount > 0 ? "active" : "")">
                                     <MudIcon Icon="@Icons.Material.Filled.AssignmentLate" />
                                 </div>
                             </MudTooltip>
+
                         </li>
 
                         <li @onclick="@(() => ChangeFolder("mailfollowed"))"
@@ -2047,7 +2048,7 @@ else
         => _folder is "inbox" or "mentions" or "unassigned";
 
     private bool CanArchiveInCurrentFolder()
-        => _folder is "inbox" or "mailfollowed";
+        => _folder is "inbox" or "mailfollowed" or "mentions";
 
     private bool CanUnarchiveInCurrentFolder()
         => _folder == "myarchive";
@@ -2663,8 +2664,37 @@ else
             var addr = _selectedAddressChip?.Email;
 
             // 🔎 RICERCA AVANZATA
+            // 🔎 RICERCA AVANZATA
             if ((!string.IsNullOrWhiteSpace(word) && word.Length >= 2) || !string.IsNullOrWhiteSpace(addr))
             {
+                var useFastBodySearch = !string.IsNullOrWhiteSpace(word) && word.Length >= 2;
+
+                if (useFastBodySearch)
+                {
+                    var fastPage = await MailSvc.SearchEmailsAdvancedFastAsync(
+                        casellaIds: casellaIds,
+                        start: _currentIndex,
+                        pageSize: _pageSize,
+                        word: word,
+                        address: addr,
+                        folderUi: _folder,
+                        utente: _utente
+                    );
+
+                    var visiblePage = fastPage.Take(_pageSize).ToList();
+                    var hasMore = fastPage.Count > _pageSize;
+
+                    if (_currentIndex == 0)
+                        _emails = visiblePage;
+                    else
+                        _emails.AddRange(visiblePage.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                    _currentIndex += visiblePage.Count;
+                    _hasMore = hasMore;
+
+                    return;
+                }
+
                 var (page, total) = await MailSvc.SearchEmailsAdvancedAsync(
                     casellaIds: casellaIds,
                     start: _currentIndex,
@@ -2689,7 +2719,6 @@ else
 
                 return;
             }
-
             // 📬 CARICAMENTO NORMALE
             var (normalPage, totalCount) = await MailSvc.GetEmailPageAsync(
                 casellaIds,
@@ -2775,89 +2804,148 @@ else
         });
     }
 
-    private async Task Forward(EmailDetail_NEW msg)
+   private async Task Forward(EmailDetail_NEW msg)
+{
+    try
     {
-        try
+        var requireComment = true;
+
+        if (_isAdmin) requireComment = false;
+        if (_folder == "unassigned") requireComment = false;
+
+        var parameters = new DialogParameters
         {
-            var requireComment = true;
+            ["Users"] = await MailSvc.GetUserListAsync(),
+            ["RequireComment"] = requireComment,
+            ["Title"] = "Assegna internamente"
+        };
 
-            if (_isAdmin) requireComment = false;
-            if (_folder == "unassigned") requireComment = false;
+        var dialog = DialogService.Show<ForwardDialog>(
+            "Assegna internamente",
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+        );
 
-            var parameters = new DialogParameters
-            {
-                ["Users"] = await MailSvc.GetUserListAsync(),
-                ["RequireComment"] = requireComment,
-                ["Title"] = "Assegna internamente"
-            };
+        var result = await dialog.Result;
 
-            var dialog = DialogService.Show<ForwardDialog>(
-                "Assegna internamente",
-                parameters,
-                new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+        if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
+            return;
+
+        if (requireComment && string.IsNullOrWhiteSpace(fr.AssignedComment))
+        {
+            Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
+            return;
+        }
+
+        // =========================
+        // 1️⃣ ASSEGNAZIONE
+        // =========================
+        await MailSvc.AssignEmailAsync(
+            msg.Id,
+            fr.User,
+            soloInvio: false,
+            fr.AssignedComment,
+            eseguitoDa: _utente,
+            keepExecutorUnarchived: fr.FollowMe
+        );
+
+        // =========================
+        // 2️⃣ COMMENTO MENZIONI
+        // =========================
+        int? commentId = null;
+
+        if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+        {
+            commentId = await MailSvc1.AddCommentAsync(
+                emailId: msg.Id,
+                autore: _utente!,
+                testo: fr.MentionsComment
             );
 
-            var result = await dialog.Result;
-
-            if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
-                return;
-
-            if (requireComment && string.IsNullOrWhiteSpace(fr.AssignedComment))
-            {
-                Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
-                return;
-            }
-
-            await MailSvc.AssignEmailAsync(
-                msg.Id,
-                fr.User,
-                soloInvio: false,
-                fr.AssignedComment,
-                eseguitoDa: _utente
+            await MailSvc1.MarkEmailSeguiteAsUnreadAsync(
+                emailId: msg.Id,
+                commentId: commentId.Value,
+                autore: _utente!
             );
+        }
 
-            int? commentId = null;
+        // =========================
+        // 3️⃣ MENZIONATI
+        // =========================
+        var mentionedUsers = fr.MentionedUsers
+            .Where(u => !string.IsNullOrWhiteSpace(u))
+            .Select(u => u.Trim().ToLowerInvariant())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-            if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+        // =========================
+        // 4️⃣ UTENTI DA NOTIFICARE
+        // =========================
+        // qui puoi scegliere se notificare solo i menzionati
+        // oppure anche assegnato/proprietari/partecipanti.
+        // Ti lascio una versione molto vicina alla logica di AddComment.
+
+        var utentiDaNotificare = mentionedUsers
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (commentId.HasValue)
+        {
+            foreach (var u in utentiDaNotificare)
             {
-                commentId = await MailSvc1.AddCommentAsync(
+                if (u.Equals(_utente, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                bool isMention = mentionedUsers.Contains(u, StringComparer.OrdinalIgnoreCase);
+
+                await MailSvc1.RegistraEventoChatAsync(
                     emailId: msg.Id,
-                    autore: _utente!,
-                    testo: fr.MentionsComment
+                    utente: u,
+                    isMention: isMention,
+                    commentoId: commentId.Value,
+                    autore: _utente!
                 );
             }
-
-            var utentiSeguiti = fr.MentionedUsers
-                .Where(u => !string.IsNullOrWhiteSpace(u))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            foreach (var u in utentiSeguiti)
-            {
-                await MailSvc1.EnsureEmailSeguitaAsync(msg.Id, u, commentId);
-            }
-
-            if (_folder == "unassigned")
-            {
-                _emails.RemoveAll(x => x.Id == msg.Id);
-                _unassignedCount = Math.Max(0, _unassignedCount - 1);
-                StateHasChanged();
-            }
-
-            Snackbar.Add(
-                utentiSeguiti.Any()
-                    ? $"Email assegnata a {fr.User} e aggiunti {utentiSeguiti.Count} seguiti ✅"
-                    : $"Email assegnata a {fr.User} ✅",
-                Severity.Success
-            );
-            Nav.NavigateTo(Nav.Uri, true);
         }
-        catch (Exception ex)
+
+        // =========================
+        // 5️⃣ ASSEGNA E SEGUI
+        // =========================
+        // solo chi assegna viene aggiunto ai seguiti
+        if (fr.FollowMe)
         {
-            Console.WriteLine($"❌ Errore in Assegna: {ex.Message}");
-            Snackbar.Add($"Errore nell'assegnazione: {ex.Message}", Severity.Error);
+            await MailSvc1.EnsureEmailSeguitaAsync(
+                msg.Id,
+                _utente!,
+                commentId
+            );
         }
+
+        // =========================
+        // 6️⃣ UI
+        // =========================
+        if (_folder == "unassigned")
+        {
+            _emails.RemoveAll(x => x.Id == msg.Id);
+            _unassignedCount = Math.Max(0, _unassignedCount - 1);
+            StateHasChanged();
+        }
+
+        Snackbar.Add(
+            fr.FollowMe
+                ? $"Email assegnata a {fr.User} e aggiunta ai tuoi seguiti ✅"
+                : $"Email assegnata a {fr.User} ✅",
+            Severity.Success
+        );
+
+        Nav.NavigateTo(Nav.Uri, true);
     }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"❌ Errore in Assegna: {ex.Message}");
+        Snackbar.Add($"Errore nell'assegnazione: {ex.Message}", Severity.Error);
+    }
+}
     private async Task Forward(EmailListItem_NEW item)
     {
         try
@@ -3273,6 +3361,9 @@ else
         --muted: #6b7ba3;
         --primary: #1a73e8;
         --accent: #eaf2ff;
+        --danger: #e53935;
+        --danger-bg: #ffe5e5;
+        --danger-border: #ffb3b3;
     }
 
     html, body {
@@ -3412,7 +3503,7 @@ else
     }
 
     .folder-list.folder-icons .drafts-icon-wrap,
-    .folder-list.folder-icons .unassigned-icon-wrap {
+    .folder-list.folder-icons .folder-icon-wrap {
         width: 100%;
         height: 100%;
         display: flex;
@@ -3421,12 +3512,7 @@ else
         border-radius: 10px;
     }
 
-        .folder-list.folder-icons .drafts-icon-wrap.has-unread,
-        .folder-list.folder-icons .unassigned-icon-wrap.has-unassigned {
-            background: #ffdddd;
-            border: 1px solid #ff9a9a;
-        }
-
+    
     .folder-list {
         list-style: none;
         margin: 4px 0 0;
@@ -3761,10 +3847,7 @@ else
         border-radius: 10px;
     }
 
-        .folder-icon-wrap.is-alert {
-            background: #ffdddd;
-            border: 1px solid #ff9a9a;
-        }
+
 
         .folder-list li{
   width: 44px;
@@ -4473,10 +4556,14 @@ else
         border-radius: 10px;
     }
 
-        .drafts-icon-wrap.has-unread {
-            background: #ffdddd;
-            border: 1px solid #ff9a9a;
+        .drafts-icon-wrap.has-unread .mud-icon-root {
+            color: var(--danger);
         }
+        .drafts-icon-wrap.has-unread {
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+        }
+
     .admin-chart {
         height: 360px !important;
         width: 100%;
@@ -4529,6 +4616,7 @@ else
         transition: transform .15s ease, box-shadow .15s ease;
     }
 
+   
         .postit-card:hover {
             transform: rotate(-1deg) scale(1.03);
             box-shadow: 0 6px 14px rgba(0,0,0,.28);
@@ -5103,4 +5191,23 @@ else
         white-space: normal;
         word-break: break-word;
     }
+
+    .unassigned-icon-wrap {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 10px;
+        padding: 6px;
+    }
+
+        .unassigned-icon-wrap.active {
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+        }
+
+            .unassigned-icon-wrap.active .mud-icon-root {
+                color: var(--danger);
+            }
 </style>

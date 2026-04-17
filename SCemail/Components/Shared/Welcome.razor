@@ -46,10 +46,12 @@
         _mentionsCount = _mentions.Count;
 
         _caselleErrore = await db.CasellePosta
-            .AsNoTracking()
-            .Where(c => c.StatoConn != "OK")
-            .Select(c => c.Email)
-            .ToListAsync();
+        .AsNoTracking()
+        .Where(c =>
+            (c.Attiva == null || c.Attiva == "Y") &&
+            (c.StatoConn == null || c.StatoConn != "OK"))
+        .Select(c => c.Email!)
+        .ToListAsync();
 
         _showCaselleAlert = _caselleErrore.Any();
     }

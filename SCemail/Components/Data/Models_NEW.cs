@@ -226,6 +226,7 @@ namespace SCemail.Components.Data
         public string? InReplyTo { get; set; }
         public string? References { get; set; }
         public string? Tipo { get; set; }
+        public bool CanArchive { get; set; } = true;
     }
 
 

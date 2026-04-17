@@ -11,6 +11,7 @@ namespace SCemail.Components.Data
         public string ImapHost { get; set; } = string.Empty;
         public int ImapPort { get; set; }
         public string UseSsl { get; set; } = "Y";
+        public string? Attiva { get; set; } = "Y";
         public DateTime CreatedAt { get; set; } = DateTime.Now;
 
         public string? NomeBk { get; set; }

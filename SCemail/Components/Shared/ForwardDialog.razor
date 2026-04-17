@@ -1,8 +1,10 @@
-﻿@using MudBlazor
+﻿@using Microsoft.JSInterop
+@using MudBlazor
 @using SCemail.Components.Data
 @using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Components.Web
 @inject AccessiService AccessiService
-
+@inject IJSRuntime JS
 <MudDialog>
     <DialogContent>
         <MudText Typo="Typo.h6" Class="mb-2">@Title</MudText>
@@ -38,29 +40,33 @@
         }
 
         <div class="mention-wrap">
-             <MudTextField T="string"
-                  Label="Altri commenti e menzioni"
-                  Placeholder=@("Scrivi un commento. Per menzionare qualcuno digita @ e scegli un utente…")
-                  Value="_mentionsComment"
-                  ValueChanged="OnMentionsChanged"
-                  Lines="4"
-                  Variant="Variant.Outlined"
-                  Class="mt-3 mention-textarea"
-                  Immediate="true" />
-
+         <MudTextField T="string"
+              InputId="mentionBox"
+              Label="Altri commenti e menzioni"
+              Placeholder=@("Scrivi un commento. Per menzionare qualcuno digita @ e scegli un utente…")
+              @bind-Value="_mentionsComment"
+              @bind-Value:after="OnMentionsChangedAfter"
+              OnKeyDown="HandleMentionKeyDownMud"
+              Lines="4"
+              Variant="Variant.Outlined"
+              Class="mt-3 mention-textarea"
+              Immediate="true"
+              TextUpdateSuppression="false" />
             @if (_loadingUsers)
             {
                 <MudText Typo="Typo.caption" Class="mt-1">
                     Caricamento utenti…
                 </MudText>
             }
-
             @if (_mentionOpen && _mentionSuggestions.Any())
             {
                 <MudPaper Class="mention-popup" Outlined="true" Elevation="8">
-                    @foreach (var u in _mentionSuggestions)
+                    @for (int i = 0; i < _mentionSuggestions.Count; i++)
                     {
-                        <div class="mention-item" @onclick="() => SelectMention(u)">
+                        var u = _mentionSuggestions[i];
+                        var activeClass = i == _selectedMentionIndex ? "mention-item active" : "mention-item";
+
+                        <div class="@activeClass" @onclick="() => SelectMention(u)">
                             <div class="mention-avatar">@u.Substring(0, 1).ToUpper()</div>
                             <div class="mention-name">@u</div>
                         </div>
@@ -90,6 +96,13 @@
         <MudSpacer />
 
         <MudButton Color="Color.Primary"
+                   Variant="Variant.Outlined"
+                   OnClick="OkAssign"
+                   Disabled="@IsConfirmDisabled">
+            Assegna
+        </MudButton>
+
+        <MudButton Color="Color.Primary"
                    Variant="Variant.Filled"
                    OnClick="OkAssignAndFollow"
                    Disabled="@IsConfirmDisabled">
@@ -101,14 +114,16 @@
 <style>
     .mention-wrap {
         position: relative;
-        margin-top: 12px;
     }
 
+    .mention-item.active {
+        background: #eef3ff;
+    }
     .mention-popup {
         position: absolute;
-        left: 0;
-        right: 0;
-        top: calc(100% + 4px);
+        left: 12px; /* invece di 0 */
+        bottom: 60px; /* sopra la textarea */
+        width: 260px;
         z-index: 2000;
         max-height: 240px;
         overflow-y: auto;
@@ -118,7 +133,6 @@
         box-shadow: 0 10px 24px rgba(0,0,0,0.12);
         padding: 6px;
     }
-
     .mention-item {
         display: flex;
         align-items: center;
@@ -175,15 +189,24 @@
     private List<string> _mentionSuggestions = new();
     private List<string> _allUsers = new();
     private List<string> _mentionedUsers = new();
-
+    private int _selectedMentionIndex = -1;
     public sealed class ForwardResult
     {
         public string User { get; init; } = default!;
         public string? AssignedComment { get; init; }
         public string? MentionsComment { get; init; }
         public List<string> MentionedUsers { get; init; } = new();
+        public bool FollowMe { get; init; } 
     }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await JS.InvokeVoidAsync("mentionsInterop.bindMentionKeys", "mentionBox");
+        }
 
+        await JS.InvokeVoidAsync("mentionsInterop.setMentionOpen", _mentionOpen);
+    }
     protected override async Task OnInitializedAsync()
     {
         _loadingUsers = true;
@@ -223,11 +246,16 @@
         UpdateMentionSuggestions(_mentionsComment);
         ExtractMentionedUsers();
     }
-
+    private void OnMentionsChangedAfter()
+    {
+        UpdateMentionSuggestions(_mentionsComment ?? string.Empty);
+        ExtractMentionedUsers();
+    }
     private void UpdateMentionSuggestions(string text)
     {
         _mentionSuggestions.Clear();
         _mentionOpen = false;
+        _selectedMentionIndex = -1;
 
         if (string.IsNullOrWhiteSpace(text) || !_allUsers.Any())
             return;
@@ -245,6 +273,7 @@
                 .ToList();
 
             _mentionOpen = _mentionSuggestions.Count > 0;
+            _selectedMentionIndex = _mentionOpen ? 0 : -1;
             return;
         }
 
@@ -254,10 +283,48 @@
             .ToList();
 
         _mentionOpen = _mentionSuggestions.Count > 0;
+        _selectedMentionIndex = _mentionOpen ? 0 : -1;
     }
-    
 
-    private void SelectMention(string selectedUser)
+    private async Task HandleMentionKeyDownMud(KeyboardEventArgs e)
+    {
+        if (!_mentionOpen || !_mentionSuggestions.Any())
+            return;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _selectedMentionIndex++;
+                if (_selectedMentionIndex >= _mentionSuggestions.Count)
+                    _selectedMentionIndex = 0;
+                await InvokeAsync(StateHasChanged);
+                break;
+
+            case "ArrowUp":
+                _selectedMentionIndex--;
+                if (_selectedMentionIndex < 0)
+                    _selectedMentionIndex = _mentionSuggestions.Count - 1;
+                await InvokeAsync(StateHasChanged);
+                break;
+
+            case "Enter":
+            case "Tab":
+                if (_selectedMentionIndex >= 0 && _selectedMentionIndex < _mentionSuggestions.Count)
+                {
+                    await SelectMention(_mentionSuggestions[_selectedMentionIndex]);
+                }
+                break;
+
+            case "Escape":
+                _mentionOpen = false;
+                _mentionSuggestions.Clear();
+                _selectedMentionIndex = -1;
+                await InvokeAsync(StateHasChanged);
+                break;
+        }
+    }
+
+    private async Task SelectMention(string selectedUser)
     {
         if (string.IsNullOrWhiteSpace(_mentionsComment))
         {
@@ -274,11 +341,13 @@
 
         _mentionOpen = false;
         _mentionSuggestions.Clear();
+        _selectedMentionIndex = -1;
 
         ExtractMentionedUsers();
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
+  
     private void ExtractMentionedUsers()
     {
         if (string.IsNullOrWhiteSpace(_mentionsComment))
@@ -297,6 +366,22 @@
             .ToList();
     }
 
+   
+
+    private void OkAssign()
+    {
+        var result = new ForwardResult
+        {
+            User = _user!,
+            AssignedComment = _assignedComment,
+            MentionsComment = _mentionsComment,
+            MentionedUsers = _mentionedUsers.ToList(),
+            FollowMe = false
+        };
+
+        MudDialog.Close(DialogResult.Ok(result));
+    }
+
     private void OkAssignAndFollow()
     {
         var result = new ForwardResult
@@ -304,7 +389,8 @@
             User = _user!,
             AssignedComment = _assignedComment,
             MentionsComment = _mentionsComment,
-            MentionedUsers = _mentionedUsers.ToList()
+            MentionedUsers = _mentionedUsers.ToList(),
+            FollowMe = true
         };
 
         MudDialog.Close(DialogResult.Ok(result));
