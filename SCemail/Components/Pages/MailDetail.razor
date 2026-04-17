@@ -116,35 +116,44 @@
                 @for (int i = _readFromIndex; i < ordered.Count; i++)
                 {
                     var mail = ordered[i];
-
                     <div class="gmail-msg">
-                        <div class="gmail-head">
-                            <div class="avatar" style="background:@GetAvatarColor(mail.Mittente)">
-                                @GetInitials(mail.Mittente)
+                        <div class="gmail-head2">
+                            <div class="gmail-left2">
+                                <div class="avatar" style="background:@GetAvatarColor(mail.Mittente)">
+                                    @GetInitials(mail.Mittente)
+                                </div>
+
+                                <div class="gmail-meta2">
+                                    <div class="from2">@ExtractEmailOnly(mail.Mittente)</div>
+
+                                    <div class="recips2" title="@BuildThreadRecipientsTooltip(mail)">
+                                        @BuildThreadRecipientsInline(mail)
+                                    </div>
+                                </div>
                             </div>
 
-                            <div class="meta">
-                                <div class="from">@ExtractEmailOnly(mail.Mittente)</div>
-                                <div class="time">@mail.Data?.ToString("ddd d MMM yyyy HH:mm")</div>
-                            </div>
+                            <div class="gmail-right2">
+                                <div class="date2">
+                                    @mail.Data?.ToString("dd/MM/yyyy HH:mm")
+                                </div>
 
-                            <!-- ✅ AZIONI PER SINGOLO MESSAGGIO (a destra) -->
-                            <div class="msg-actions">
-                                <MudIconButton Icon="@Icons.Material.Filled.Reply"
-                                               Title="Rispondi"
-                                               OnClick="@(() => Reply(mail))" />
+                                <div class="msg-actions">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Reply"
+                                                   Title="Rispondi"
+                                                   OnClick="@(() => Reply(mail))" />
 
-                                <MudIconButton Icon="@Icons.Material.Filled.ReplyAll"
-                                               Title="Rispondi a tutti"
-                                               OnClick="@(() => ReplyAll(mail))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.ReplyAll"
+                                                   Title="Rispondi a tutti"
+                                                   OnClick="@(() => ReplyAll(mail))" />
 
-                                <MudIconButton Icon="@Icons.Material.Filled.Send"
-               Title="Inoltra (esterno)"
-               OnClick="@(() => ForwardExternalFrom(mail))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Send"
+                                                   Title="Inoltra (esterno)"
+                                                   OnClick="@(() => ForwardExternalFrom(mail))" />
 
-                                <MudIconButton Icon="@Icons.Material.Filled.MenuBook"
-                                               Title="Leggi da qui"
-                                               OnClick="@(() => ReadFromHere(mail))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.MenuBook"
+                                                   Title="Leggi da qui"
+                                                   OnClick="@(() => ReadFromHere(mail))" />
+                                </div>
                             </div>
                         </div>
 
@@ -166,8 +175,6 @@
                                 </div>
                             }
                         </div>
-
-
                         @if (mail.Allegati?.Any() == true)
                         {
                             <div class="gmail-attachments">
@@ -190,7 +197,6 @@
                                 </div>
                             </div>
                         }
-
                     </div>
                 }
 
@@ -379,12 +385,18 @@
     {
         if (msg is null) return;
 
-        var replyInfo = await MailSvc1.GetReplyInfoAsync(msg.ThreadKey, msg.InReplyTo);
-
         var quoteText = BuildGmailReplyAsText(msg);
         var quoteHtml = ToQuoteHtmlForQuill(quoteText);
 
-        var replyTo = ExtractEmailOnly(msg.Mittente); // ✅ mittente vero
+        var replyTo = ExtractEmailOnly(msg.Mittente);
+
+        var fromCasella = (msg.CasellaEmail ?? "").Trim();
+
+        if (string.IsNullOrWhiteSpace(fromCasella))
+        {
+            Snackbar.Add("Casella mittente non trovata per questa email.", Severity.Warning);
+            return;
+        }
 
         var parameters = new DialogParameters
         {
@@ -396,17 +408,11 @@
             ["ReplyToMessageId"] = msg.MessageId,
             ["References"] = BuildReferencesChain(msg),
             ["ThreadKey"] = msg.ThreadKey,
-
-            // ✅ qui metti SEMPRE il mittente, non replyInfo.Destinatari
+            ["CasellaMittente"] = fromCasella,
             ["Destinatari"] = replyTo,
-
-            // Reply semplice: CC/BCC vuoti
             ["Cc"] = null,
             ["Bcc"] = null
         };
-
-        if (replyInfo != null && !string.IsNullOrWhiteSpace(replyInfo.CasellaMittente))
-            parameters["CasellaMittente"] = replyInfo.CasellaMittente;
 
         var dialog = await DialogService.ShowAsync<ComposeDialog>(
             "Rispondi",
@@ -423,7 +429,6 @@
         if (result.Data is true)
             Snackbar.Add("Risposta inviata ✅", Severity.Success);
     }
-
 
 
 
@@ -611,8 +616,7 @@
 
         // ✅ FROM: preferisci SEMPRE la casella che ha ricevuto la mail (msg.CasellaEmail)
         //    replyInfo.CasellaMittente esiste solo se trovi una tua inviata in EMAIL_INVIATE
-        var fromCasella = (msg.CasellaEmail ?? replyInfo?.CasellaMittente ?? "").Trim();
-
+        var fromCasella = (msg.CasellaEmail ?? "").Trim();
         // "self" = la casella da cui invii (NON deve finire in TO/CC)
         var self = ExtractEmailOnly(fromCasella);
 
@@ -702,6 +706,87 @@
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private string BuildThreadRecipientsInline(EmailDetail_NEW mail)
+    {
+        var parts = new List<string>();
+
+        var to = ParseEmailsForDisplay(mail.Destinatari);
+        var cc = ParseEmailsForDisplay(mail.Cc);
+        var ccn = ParseEmailsForDisplay(mail.Ccn);
+
+        string Short(List<string> xs)
+        {
+            if (xs.Count == 0) return "";
+            if (xs.Count <= 4) return string.Join(", ", xs);
+            return string.Join(", ", xs.Take(4)) + " ...";
+        }
+
+        if (to.Any())
+            parts.Add("A: " + Short(to));
+
+        if (cc.Any())
+            parts.Add("CC: " + Short(cc));
+
+        if (ccn.Any())
+            parts.Add("CCN: " + Short(ccn));
+
+        return parts.Count == 0 ? "Nessun destinatario visibile" : string.Join(" • ", parts);
+    }
+
+    private string BuildThreadRecipientsTooltip(EmailDetail_NEW mail)
+    {
+        var parts = new List<string>();
+
+        var to = ParseEmailsForDisplay(mail.Destinatari);
+        var cc = ParseEmailsForDisplay(mail.Cc);
+        var ccn = ParseEmailsForDisplay(mail.Ccn);
+
+        if (to.Any())
+            parts.Add("A: " + string.Join(", ", to));
+
+        if (cc.Any())
+            parts.Add("CC: " + string.Join(", ", cc));
+
+        if (ccn.Any())
+            parts.Add("CCN: " + string.Join(", ", ccn));
+
+        return parts.Count == 0 ? "" : string.Join("\n", parts);
+    }
+
+    private List<string> ParseEmailsForDisplay(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return new List<string>();
+
+        try
+        {
+            var list = MimeKit.InternetAddressList.Parse(raw);
+
+            return list.Mailboxes
+                .Select(m =>
+                {
+                    var name = (m.Name ?? "").Trim();
+                    var address = (m.Address ?? "").Trim();
+
+                    if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(address))
+                        return $"{name} <{address}>";
+
+                    return address;
+                })
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+        catch
+        {
+            return raw.Split(';', ',', '\n', '\r')
+                .Select(x => x.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
     }
 
 
@@ -2078,22 +2163,30 @@
     }
 
     .gmail-body {
-        margin-top: 8px;
+        margin-top: 6px;
     }
 
     .mail-body-frame-wrap,
     .mail-body-text-wrap {
-        max-height: 600px;
-        min-height: 240px;
+        max-height: 520px;
+        min-height: 140px;
         overflow-y: auto;
         overflow-x: hidden;
         border: 1px solid #e6edf8;
         border-radius: 10px;
         background: #fafcff;
-        padding: 8px;
+        padding: 10px;
     }
 
-
+    .thread-recips {
+        font-size: 12px;
+        color: #667085;
+        margin-top: 2px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 900px;
+    }
     .gmail-attachments {
         margin-top: 10px;
         border-top: 1px solid #eef3ff;
@@ -2316,5 +2409,97 @@
     .activity-time {
         font-size: 12px;
         color: #7a87a6;
+    }
+
+    .gmail-msg {
+        background: #fff;
+        border: 1px solid #e3e8f2;
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+
+    .gmail-head2 {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+    }
+
+    .gmail-left2 {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+
+    .gmail-meta2 {
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+
+    .from2 {
+        font-size: 16px;
+        font-weight: 700;
+        color: #1f2937;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .recips2 {
+        margin-top: 2px;
+        font-size: 12px;
+        color: #667085;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .gmail-right2 {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+        min-width: 150px;
+    }
+
+    .date2 {
+        font-size: 12px;
+        color: #667085;
+        font-weight: 600;
+        line-height: 1;
+    }
+
+    .msg-actions {
+        display: flex;
+        align-items: center;
+        gap: 0;
+    }
+
+    .attach-btn2 {
+        width: 30px;
+        height: 30px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid #d9e2f0;
+        border-radius: 8px;
+        background: #f8fbff;
+        color: #4b5563;
+        text-decoration: none;
+    }
+
+        .attach-btn2:hover {
+            background: #eef4ff;
+        }
+
+    .attach-more2 {
+        font-size: 12px;
+        font-weight: 700;
+        color: #667085;
     }
 </style>

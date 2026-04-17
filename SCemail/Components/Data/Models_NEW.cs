@@ -206,23 +206,26 @@ namespace SCemail.Components.Data
     public class EmailDetail_NEW
     {
         public int Id { get; set; }
+        public int? CasellaId { get; set; }
+        public string? CasellaEmail { get; set; }
+
         public string? Mittente { get; set; }
         public string? Destinatari { get; set; }
+        public string? Cc { get; set; }
+        public string? Ccn { get; set; }
         public string? Oggetto { get; set; }
         public DateTime? Data { get; set; }
         public string? CorpoHtml { get; set; }
         public string? CorpoTesto { get; set; }
-        public List<AllegatoItem_NEW> Allegati { get; set; } = new(); public string? Aperto { get; set; }
-        public string? CasellaEmail { get; set; }
-        public bool IsLoaded { get; set; }   
-                                            
-        public string? MessageId { get; set; }   
+        public List<AllegatoItem_NEW> Allegati { get; set; } = new();
+        public string? Aperto { get; set; }
+        public bool IsLoaded { get; set; }
+
+        public string? MessageId { get; set; }
         public string? ThreadKey { get; set; }
-
-        public string? InReplyTo { get; set; }   
-        public string? References { get; set; }  
-        public string? Tipo { get; set; } 
-
+        public string? InReplyTo { get; set; }
+        public string? References { get; set; }
+        public string? Tipo { get; set; }
     }
 
 

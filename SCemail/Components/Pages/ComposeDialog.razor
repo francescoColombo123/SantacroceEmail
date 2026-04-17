@@ -216,22 +216,48 @@
             <div>Trascina qui i file o clicca per selezionarli</div>
             <InputFile OnChange="OnFileSelected" multiple />
         </div>
+        @if (_uploadingAttachments)
+        {
+            <MudPaper Class="upload-loader" Elevation="2">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Medium" />
+                <div class="upload-loader-text">
+                    Caricamento allegati... @_uploadingDone / @_uploadingTotal
+                </div>
+            </MudPaper>
+        }
+      
 
         @if (_attachments.Any())
         {
-            <ul class="mt-2">
+            <div class="gmail-attachments-list">
                 @foreach (var f in _attachments)
                 {
-                    <li>
-                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Small" />
-                        @f.Name (@Math.Round(f.Size / 1024.0)) KB
-                        <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                       Color="Color.Error"
-                                       Size="Size.Small"
-                                       OnClick="@(() => RemoveAttachment(f))" />
-                    </li>
+                    <div class="gmail-attachment-row">
+                        <div class="gmail-attachment-left">
+                            <div class="gmail-attachment-icon">
+                                <MudIcon Icon="@GetAttachmentIcon(f.Name)" Size="Size.Medium" />
+                            </div>
+
+                            <div class="gmail-attachment-info">
+                                <div class="gmail-attachment-name" title="@f.Name">
+                                    @f.Name
+                                </div>
+                                <div class="gmail-attachment-size">
+                                    @FormatFileSize(f.Size)
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="gmail-attachment-actions">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                           Color="Color.Default"
+                                           Size="Size.Small"
+                                           OnClick="@(() => RemoveAttachment(f))"
+                                           Disabled="_uploadingAttachments" />
+                        </div>
+                    </div>
                 }
-            </ul>
+            </div>
         }
 
         @if (_pending is not null)
@@ -288,14 +314,23 @@
         <MudButton Color="Color.Primary"
                    Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.Send"
-                   OnClick="SendCompose">Invia</MudButton>
+                   OnClick="SendCompose"
+                   Disabled="IsBusy">
+            Invia
+        </MudButton>
 
         <MudButton OnClick="Cancel"
-                   Variant="Variant.Text">Chiudi</MudButton>
+                   Variant="Variant.Text"
+                   Disabled="_uploadingAttachments">
+            Chiudi
+        </MudButton>
 
         <MudButton Color="Color.Secondary"
                    Variant="Variant.Outlined"
-                   OnClick="SaveDraft">💾 Salva bozza</MudButton>
+                   OnClick="SaveDraft"
+                   Disabled="IsBusy">
+            💾 Salva bozza
+        </MudButton>
     </DialogActions>
 </MudDialog>
 
@@ -578,6 +613,109 @@
     .rcpt-close {
         margin-left: auto;
     }
+
+    .attach-meta {
+        margin-top: 8px;
+        font-size: 12px;
+        color: #5f6368;
+    }
+
+    .gmail-attachments-list {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .gmail-attachment-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border: 1px solid #dadce0;
+        border-radius: 12px;
+        background: #fff;
+    }
+
+    .gmail-attachment-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        flex: 1 1 auto;
+    }
+
+    .gmail-attachment-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: #f1f3f4;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #5f6368;
+        flex-shrink: 0;
+    }
+
+    .gmail-attachment-info {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .gmail-attachment-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: #202124;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 420px;
+    }
+
+    .gmail-attachment-size {
+        font-size: 12px;
+        color: #5f6368;
+        margin-top: 2px;
+    }
+
+    .gmail-attachment-actions {
+        flex-shrink: 0;
+    }
+
+    .upload-loader {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: #f8f9fa;
+        border: 1px solid #dadce0;
+    }
+
+    .upload-loader-text {
+        font-size: 13px;
+        font-weight: 500;
+        color: #3c4043;
+    }
+    .upload-loader {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        background: #f8fbff;
+        border: 1px solid #dbe8ff;
+    }
+
+    .upload-loader-text {
+        font-size: 13px;
+        font-weight: 600;
+        color: #35507a;
+    }
 </style>
 
 @code {
@@ -609,7 +747,7 @@
     private CancellationTokenSource? _ctsTo, _ctsCc, _ctsBcc;
     private bool _pendingQuillInit = true;
     private bool _quillInitialized = false;
-
+    private const long MaxFileSizeBytes = 25 * 1024 * 1024; // 25 MB per file
     private string _lastInitBody = "";
     private string? _lastInitQuote = "";
     private string? _composeSubject;
@@ -622,7 +760,11 @@
 
     private ElementReference _dropZoneRef;
     private DotNetObjectReference<ComposeDialog>? _dotnetRef;
+    private bool _uploadingAttachments = false;
+    private int _uploadingTotal = 0;
+    private int _uploadingDone = 0;
 
+    private bool IsBusy => _uploadingAttachments || _pending is not null;
     private List<string> _caselleDisponibili = new();
     private string? _selectedCasella;
     private bool _fromLocked = false;
@@ -638,35 +780,66 @@
         public CancellationTokenSource Cts { get; } = new();
         public bool CloseOnExecute { get; init; } = true;
     }
+    
     protected override async Task OnInitializedAsync()
     {
         _draftId = DraftId;
 
         var ids = await AccessiSrv.GetCaselleAbilitateAsync(Utente);
-        _caselleDisponibili = await MailSvc.GetEmailAddressesByIdsAsync(ids);
+        _caselleDisponibili = await MailSvc.GetEmailAddressesByIdsAsync(ids) ?? new List<string>();
 
-        if (!string.IsNullOrEmpty(CasellaMittente) && _caselleDisponibili.Contains(CasellaMittente))
-            (_selectedCasella, _fromLocked) = (CasellaMittente, true);
+        // pulizia lista
+        _caselleDisponibili = _caselleDisponibili
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var initialFrom = await ResolveInitialFromAddressAsync();
+
+        if (!string.IsNullOrWhiteSpace(initialFrom))
+        {
+            EnsureFromAddressAvailable(initialFrom);
+
+            _selectedCasella = _caselleDisponibili
+                .FirstOrDefault(x => x.Equals(initialFrom, StringComparison.OrdinalIgnoreCase))
+                ?? initialFrom;
+
+            // se arriva da reply/replyall/detail, la blocchiamo
+            _fromLocked = !string.IsNullOrWhiteSpace(CasellaMittente);
+        }
         else if (_caselleDisponibili.Any())
+        {
             _selectedCasella = _caselleDisponibili.First();
+            _fromLocked = false;
+        }
 
-        // ✅ QUI: set TO/CC/BCC per reply
         InitReplyRecipients();
         _showCc = _ccList.Any();
         _showBcc = _bccList.Any();
         _composeSubject = Oggetto ?? string.Empty;
+
         if (!string.IsNullOrWhiteSpace(_selectedCasella))
         {
-            _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+            try
+            {
+                _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Errore caricamento firma iniziale per {Utente} e casella {Casella}", Utente, _selectedCasella);
+                _firmaHtml = null;
+            }
         }
         else
         {
             _firmaHtml = null;
         }
+
         _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
 
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
-        _allRecipients = recenti
+        _allRecipients = (recenti ?? new List<string>())
             .Select(ParseAddressToChip)
             .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -919,6 +1092,11 @@
 
     private async Task SendCompose()
     {
+        if (_uploadingAttachments)
+        {
+            Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
+            return;
+        }
         if (!_toList.Any())
         {
             Snackbar.Add("⚠️ Inserisci almeno un destinatario", Severity.Warning);
@@ -1019,6 +1197,11 @@
 
     private async Task SaveDraft()
     {
+        if (_uploadingAttachments)
+        {
+            Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
+            return;
+        }
         await StartUndoableAction(
         kind: PendingActionKind.SaveDraft,
         label: "Salvataggio bozza…",
@@ -1047,27 +1230,93 @@
         );
     }
 
+    private static string FormatFileSize(long bytes)
+    {
+        if (bytes >= 1024 * 1024)
+            return $"{bytes / 1024d / 1024d:0.##} MB";
+
+        if (bytes >= 1024)
+            return $"{bytes / 1024d:0.##} KB";
+
+        return $"{bytes} B";
+    }
+
+    private string GetAttachmentIcon(string? name)
+    {
+        var s = (name ?? "").ToLowerInvariant();
+
+        if (s.EndsWith(".pdf")) return Icons.Material.Filled.PictureAsPdf;
+        if (s.EndsWith(".jpg") || s.EndsWith(".jpeg") || s.EndsWith(".png") || s.EndsWith(".gif") || s.EndsWith(".webp"))
+            return Icons.Material.Filled.Image;
+        if (s.EndsWith(".doc") || s.EndsWith(".docx")) return Icons.Material.Filled.Description;
+        if (s.EndsWith(".xls") || s.EndsWith(".xlsx") || s.EndsWith(".csv")) return Icons.Material.Filled.TableChart;
+        if (s.EndsWith(".zip") || s.EndsWith(".rar") || s.EndsWith(".7z")) return Icons.Material.Filled.FolderZip;
+        return Icons.Material.Filled.AttachFile;
+    }
+
 
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
-        foreach (var file in e.GetMultipleFiles())
+        var files = e.GetMultipleFiles().ToList();
+        if (!files.Any())
+            return;
+
+        _uploadingAttachments = true;
+        _uploadingTotal = files.Count;
+        _uploadingDone = 0;
+        StateHasChanged();
+
+        try
         {
-            // evita doppioni per nome
-            if (_attachments.Any(a => a.Name.Equals(file.Name, StringComparison.OrdinalIgnoreCase)))
-                continue;
+            foreach (var file in files)
+            {
+                if (_attachments.Any(a => a.Name.Equals(file.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _uploadingDone++;
+                    StateHasChanged();
+                    continue;
+                }
 
-            _attachments.Add(file);
+                if (file.Size > MaxFileSizeBytes)
+                {
+                    Snackbar.Add(
+                        $"Il file '{file.Name}' supera il limite di {FormatFileSize(MaxFileSizeBytes)}.",
+                        Severity.Warning
+                    );
 
-            using var ms = new MemoryStream();
-            await file.OpenReadStream().CopyToAsync(ms);
+                    _uploadingDone++;
+                    StateHasChanged();
+                    continue;
+                }
 
-            _outgoing.Add(new MailService_NEW.OutgoingAttachment_NEW(
-                file.Name, file.ContentType, ms.ToArray()));
+                using var ms = new MemoryStream();
+                await file.OpenReadStream(maxAllowedSize: MaxFileSizeBytes).CopyToAsync(ms);
+
+                _attachments.Add(file);
+
+                _outgoing.Add(new MailService_NEW.OutgoingAttachment_NEW(
+                    file.Name,
+                    file.ContentType,
+                    ms.ToArray()
+                ));
+
+                _uploadingDone++;
+                StateHasChanged();
+            }
+
+            Snackbar.Add("Allegati caricati ✅", Severity.Success);
         }
-
-        Snackbar.Add($"{_attachments.Count} file allegato/i ✅", Severity.Info);
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore durante il caricamento allegati");
+            Snackbar.Add("Errore durante il caricamento degli allegati ❌", Severity.Error);
+        }
+        finally
+        {
+            _uploadingAttachments = false;
+            StateHasChanged();
+        }
     }
-
 
     private void RemoveAttachment(IBrowserFile file)
     {
@@ -1368,6 +1617,35 @@
         _pendingQuillInit = true; // ✅ ogni volta che cambiano parametri (reply/forward/bozza)
     }
 
+    private static string NormalizeEmailValue(string? value)
+    {
+        return (value ?? "").Trim();
+    }
+
+    private async Task<string?> ResolveInitialFromAddressAsync()
+    {
+        var requested = NormalizeEmailValue(CasellaMittente);
+
+        if (!string.IsNullOrWhiteSpace(requested))
+            return requested;
+
+        var fallback = await MailSvc.GetEmailAddressByUsernameAsync(Utente);
+        return NormalizeEmailValue(fallback);
+    }
+
+    private void EnsureFromAddressAvailable(string? fromAddress)
+    {
+        var normalized = NormalizeEmailValue(fromAddress);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return;
+
+        if (!_caselleDisponibili.Any(x =>
+            string.Equals(NormalizeEmailValue(x), normalized, StringComparison.OrdinalIgnoreCase)))
+        {
+            _caselleDisponibili.Insert(0, normalized);
+        }
+    }
+
 
     private void OnChipClick(RecipientChip chip)
     {
@@ -1376,7 +1654,7 @@
 
     private void InitReplyRecipients()
     {
-        var myAddr = (_selectedCasella ?? "").Trim().ToLowerInvariant();
+        var myAddr = NormalizeEmailValue(_selectedCasella).ToLowerInvariant();
 
         var to = SplitAddresses(Destinatari)
             .Select(ParseAddressToChip)
@@ -1393,8 +1671,18 @@
             .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        var bcc = SplitAddresses(Bcc)
+            .Select(ParseAddressToChip)
+            .Where(c => !string.IsNullOrWhiteSpace(c.Email))
+            .Where(c => !c.Email.Equals(myAddr, StringComparison.OrdinalIgnoreCase))
+            .Where(c => !to.Any(t => t.Email.Equals(c.Email, StringComparison.OrdinalIgnoreCase)))
+            .Where(c => !cc.Any(t => t.Email.Equals(c.Email, StringComparison.OrdinalIgnoreCase)))
+            .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         _toList = to;
         _ccList = cc;
+        _bccList = bcc;
     }
 
 }

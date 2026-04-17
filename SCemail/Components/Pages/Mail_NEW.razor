@@ -331,10 +331,8 @@ else
                                                 <div class="ml-from">Bozza</div>
 
                                                 <div class="ml-to">
-                                                    <span class="ml-to-label">A:</span>
-                                                    <span class="ml-to-main">
-                                                        @ExtractEmail(d.Destinatari)
-                                                    </span>
+                                                    <span class="ml-to-label">@GetMainRecipientType(d)</span>
+                                                    <span class="ml-to-main">@GetMainRecipientLabel(d)</span>
                                                 </div>
                                             </div>
 
@@ -412,8 +410,8 @@ else
                                                             @* destinatari: nostra casella + eventuali extra *@
                                                             <MudTooltip Text="@BuildRecipientsTooltip(item)">
                                                                 <div class="ml-to">
-                                                                    <span class="ml-to-label">A:</span>
-                                                                    <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
+                                                                    <span class="ml-to-label">@GetMainRecipientType(item)</span>
+                                                                    <span class="ml-to-main">@GetMainRecipientLabel(item)</span>
                                                                     @if (GetRecipientsExtraCount(item) > 0)
                                                                     {
                                                                         <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
@@ -570,8 +568,8 @@ else
                                                                     @* destinatari: nostra casella + eventuali extra *@
                                                                     <MudTooltip Text="@BuildRecipientsTooltip(item)">
                                                                         <div class="ml-to">
-                                                                            <span class="ml-to-label">A:</span>
-                                                                            <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
+                                                                            <span class="ml-to-label">@GetMainRecipientType(item)</span>
+                                                                            <span class="ml-to-main">@GetMainRecipientLabel(item)</span>
                                                                             @if (GetRecipientsExtraCount(item) > 0)
                                                                             {
                                                                                 <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
@@ -700,16 +698,16 @@ else
                                                 </MudTooltip>
 
                                                 @* destinatari: nostra casella + eventuali extra *@
-                                                <MudTooltip Text="@BuildRecipientsTooltip(item)">
-                                                    <div class="ml-to">
-                                                        <span class="ml-to-label">A:</span>
-                                                        <span class="ml-to-main">@ExtractEmail(item.CasellaEmail)</span>
-                                                        @if (GetRecipientsExtraCount(item) > 0)
-                                                        {
-                                                            <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
-                                                        }
-                                                    </div>
-                                                </MudTooltip>
+                                                    <MudTooltip Text="@BuildRecipientsTooltip(item)">
+                                                        <div class="ml-to">
+                                                            <span class="ml-to-label">@GetMainRecipientType(item)</span>
+                                                            <span class="ml-to-main">@GetMainRecipientLabel(item)</span>
+                                                            @if (GetRecipientsExtraCount(item) > 0)
+                                                            {
+                                                                <span class="ml-to-more">+@GetRecipientsExtraCount(item)</span>
+                                                            }
+                                                        </div>
+                                                    </MudTooltip>
                                             </div>
 
                                             <!-- CENTER: 2 righe -->
@@ -1278,8 +1276,6 @@ else
 
     private string BuildRecipientsTooltip(EmailListItem_NEW item)
     {
-        var main = ExtractEmail(item.CasellaEmail);
-
         var to = ParseAddressList(item.Destinatari)
             .Select(ExtractEmail)
             .Where(x => !string.IsNullOrWhiteSpace(x))
@@ -1298,15 +1294,11 @@ else
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // assicurati che la nostra casella compaia in A:
-        if (!string.IsNullOrWhiteSpace(main) &&
-            !to.Any(x => string.Equals(x, main, StringComparison.OrdinalIgnoreCase)))
-            to.Insert(0, main);
-
         string fmt(string label, List<string> xs)
             => xs.Count == 0 ? "" : $"{label} {string.Join(", ", xs)}";
 
         var lines = new List<string>();
+
         var aLine = fmt("A:", to);
         var ccLine = fmt("CC:", cc);
         var ccnLine = fmt("CCN:", ccn);
@@ -1315,9 +1307,8 @@ else
         if (!string.IsNullOrWhiteSpace(ccLine)) lines.Add(ccLine);
         if (!string.IsNullOrWhiteSpace(ccnLine)) lines.Add(ccnLine);
 
-        return lines.Count == 0 ? $"A: {main}" : string.Join("\n", lines);
+        return lines.Count == 0 ? "" : string.Join("\n", lines);
     }
-
     public record RecipientChip(string Email, string? Name)
     {
         public string NameOrEmail => string.IsNullOrWhiteSpace(Name) ? Email : Name;
@@ -1521,6 +1512,32 @@ else
             _sentLoading = false;
             StateHasChanged();
         }
+    }
+
+    private string GetMainRecipientType(DraftListItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Destinatari))
+            return "A:";
+        if (!string.IsNullOrWhiteSpace(item.Cc))
+            return "CC:";
+        if (!string.IsNullOrWhiteSpace(item.Ccn))
+            return "CCN:";
+
+        return "A:";
+    }
+
+    private string GetMainRecipientLabel(DraftListItem item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Destinatari))
+            return ExtractEmail(item.Destinatari);
+
+        if (!string.IsNullOrWhiteSpace(item.Cc))
+            return ExtractEmail(item.Cc);
+
+        if (!string.IsNullOrWhiteSpace(item.Ccn))
+            return ExtractEmail(item.Ccn);
+
+        return "";
     }
 
     private async Task SelectSentAsync(int id)
@@ -2244,6 +2261,33 @@ else
         if (icon == Icons.Material.Filled.PictureAsPdf) return "att-ico pdf";
         return "att-ico";
     }
+
+    private string GetMainRecipientType(EmailListItem_NEW item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Destinatari))
+            return "A:";
+        if (!string.IsNullOrWhiteSpace(item.Cc))
+            return "CC:";
+        if (!string.IsNullOrWhiteSpace(item.Ccn))
+            return "CCN:";
+
+        return "Casella:";
+    }
+
+    private string GetMainRecipientLabel(EmailListItem_NEW item)
+    {
+        if (!string.IsNullOrWhiteSpace(item.Destinatari))
+            return ExtractEmail(item.Destinatari);
+
+        if (!string.IsNullOrWhiteSpace(item.Cc))
+            return ExtractEmail(item.Cc);
+
+        if (!string.IsNullOrWhiteSpace(item.Ccn))
+            return ExtractEmail(item.Ccn);
+
+        return ExtractEmail(item.CasellaEmail);
+    }
+
     private string ExtractEmail(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))

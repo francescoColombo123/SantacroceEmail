@@ -383,7 +383,7 @@ public class EmailFetchService : BackgroundService
                 emailDateRome
             );
 
-            await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, ct);
+            await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, accountEmail,  ct);
 
             var body = s.Body;
             if (body == null)
@@ -734,7 +734,13 @@ RETURNING ID INTO :p_id";
                 CollectAttachmentParts(child, acc);
         }
     }
-    private async Task ApplyRulesAsync(OracleConnection conn, int emailId, MimeMessage message, DateTime emailDateRome, CancellationToken ct)
+    private async Task ApplyRulesAsync(
+    OracleConnection conn,
+    int emailId,
+    MimeMessage message,
+    DateTime emailDateRome,
+    string currentMailbox,
+    CancellationToken ct)
     {
         const string sql = @"
         SELECT ID, MITTENTE_LIKE, DEST_LIKE, OGGETTO_LIKE, ASSEGNA_A, SOLO_INVIO
@@ -755,7 +761,7 @@ RETURNING ID INTO :p_id";
             var utenti = reader.IsDBNull(4) ? null : reader.GetString(4);
             var soloInvio = reader.GetString(5) == "Y";
 
-            if (CheckRuleMatch(message, mittLike, destLike, oggLike))
+            if (CheckRuleMatch(message, mittLike, destLike, oggLike, currentMailbox))
             {
                 await AssignEmail(conn, emailId, utenti, soloInvio, ct);
                 _logger.LogInformation("📥 Applicata regola {Id} per email '{Subj}'", id, message.Subject);
@@ -912,28 +918,35 @@ RETURNING ID INTO :p_id";
         return name;
     }
 
-    private bool CheckRuleMatch(MimeMessage msg, string? mitt, string? dest, string? subj)
-    {
+    private bool CheckRuleMatch(MimeMessage msg,string? mitt,string? dest,string? subj,string? currentMailbox) {
+        var fromText = msg.From?.ToString() ?? "";
+        var toText = msg.To?.ToString() ?? "";
+        var ccText = msg.Cc?.ToString() ?? "";
+        var bccText = msg.Bcc?.ToString() ?? "";
+        var subject = msg.Subject ?? "";
+
         var allRecipients =
-            (msg.To?.ToString() ?? "") + " " +
-            (msg.Cc?.ToString() ?? "") + " " +
-            (msg.Bcc?.ToString() ?? "");
-        bool MittOk =
-            string.IsNullOrEmpty(mitt) ||
+            toText + " " +
+            ccText + " " +
+            bccText + " " +
+            (currentMailbox ?? "");
+
+        bool mittOk =
+            string.IsNullOrWhiteSpace(mitt) ||
             mitt.Equals("TUTTI", StringComparison.OrdinalIgnoreCase) ||
-            msg.From.ToString().Contains(mitt, StringComparison.OrdinalIgnoreCase);
+            fromText.Contains(mitt, StringComparison.OrdinalIgnoreCase);
 
-        bool DestOk =
-          string.IsNullOrEmpty(dest) ||
-          dest.Equals("TUTTI", StringComparison.OrdinalIgnoreCase) ||
-          allRecipients.Contains(dest, StringComparison.OrdinalIgnoreCase);
+        bool destOk =
+            string.IsNullOrWhiteSpace(dest) ||
+            dest.Equals("TUTTI", StringComparison.OrdinalIgnoreCase) ||
+            allRecipients.Contains(dest, StringComparison.OrdinalIgnoreCase);
 
-        bool SubjOk =
-            string.IsNullOrEmpty(subj) ||
+        bool subjOk =
+            string.IsNullOrWhiteSpace(subj) ||
             subj.Equals("TUTTI", StringComparison.OrdinalIgnoreCase) ||
-            (msg.Subject?.Contains(subj, StringComparison.OrdinalIgnoreCase) ?? false);
+            subject.Contains(subj, StringComparison.OrdinalIgnoreCase);
 
-        return MittOk && DestOk && SubjOk;
+        return mittOk && destOk && subjOk;
     }
     private static BodyPart? FindBodyPartBySpecifier(BodyPart? part, string partSpec)
     {

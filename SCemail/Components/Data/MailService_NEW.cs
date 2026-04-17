@@ -720,18 +720,17 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             return null;
         }
 
-        public async Task<List<EmailDetail_NEW>> GetConversationByThreadAsync(int emailId)
+          public async Task<List<EmailDetail_NEW>> GetConversationByThreadAsync(int emailId)
         {
             await using var conn = await GetOpenConnectionAsync();
 
-            // 1️⃣ Recupera il THREAD_KEY del messaggio selezionato
             string threadKey;
             const string findThreadSql = @"
-        SELECT THREAD_KEY FROM (
-            SELECT THREAD_KEY FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :id
-            UNION ALL
-            SELECT THREAD_KEY FROM SGAPP.EMAIL_INVIATE WHERE ID = :id
-        ) WHERE ROWNUM = 1";
+SELECT THREAD_KEY FROM (
+    SELECT THREAD_KEY FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :id
+    UNION ALL
+    SELECT THREAD_KEY FROM SGAPP.EMAIL_INVIATE WHERE ID = :id
+) WHERE ROWNUM = 1";
 
             await using (var findCmd = new OracleCommand(findThreadSql, conn))
             {
@@ -740,42 +739,53 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 threadKey = result?.ToString() ?? "";
             }
 
-            if (string.IsNullOrEmpty(threadKey))
+            if (string.IsNullOrWhiteSpace(threadKey))
                 return new();
 
-            // 2️⃣ Prende TUTTE le email (ricevute + inviate) dello stesso thread
             const string sql = @"
 SELECT 
-    ID,
-    TO_CLOB(MITTENTE) AS MITTENTE,
-    TO_CLOB(DESTINATARI) AS DESTINATARI,
-    TO_CLOB(OGGETTO) AS OGGETTO,
-    DATA_RICEZIONE AS DATA,
-    CORPO_HTML,
-    CORPO_TESTO,
-    MESSAGE_ID,
-    IN_REPLY_TO,
-    REFERENCES_HDR,
-    THREAD_KEY,
+    r.ID,
+    r.CASELLA_ID,
+    TO_CLOB(cp.EMAIL) AS CASELLA_EMAIL,
+    TO_CLOB(r.MITTENTE) AS MITTENTE,
+    TO_CLOB(r.DESTINATARI) AS DESTINATARI,
+    TO_CLOB(r.CC) AS CC,
+    TO_CLOB(r.CCN) AS CCN,
+    TO_CLOB(r.OGGETTO) AS OGGETTO,
+    r.DATA_RICEZIONE AS DATA,
+    TO_CLOB(r.CORPO_HTML) AS CORPO_HTML,
+    TO_CLOB(r.CORPO_TESTO) AS CORPO_TESTO,
+    TO_CLOB(r.MESSAGE_ID) AS MESSAGE_ID,
+    TO_CLOB(r.IN_REPLY_TO) AS IN_REPLY_TO,
+    TO_CLOB(r.REFERENCES_HDR) AS REFERENCES_HDR,
+    TO_CLOB(r.THREAD_KEY) AS THREAD_KEY,
     'R' AS TIPO
-  FROM SGAPP.EMAIL_RICEVUTE
- WHERE THREAD_KEY = :p_thread
+FROM SGAPP.EMAIL_RICEVUTE r
+LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
+WHERE r.THREAD_KEY = :p_thread
+
 UNION ALL
+
 SELECT 
-    ID,
-    TO_CLOB(UTENTE) AS MITTENTE,
-    TO_CLOB(DESTINATARI) AS DESTINATARI,
-    TO_CLOB(OGGETTO) AS OGGETTO,
-    DATA_INVIO AS DATA,
-    CORPO_HTML,
-    CORPO_TESTO,
-    MESSAGE_ID,
-    IN_REPLY_TO,
-    REFERENCES_HDR,
-    THREAD_KEY,
+    i.ID,
+    CAST(NULL AS NUMBER) AS CASELLA_ID,
+    TO_CLOB(i.UTENTE) AS CASELLA_EMAIL,
+    TO_CLOB(i.UTENTE) AS MITTENTE,
+    TO_CLOB(i.DESTINATARI) AS DESTINATARI,
+    TO_CLOB(i.CC) AS CC,
+    TO_CLOB(i.BCC) AS CCN,
+    TO_CLOB(i.OGGETTO) AS OGGETTO,
+    i.DATA_INVIO AS DATA,
+    TO_CLOB(i.CORPO_HTML) AS CORPO_HTML,
+    TO_CLOB(i.CORPO_TESTO) AS CORPO_TESTO,
+    TO_CLOB(i.MESSAGE_ID) AS MESSAGE_ID,
+    TO_CLOB(i.IN_REPLY_TO) AS IN_REPLY_TO,
+    TO_CLOB(i.REFERENCES_HDR) AS REFERENCES_HDR,
+    TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
     'I' AS TIPO
-  FROM SGAPP.EMAIL_INVIATE
- WHERE THREAD_KEY = :p_thread
+FROM SGAPP.EMAIL_INVIATE i
+WHERE i.THREAD_KEY = :p_thread
+
 ORDER BY DATA";
 
             await using var cmd = new OracleCommand(sql, conn);
@@ -783,25 +793,31 @@ ORDER BY DATA";
 
             var list = new List<EmailDetail_NEW>();
             await using var reader = await cmd.ExecuteReaderAsync();
+
             while (await reader.ReadAsync())
             {
                 list.Add(new EmailDetail_NEW
                 {
                     Id = reader.GetInt32(0),
-                    Mittente = reader.IsDBNull(1) ? null : reader.GetString(1),
-                    Destinatari = reader.IsDBNull(2) ? null : reader.GetString(2),
-                    Oggetto = reader.IsDBNull(3) ? null : reader.GetString(3),
-                    Data = reader.IsDBNull(4) ? null : reader.GetDateTime(4),
-                    CorpoHtml = reader.IsDBNull(5) ? null : reader.GetString(5),
-                    CorpoTesto = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    MessageId = reader.IsDBNull(7) ? null : reader.GetString(7),
-                    InReplyTo = reader.IsDBNull(8) ? null : reader.GetString(8),
-                    References = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    ThreadKey = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    Tipo = reader.GetString(11), // R = ricevuta, I = inviata
+                    CasellaId = reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                    CasellaEmail = reader.IsDBNull(2) ? null : reader.GetString(2),
+                    Mittente = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    Destinatari = reader.IsDBNull(4) ? null : reader.GetString(4),
+                    Cc = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    Ccn = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    Oggetto = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    Data = reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+                    CorpoHtml = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    CorpoTesto = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    MessageId = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    InReplyTo = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    References = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    ThreadKey = reader.IsDBNull(14) ? null : reader.GetString(14),
+                    Tipo = reader.IsDBNull(15) ? null : reader.GetString(15),
                     IsLoaded = true
                 });
             }
+
 
             // 3️⃣ Recupera allegati per ogni messaggio
             const string attachSqlRicevute = @"
@@ -2166,12 +2182,13 @@ WHERE RN = 1";
             var corporateStyle = "font-size:13px; font-style:italic; color:#004080;";
 
             var firma = $@"
-<div style='{styleBase}'>
-<br/>
-<b>{System.Net.WebUtility.HtmlEncode(nome)}</b><br/>
-{(string.IsNullOrWhiteSpace(titolo) ? "" : $"{System.Net.WebUtility.HtmlEncode(titolo)}<br/>")}
-{(string.IsNullOrWhiteSpace(recapito) ? "" : $"<small style='{smallStyle}'>{System.Net.WebUtility.HtmlEncode(recapito)}</small><br/>")}
-";
+            <div style='{styleBase}'>
+            <br/>
+            Cordiali saluti.<br/>
+            <b>{System.Net.WebUtility.HtmlEncode(nome)}</b><br/>
+            {(string.IsNullOrWhiteSpace(titolo) ? "" : $"{System.Net.WebUtility.HtmlEncode(titolo)}<br/>")}
+            {(string.IsNullOrWhiteSpace(recapito) ? "" : $"<small style='{smallStyle}'>{System.Net.WebUtility.HtmlEncode(recapito)}</small><br/>")}
+            ";
 
             if (!string.IsNullOrWhiteSpace(casella.FirmaDefault))
             {
