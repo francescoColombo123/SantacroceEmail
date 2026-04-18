@@ -945,6 +945,96 @@ WHERE EMAIL_ID IN (
             return list;
         }
 
+        public async Task<int> GetConversationCountByThreadAccurateAsync(int emailId)
+        {
+            await using var conn = await GetOpenConnectionAsync();
+
+            string threadKey;
+            const string findThreadSql = @"
+SELECT THREAD_KEY FROM (
+    SELECT THREAD_KEY FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :id
+    UNION ALL
+    SELECT THREAD_KEY FROM SGAPP.EMAIL_INVIATE WHERE ID = :id
+) WHERE ROWNUM = 1";
+
+            await using (var findCmd = new OracleCommand(findThreadSql, conn))
+            {
+                findCmd.BindByName = true;
+                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
+                var result = await findCmd.ExecuteScalarAsync();
+                threadKey = result?.ToString() ?? "";
+            }
+
+            if (string.IsNullOrWhiteSpace(threadKey))
+                return 1;
+
+            const string countSql = @"
+SELECT COUNT(*)
+FROM (
+    SELECT r.ID
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE r.THREAD_KEY = :p_thread
+
+    UNION ALL
+
+    SELECT i.ID
+    FROM SGAPP.EMAIL_INVIATE i
+    WHERE i.THREAD_KEY = :p_thread
+)";
+
+            await using var countCmd = new OracleCommand(countSql, conn);
+            countCmd.BindByName = true;
+            countCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+
+            var total = await countCmd.ExecuteScalarAsync();
+            return total == null ? 1 : Convert.ToInt32(total);
+        }
+
+        public async Task<int> GetConversationCountByThreadFromRicevuteAsync(int emailId)
+        {
+            await using var conn = await GetOpenConnectionAsync();
+
+            string threadKey;
+
+            const string findThreadSql = @"
+SELECT THREAD_KEY
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE ID = :id";
+
+            await using (var findCmd = new OracleCommand(findThreadSql, conn))
+            {
+                findCmd.BindByName = true;
+                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
+
+                var result = await findCmd.ExecuteScalarAsync();
+                threadKey = result?.ToString() ?? "";
+            }
+
+            if (string.IsNullOrWhiteSpace(threadKey))
+                return 1;
+
+            const string countSql = @"
+SELECT COUNT(*)
+FROM (
+    SELECT r.ID
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE r.THREAD_KEY = :p_thread
+      AND NVL(r.ELIMINATO, 'N') = 'N'
+
+    UNION ALL
+
+    SELECT i.ID
+    FROM SGAPP.EMAIL_INVIATE i
+    WHERE i.THREAD_KEY = :p_thread
+)";
+
+            await using var countCmd = new OracleCommand(countSql, conn);
+            countCmd.BindByName = true;
+            countCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+
+            var total = await countCmd.ExecuteScalarAsync();
+            return total == null ? 1 : Convert.ToInt32(total);
+        }
 
         public async Task AssignEmailAsync(
     int emailId,
@@ -1329,7 +1419,23 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
             cmd.Parameters.Add("p_start", OracleDbType.Int32).Value = start;
             cmd.Parameters.Add("p_pageSizePlusOne", OracleDbType.Int32).Value = pageSize + 1;
 
-            var list = new List<EmailListItem_NEW>();
+            var rawRows = new List<(
+    int Id,
+    DateTime? Data,
+    string Mittente,
+    string Oggetto,
+    string Aperto,
+    bool HasAttachments,
+    string? Preview,
+    List<AllegatoItem_NEW>? Allegati,
+    int CasellaId,
+    string? CasellaEmail,
+    string? AssegnatoA,
+    string? Destinatari,
+    string? Cc,
+    string? Ccn,
+    string? ThreadKey
+)>();
 
             await using var reader = await cmd.ExecuteReaderAsync();
             while (await reader.ReadAsync())
@@ -1352,20 +1458,15 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
                         .ToList();
                 }
 
-                var threadLen = reader.IsDBNull("THREAD_LEN") ? 1 : reader.GetInt32("THREAD_LEN");
-
-                list.Add(new EmailListItem_NEW(
+                rawRows.Add((
                     Id: reader.GetInt32("ID"),
                     Data: reader.IsDBNull("DATA_RICEZIONE") ? (DateTime?)null : reader.GetDateTime("DATA_RICEZIONE"),
                     Mittente: reader.IsDBNull("MITTENTE") ? "" : reader.GetString("MITTENTE"),
                     Oggetto: reader.IsDBNull("OGGETTO") ? "" : reader.GetString("OGGETTO"),
                     Aperto: reader.IsDBNull("APERTO") ? "" : reader.GetString("APERTO"),
                     HasAttachments: reader.GetInt32("HAS_ATTACH") == 1,
-                    ThreadLen: threadLen,
-                    Replies: Math.Max(0, threadLen - 1),
                     Preview: reader.IsDBNull("PREVIEW") ? null : reader.GetString("PREVIEW"),
                     Allegati: allegati,
-                    MessageId: null,
                     CasellaId: reader.GetInt32("CASELLA_ID"),
                     CasellaEmail: reader.IsDBNull("CASELLA_EMAIL") ? null : reader.GetString("CASELLA_EMAIL"),
                     AssegnatoA: reader.IsDBNull("ASSEGNATO_A") ? null : reader.GetString("ASSEGNATO_A"),
@@ -1376,10 +1477,97 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
                 ));
             }
 
+            var threadCounts = await GetRealThreadCountsAsync(conn, rawRows.Select(x => x.Id).ToList());
+
+            var list = rawRows.Select(r =>
+            {
+                var threadLen = threadCounts.TryGetValue(r.Id, out var len) ? len : 1;
+
+                return new EmailListItem_NEW(
+                    Id: r.Id,
+                    Data: r.Data,
+                    Mittente: r.Mittente,
+                    Oggetto: r.Oggetto,
+                    Aperto: r.Aperto,
+                    HasAttachments: r.HasAttachments,
+                    ThreadLen: threadLen,
+                    Replies: Math.Max(0, threadLen - 1),
+                    Preview: r.Preview,
+                    Allegati: r.Allegati,
+                    MessageId: null,
+                    CasellaId: r.CasellaId,
+                    CasellaEmail: r.CasellaEmail,
+                    AssegnatoA: r.AssegnatoA,
+                    Destinatari: r.Destinatari,
+                    Cc: r.Cc,
+                    Ccn: r.Ccn,
+                    ThreadKey: r.ThreadKey
+                );
+            }).ToList();
+
             return list;
         }
 
+        private async Task<Dictionary<int, int>> GetRealThreadCountsAsync(
+    OracleConnection conn,
+    List<int> emailIds)
+{
+    var result = new Dictionary<int, int>();
 
+    if (emailIds == null || emailIds.Count == 0)
+        return result;
+
+    var ids = emailIds.Distinct().ToList();
+    var inList = string.Join(",", ids);
+
+    var sql = $@"
+WITH seed AS (
+    SELECT
+        r.ID,
+        r.THREAD_KEY
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE r.ID IN ({inList})
+),
+thread_totals AS (
+    SELECT
+        x.THREAD_KEY,
+        COUNT(*) AS TOT
+    FROM (
+        SELECT r.THREAD_KEY
+        FROM SGAPP.EMAIL_RICEVUTE r
+        WHERE r.THREAD_KEY IN (SELECT DISTINCT THREAD_KEY FROM seed WHERE THREAD_KEY IS NOT NULL)
+          AND NVL(r.ELIMINATO, 'N') = 'N'
+
+        UNION ALL
+
+        SELECT i.THREAD_KEY
+        FROM SGAPP.EMAIL_INVIATE i
+        WHERE i.THREAD_KEY IN (SELECT DISTINCT THREAD_KEY FROM seed WHERE THREAD_KEY IS NOT NULL)
+    ) x
+    GROUP BY x.THREAD_KEY
+)
+SELECT
+    s.ID,
+    CASE
+        WHEN s.THREAD_KEY IS NULL THEN 1
+        ELSE NVL(t.TOT, 1)
+    END AS THREAD_LEN
+FROM seed s
+LEFT JOIN thread_totals t
+    ON t.THREAD_KEY = s.THREAD_KEY";
+
+    await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+    await using var reader = await cmd.ExecuteReaderAsync();
+
+    while (await reader.ReadAsync())
+    {
+        var id = reader.GetInt32(0);
+        var len = reader.IsDBNull(1) ? 1 : reader.GetInt32(1);
+        result[id] = len;
+    }
+
+    return result;
+}
         public async Task<bool> IsArchivedAsync(int emailId, string utente)
         {
             using var con = new OracleConnection(_connectionString);
@@ -1397,27 +1585,74 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
             return r != null;
         }
 
-
-
-        private static string NormalizeSubject(string? s)
+        public async Task<Dictionary<int, int>> GetConversationCountsByThreadAsync(List<int> emailIds)
         {
-            if (string.IsNullOrWhiteSpace(s)) return "";
-            var x = s.Trim();
-            var patterns = new[] { "RE:", "R:", "FWD:", "FW:", "I:" };
-            bool changed;
-            do
+            var result = new Dictionary<int, int>();
+
+            if (emailIds == null || emailIds.Count == 0)
+                return result;
+
+            var ids = emailIds.Distinct().ToList();
+            var inList = string.Join(",", ids);
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var sql = $@"
+WITH selected_mails AS (
+    SELECT
+        r.ID,
+        r.THREAD_KEY
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE r.ID IN ({inList})
+),
+thread_counts AS (
+    SELECT
+        t.THREAD_KEY,
+        COUNT(*) AS CNT
+    FROM (
+        SELECT r.THREAD_KEY
+        FROM SGAPP.EMAIL_RICEVUTE r
+        WHERE r.THREAD_KEY IN (
+            SELECT DISTINCT THREAD_KEY
+            FROM selected_mails
+            WHERE THREAD_KEY IS NOT NULL
+        )
+          AND NVL(r.ELIMINATO, 'N') = 'N'
+
+        UNION ALL
+
+        SELECT i.THREAD_KEY
+        FROM SGAPP.EMAIL_INVIATE i
+        WHERE i.THREAD_KEY IN (
+            SELECT DISTINCT THREAD_KEY
+            FROM selected_mails
+            WHERE THREAD_KEY IS NOT NULL
+        )
+    ) t
+    GROUP BY t.THREAD_KEY
+)
+SELECT
+    s.ID,
+    CASE
+        WHEN s.THREAD_KEY IS NULL THEN 1
+        ELSE NVL(tc.CNT, 1)
+    END AS THREAD_LEN
+FROM selected_mails s
+LEFT JOIN thread_counts tc
+    ON tc.THREAD_KEY = s.THREAD_KEY";
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            await using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
             {
-                changed = false;
-                var t = x.TrimStart();
-                foreach (var p in patterns)
-                    if (t.StartsWith(p, StringComparison.OrdinalIgnoreCase))
-                    {
-                        t = t.Substring(p.Length).TrimStart(' ', '\t', ':');
-                        changed = true;
-                    }
-                x = t;
-            } while (changed);
-            return x.ToUpperInvariant();
+                var id = reader.GetInt32(0);
+                var len = reader.IsDBNull(1) ? 1 : reader.GetInt32(1);
+                result[id] = len;
+            }
+
+            return result;
         }
 
         private static string MapFolderToUi(string dbFolder)
@@ -1974,7 +2209,23 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
             cmd.Parameters.Add("p_start", OracleDbType.Int32).Value = start;
             cmd.Parameters.Add("p_pageSize", OracleDbType.Int32).Value = pageSize;
 
-            var list = new List<EmailListItem_NEW>();
+            var rawRows = new List<(
+     int Id,
+     DateTime? Data,
+     string Mittente,
+     string Oggetto,
+     string Aperto,
+     bool HasAttachments,
+     string? Preview,
+     List<AllegatoItem_NEW>? Allegati,
+     int CasellaId,
+     string? CasellaEmail,
+     string? AssegnatoA,
+     string? Destinatari,
+     string? Cc,
+     string? Ccn,
+     string? ThreadKey
+ )>();
 
             await using (var reader = await cmd.ExecuteReaderAsync())
             {
@@ -1998,20 +2249,15 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                             .ToList();
                     }
 
-                    var threadLen = reader.IsDBNull("THREAD_LEN") ? 1 : reader.GetInt32("THREAD_LEN");
-
-                    list.Add(new EmailListItem_NEW(
+                    rawRows.Add((
                         Id: reader.GetInt32("ID"),
                         Data: reader.IsDBNull("DATA_RICEZIONE") ? (DateTime?)null : reader.GetDateTime("DATA_RICEZIONE"),
                         Mittente: reader.IsDBNull("MITTENTE") ? "" : reader.GetString("MITTENTE"),
                         Oggetto: reader.IsDBNull("OGGETTO") ? "" : reader.GetString("OGGETTO"),
                         Aperto: reader.IsDBNull("APERTO") ? "" : reader.GetString("APERTO"),
                         HasAttachments: reader.GetInt32("HAS_ATTACH") == 1,
-                        ThreadLen: threadLen,
-                        Replies: Math.Max(0, threadLen - 1),
                         Preview: reader.IsDBNull("PREVIEW") ? null : reader.GetString("PREVIEW"),
                         Allegati: allegati,
-                        MessageId: null,
                         CasellaId: reader.GetInt32("CASELLA_ID"),
                         CasellaEmail: reader.IsDBNull("CASELLA_EMAIL") ? null : reader.GetString("CASELLA_EMAIL"),
                         AssegnatoA: reader.IsDBNull("ASSEGNATO_A") ? null : reader.GetString("ASSEGNATO_A"),
@@ -2022,6 +2268,34 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                     ));
                 }
             }
+
+            var threadCounts = await GetRealThreadCountsAsync(conn, rawRows.Select(x => x.Id).ToList());
+
+            var list = rawRows.Select(r =>
+            {
+                var threadLen = threadCounts.TryGetValue(r.Id, out var len) ? len : 1;
+
+                return new EmailListItem_NEW(
+                    Id: r.Id,
+                    Data: r.Data,
+                    Mittente: r.Mittente,
+                    Oggetto: r.Oggetto,
+                    Aperto: r.Aperto,
+                    HasAttachments: r.HasAttachments,
+                    ThreadLen: threadLen,
+                    Replies: Math.Max(0, threadLen - 1),
+                    Preview: r.Preview,
+                    Allegati: r.Allegati,
+                    MessageId: null,
+                    CasellaId: r.CasellaId,
+                    CasellaEmail: r.CasellaEmail,
+                    AssegnatoA: r.AssegnatoA,
+                    Destinatari: r.Destinatari,
+                    Cc: r.Cc,
+                    Ccn: r.Ccn,
+                    ThreadKey: r.ThreadKey
+                );
+            }).ToList();
 
             string countSql = $@"
 SELECT COUNT(*)
@@ -3267,16 +3541,17 @@ WHERE NVL(e.ELIMINATO,'N') = 'N'
                 whereSql += @"
   AND (
         LOWER(NVL(e.MITTENTE,''))     LIKE '%' || :p_addr || '%'
-     OR LOWER(NVL(e.DESTINATARI,'')) LIKE '%' || :p_addr || '%'
-     OR LOWER(NVL(e.CC,''))          LIKE '%' || :p_addr || '%'
-     OR LOWER(NVL(e.CCN,''))         LIKE '%' || :p_addr || '%'
+     OR LOWER(NVL(e.DESTINATARI,''))  LIKE '%' || :p_addr || '%'
+     OR LOWER(NVL(e.CC,''))           LIKE '%' || :p_addr || '%'
+     OR LOWER(NVL(e.CCN,''))          LIKE '%' || :p_addr || '%'
   )";
             }
 
             var sql = $@"
-WITH base_rows AS (
+WITH filtered_rows AS (
     SELECT
         e.ID,
+        NVL(e.THREAD_KEY, 'R_SINGLE_' || e.ID) AS THREAD_KEY_NORM,
         e.THREAD_KEY,
         e.MITTENTE,
         e.DESTINATARI,
@@ -3288,7 +3563,9 @@ WITH base_rows AS (
         e.CC,
         e.CCN,
         CASE WHEN EXISTS (
-            SELECT 1 FROM SGAPP.EMAIL_ALLEGATI a WHERE a.EMAIL_ID = e.ID
+            SELECT 1
+            FROM SGAPP.EMAIL_ALLEGATI a
+            WHERE a.EMAIL_ID = e.ID
         ) THEN 1 ELSE 0 END AS HAS_ATTACH,
         (
             SELECT LISTAGG(
@@ -3305,40 +3582,55 @@ WITH base_rows AS (
             WHERE x.EMAIL_ID = e.ID
         ) AS ASSEGNATO_A,
         ROW_NUMBER() OVER (
-            PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
+            PARTITION BY NVL(e.THREAD_KEY, 'R_SINGLE_' || e.ID)
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
         MAX(CASE WHEN NVL(e.APERTO, 'N') = 'N' THEN 1 ELSE 0 END) OVER (
-            PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
-        ) AS HAS_UNREAD,
-        COUNT(*) OVER (
-            PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
-        ) AS THREAD_LEN
+            PARTITION BY NVL(e.THREAD_KEY, 'R_SINGLE_' || e.ID)
+        ) AS HAS_UNREAD
     FROM SGAPP.EMAIL_RICEVUTE e
     JOIN SGAPP.CASELLEPOSTA c ON c.ID = e.CASELLA_ID
     {whereSql}
+),
+thread_totals AS (
+    SELECT
+        t.THREAD_KEY_NORM,
+        COUNT(*) AS THREAD_LEN_REAL
+    FROM (
+        SELECT NVL(r.THREAD_KEY, 'R_SINGLE_' || r.ID) AS THREAD_KEY_NORM
+        FROM SGAPP.EMAIL_RICEVUTE r
+        WHERE NVL(r.ELIMINATO, 'N') = 'N'
+
+        UNION ALL
+
+        SELECT NVL(i.THREAD_KEY, 'I_SINGLE_' || i.ID) AS THREAD_KEY_NORM
+        FROM SGAPP.EMAIL_INVIATE i
+    ) t
+    GROUP BY t.THREAD_KEY_NORM
 )
 SELECT
-    ID,
-    THREAD_KEY,
-    MITTENTE,
-    DESTINATARI,
-    OGGETTO,
-    DATA_RICEZIONE,
-    CASELLA_ID,
-    CASELLA_EMAIL,
-    CASE WHEN HAS_UNREAD = 1 THEN 'N' ELSE 'Y' END AS APERTO,
-    CC,
-    CCN,
-    HAS_ATTACH,
-    ATT_PACK,
-    PREVIEW,
-    ASSEGNATO_A,
-    THREAD_LEN,
+    fr.ID,
+    fr.THREAD_KEY,
+    fr.MITTENTE,
+    fr.DESTINATARI,
+    fr.OGGETTO,
+    fr.DATA_RICEZIONE,
+    fr.CASELLA_ID,
+    fr.CASELLA_EMAIL,
+    CASE WHEN fr.HAS_UNREAD = 1 THEN 'N' ELSE 'Y' END AS APERTO,
+    fr.CC,
+    fr.CCN,
+    fr.HAS_ATTACH,
+    fr.ATT_PACK,
+    fr.PREVIEW,
+    fr.ASSEGNATO_A,
+    NVL(tt.THREAD_LEN_REAL, 1) AS THREAD_LEN,
     COUNT(*) OVER() AS TOTAL_COUNT
-FROM base_rows
-WHERE RN = 1
-ORDER BY DATA_RICEZIONE DESC, ID DESC
+FROM filtered_rows fr
+LEFT JOIN thread_totals tt
+    ON tt.THREAD_KEY_NORM = fr.THREAD_KEY_NORM
+WHERE fr.RN = 1
+ORDER BY fr.DATA_RICEZIONE DESC, fr.ID DESC
 OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
 
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -3381,7 +3673,24 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             }
             catch { }
 
-            var list = new List<EmailListItem_NEW>();
+            var rawRows = new List<(
+      int Id,
+      DateTime? Data,
+      string Mittente,
+      string Oggetto,
+      string Aperto,
+      bool HasAttachments,
+      string? Preview,
+      List<AllegatoItem_NEW>? Allegati,
+      int CasellaId,
+      string? CasellaEmail,
+      string? AssegnatoA,
+      string? Destinatari,
+      string? Cc,
+      string? Ccn,
+      string? ThreadKey
+  )>();
+
             int total = 0;
 
             await using var reader = await cmd.ExecuteReaderAsync();
@@ -3408,22 +3717,15 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                         .ToList();
                 }
 
-                var threadLen = reader.IsDBNull(reader.GetOrdinal("THREAD_LEN"))
-                    ? 1
-                    : reader.GetInt32(reader.GetOrdinal("THREAD_LEN"));
-
-                list.Add(new EmailListItem_NEW(
+                rawRows.Add((
                     Id: reader.GetInt32(reader.GetOrdinal("ID")),
                     Data: reader.IsDBNull(reader.GetOrdinal("DATA_RICEZIONE")) ? (DateTime?)null : reader.GetDateTime(reader.GetOrdinal("DATA_RICEZIONE")),
                     Mittente: GetStr(reader, "MITTENTE") ?? "",
                     Oggetto: GetStr(reader, "OGGETTO") ?? "(senza oggetto)",
                     Aperto: GetStr(reader, "APERTO") ?? "",
                     HasAttachments: reader.GetInt32(reader.GetOrdinal("HAS_ATTACH")) == 1,
-                    ThreadLen: threadLen,
-                    Replies: Math.Max(0, threadLen - 1),
                     Preview: GetStr(reader, "PREVIEW"),
                     Allegati: allegati,
-                    MessageId: null,
                     CasellaId: reader.GetInt32(reader.GetOrdinal("CASELLA_ID")),
                     CasellaEmail: GetStr(reader, "CASELLA_EMAIL"),
                     AssegnatoA: GetStr(reader, "ASSEGNATO_A"),
@@ -3433,6 +3735,34 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     ThreadKey: GetStr(reader, "THREAD_KEY")
                 ));
             }
+
+            var threadCounts = await GetRealThreadCountsAsync(conn, rawRows.Select(x => x.Id).ToList());
+
+            var list = rawRows.Select(r =>
+            {
+                var threadLen = threadCounts.TryGetValue(r.Id, out var len) ? len : 1;
+
+                return new EmailListItem_NEW(
+                    Id: r.Id,
+                    Data: r.Data,
+                    Mittente: r.Mittente,
+                    Oggetto: r.Oggetto,
+                    Aperto: r.Aperto,
+                    HasAttachments: r.HasAttachments,
+                    ThreadLen: threadLen,
+                    Replies: Math.Max(0, threadLen - 1),
+                    Preview: r.Preview,
+                    Allegati: r.Allegati,
+                    MessageId: null,
+                    CasellaId: r.CasellaId,
+                    CasellaEmail: r.CasellaEmail,
+                    AssegnatoA: r.AssegnatoA,
+                    Destinatari: r.Destinatari,
+                    Cc: r.Cc,
+                    Ccn: r.Ccn,
+                    ThreadKey: r.ThreadKey
+                );
+            }).ToList();
 
             return (list, total);
         }
@@ -3597,7 +3927,24 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
             cmd.Parameters.Add("p_start", OracleDbType.Int32).Value = start;
             cmd.Parameters.Add("p_pageSize", OracleDbType.Int32).Value = pageSize;
 
-            var list = new List<EmailListItem_NEW>();
+            var rawRows = new List<(
+    int Id,
+    DateTime? Data,
+    string Mittente,
+    string Oggetto,
+    string Aperto,
+    bool HasAttachments,
+    string? Preview,
+    List<AllegatoItem_NEW>? Allegati,
+    int CasellaId,
+    string? CasellaEmail,
+    string? AssegnatoA,
+    string? Destinatari,
+    string? Cc,
+    string? Ccn,
+    string? ThreadKey
+)>();
+
             int total = 0;
 
             await using (var reader = await cmd.ExecuteReaderAsync())
@@ -3625,22 +3972,15 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                             .ToList();
                     }
 
-                    var threadLen = reader.IsDBNull(reader.GetOrdinal("THREAD_LEN"))
-                        ? 1
-                        : reader.GetInt32(reader.GetOrdinal("THREAD_LEN"));
-
-                    list.Add(new EmailListItem_NEW(
+                    rawRows.Add((
                         Id: reader.GetInt32("ID"),
                         Data: reader.IsDBNull("DATA_RICEZIONE") ? (DateTime?)null : reader.GetDateTime("DATA_RICEZIONE"),
                         Mittente: reader.IsDBNull("MITTENTE") ? "" : reader.GetString("MITTENTE"),
                         Oggetto: reader.IsDBNull("OGGETTO") ? "" : reader.GetString("OGGETTO"),
                         Aperto: reader.IsDBNull("APERTO") ? "" : reader.GetString("APERTO"),
                         HasAttachments: reader.GetInt32("HAS_ATTACH") == 1,
-                        ThreadLen: threadLen,
-                        Replies: Math.Max(0, threadLen - 1),
                         Preview: reader.IsDBNull("PREVIEW") ? null : reader.GetString("PREVIEW"),
                         Allegati: allegati,
-                        MessageId: null,
                         CasellaId: reader.GetInt32("CASELLA_ID"),
                         CasellaEmail: reader.IsDBNull("CASELLA_EMAIL") ? null : reader.GetString("CASELLA_EMAIL"),
                         AssegnatoA: reader.IsDBNull("ASSEGNATO_A") ? null : reader.GetString("ASSEGNATO_A"),
@@ -3651,6 +3991,34 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                     ));
                 }
             }
+
+            var threadCounts = await GetRealThreadCountsAsync(conn, rawRows.Select(x => x.Id).ToList());
+
+            var list = rawRows.Select(r =>
+            {
+                var threadLen = threadCounts.TryGetValue(r.Id, out var len) ? len : 1;
+
+                return new EmailListItem_NEW(
+                    Id: r.Id,
+                    Data: r.Data,
+                    Mittente: r.Mittente,
+                    Oggetto: r.Oggetto,
+                    Aperto: r.Aperto,
+                    HasAttachments: r.HasAttachments,
+                    ThreadLen: threadLen,
+                    Replies: Math.Max(0, threadLen - 1),
+                    Preview: r.Preview,
+                    Allegati: r.Allegati,
+                    MessageId: null,
+                    CasellaId: r.CasellaId,
+                    CasellaEmail: r.CasellaEmail,
+                    AssegnatoA: r.AssegnatoA,
+                    Destinatari: r.Destinatari,
+                    Cc: r.Cc,
+                    Ccn: r.Ccn,
+                    ThreadKey: r.ThreadKey
+                );
+            }).ToList();
 
             return (list, total);
         }
@@ -3846,6 +4214,63 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
             );
         }
 
+
+        public async Task<int> GetConversationCountByThreadAsync(int emailId)
+        {
+            await using var conn = await GetOpenConnectionAsync();
+
+            string threadKey = "";
+
+            const string findThreadSql = @"
+SELECT THREAD_KEY
+FROM (
+    SELECT THREAD_KEY
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID = :id
+
+    UNION ALL
+
+    SELECT THREAD_KEY
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE ID = :id
+)
+WHERE ROWNUM = 1";
+
+            await using (var findCmd = new OracleCommand(findThreadSql, conn))
+            {
+                findCmd.BindByName = true;
+                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
+
+                var result = await findCmd.ExecuteScalarAsync();
+                threadKey = result?.ToString() ?? "";
+            }
+
+            if (string.IsNullOrWhiteSpace(threadKey))
+                return 1;
+
+            const string countSql = @"
+SELECT COUNT(*)
+FROM (
+    SELECT ID
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE THREAD_KEY = :p_thread
+      AND NVL(ELIMINATO, 'N') = 'N'
+
+    UNION ALL
+
+    SELECT ID
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE THREAD_KEY = :p_thread
+)";
+
+            await using var countCmd = new OracleCommand(countSql, conn);
+            countCmd.BindByName = true;
+            countCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+
+            var total = await countCmd.ExecuteScalarAsync();
+            return total == null ? 1 : Convert.ToInt32(total);
+
+        }
         public async Task<int> CountUnassignedForAdminAsync(string utente, string? word = null, string? address = null)
         {
             var caselleAdmin = await GetAdminCasellaIdsAsync(utente);
@@ -4116,9 +4541,8 @@ ORDER BY p.DATA_RICEZIONE DESC, p.ID DESC";
                         .ToList();
                 }
 
-                var threadLen = reader.IsDBNull(reader.GetOrdinal("THREAD_LEN"))
-                    ? 1
-                    : reader.GetInt32(reader.GetOrdinal("THREAD_LEN"));
+                var emailId = reader.GetInt32(reader.GetOrdinal("ID"));
+                var threadLen = await GetConversationCountByThreadAsync(emailId);
 
                 list.Add(new EmailListItem_NEW(
                     Id: reader.GetInt32(reader.GetOrdinal("ID")),
