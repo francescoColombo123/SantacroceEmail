@@ -189,14 +189,24 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
     int start = 0,
     int pageSize = 50)
         {
+            if (string.IsNullOrWhiteSpace(utente))
+                return (new List<EmailListItem_NEW>(), 0);
+
             await using var db = _dbFactory.CreateDbContext();
 
-            // 1) Carico i record base dal DB
-            // NOTA: qui assumo che m.Utente sia l'utente menzionato
+            var utenteNorm = utente.Trim().ToLowerInvariant();
+
+            // 1) prendo TUTTE le menzioni dell'utente corrente, viste e non viste
             var mentionsBase = await (
-                from m in db.emailMenzionis
-                join e in db.EmailRicevute on m.EmailId equals e.Id
-                where !db.EmailArchivio.Any(a => a.IdEmail == m.EmailId && a.Utente == utente)
+                from m in db.emailMenzionis.AsNoTracking()
+                join e in db.EmailRicevute.AsNoTracking() on m.EmailId equals e.Id
+                where m.Utente != null
+                      && m.Utente.ToLower() == utenteNorm
+                      && (e.Eliminato == null || e.Eliminato != "Y")
+                      && !db.EmailArchivio.Any(a =>
+                            a.IdEmail == m.EmailId &&
+                            a.Utente != null &&
+                            a.Utente.ToLower() == utenteNorm)
                 select new
                 {
                     m.EmailId,
@@ -211,13 +221,19 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     e.Oggetto,
                     e.CorpoHtml,
                     e.CorpoTesto,
-                    e.CasellaId
+                    e.CasellaId,
+                    e.Destinatari
                 }
             ).ToListAsync();
 
-            // 2) Grouping in memoria per thread
+            if (mentionsBase.Count == 0)
+                return (new List<EmailListItem_NEW>(), 0);
+
+            // 2) group per thread
             var threadGroups = mentionsBase
-                .GroupBy(x => string.IsNullOrWhiteSpace(x.ThreadKey) ? $"SINGLE_{x.Id}" : x.ThreadKey!)
+                .GroupBy(x => string.IsNullOrWhiteSpace(x.ThreadKey)
+                    ? $"SINGLE_{x.Id}"
+                    : x.ThreadKey!.Trim())
                 .Select(g =>
                 {
                     var orderedEmails = g
@@ -230,21 +246,20 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                         .ThenByDescending(x => x.Id)
                         .First();
 
+                    var unreadMentionCount = g.Count(x => x.Visto == "N");
+
                     return new
                     {
                         ThreadKey = g.Key,
                         LastMentionDate = lastMention.DataMenzione,
-                        MentionedUser = lastMention.Menzionato,
-                        UnreadCount = g.Count(x => x.Menzionato == utente && x.Visto == "N"),
+                        MentionedUser = utenteNorm,
+                        UnreadMentionCount = unreadMentionCount,
+                        IsReadMention = unreadMentionCount == 0,
                         ThreadLen = g.Select(x => x.Id).Distinct().Count(),
                         LastEmailId = orderedEmails.First().Id,
-                        EmailIds = g.Select(x => x.Id).Distinct().ToList(),
-
-                        // il thread compare all'utente se almeno una menzione del thread è per lui
-                        IsMentionedForCurrentUser = g.Any(x => x.Menzionato == utente)
+                        EmailIds = g.Select(x => x.Id).Distinct().ToList()
                     };
                 })
-                .Where(x => x.IsMentionedForCurrentUser)
                 .OrderByDescending(x => x.LastMentionDate)
                 .ToList();
 
@@ -255,15 +270,19 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 .Take(pageSize)
                 .ToList();
 
+            if (pageKeys.Count == 0)
+                return (new List<EmailListItem_NEW>(), total);
+
             var lastEmailIds = pageKeys
                 .Select(x => x.LastEmailId)
                 .Distinct()
                 .ToList();
 
-            // 3) Carico le email latest della pagina
+            // 3) email latest della pagina
             var emails = await (
-                from e in db.EmailRicevute
-                join c in db.CasellePosta on e.CasellaId equals c.Id
+                from e in db.EmailRicevute.AsNoTracking()
+                join c in db.CasellePosta.AsNoTracking() on e.CasellaId equals c.Id into caselle
+                from casella in caselle.DefaultIfEmpty()
                 where lastEmailIds.Contains(e.Id)
                 select new
                 {
@@ -275,23 +294,38 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     e.CorpoHtml,
                     e.CorpoTesto,
                     e.CasellaId,
-                    CasellaEmail = c.Email
+                    CasellaEmail = casella != null ? casella.Email : null,
+                    e.Destinatari
                 }
             ).ToListAsync();
 
-            // 4) Carico tutti i commenti dei thread in pagina
+            // 4) commenti del thread per capire se il menzionato ha risposto
             var pageThreadEmailIds = pageKeys
                 .SelectMany(x => x.EmailIds)
                 .Distinct()
                 .ToList();
 
             var threadComments = await db.CommentiEmail
+                .AsNoTracking()
                 .Where(c => pageThreadEmailIds.Contains(c.EmailId))
                 .Select(c => new
                 {
                     c.EmailId,
                     c.Autore,
                     c.DataCreazione
+                })
+                .ToListAsync();
+
+            // 5) allegati
+            var allegati = await db.EmailAllegati
+                .AsNoTracking()
+                .Where(a => lastEmailIds.Contains(a.EmailId))
+                .Select(a => new
+                {
+                    a.Id,
+                    a.EmailId,
+                    a.NomeFile,
+                    a.MimeType
                 })
                 .ToListAsync();
 
@@ -310,41 +344,43 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     if (!string.IsNullOrEmpty(preview) && preview.Length > 200)
                         preview = preview[..200];
 
-                    // Il menzionato ha risposto dopo la menzione?
                     var mentionedUserHasReplied = threadComments.Any(c =>
                         k.EmailIds.Contains(c.EmailId) &&
-                        c.Autore == k.MentionedUser &&
+                        c.Autore != null &&
+                        c.Autore.ToLower() == utenteNorm &&
                         c.DataCreazione > k.LastMentionDate
                     );
 
-                    // Regola:
-                    // - se NON sono io il menzionato -> posso archiviare
-                    // - se sono io il menzionato -> posso archiviare solo se ho risposto dopo la menzione
-                    var canArchive = !string.Equals(utente, k.MentionedUser, StringComparison.OrdinalIgnoreCase)
-                                     || mentionedUserHasReplied;
+                    var allegatiMail = allegati
+                        .Where(a => a.EmailId == e.Id)
+                        .Select(a => new AllegatoItem_NEW(
+                            a.Id,
+                            a.NomeFile,
+                            a.MimeType
+                        ))
+                        .ToList();
 
                     return new EmailListItem_NEW(
                         Id: e.Id,
                         Data: e.DataRicezione,
                         Mittente: e.Mittente ?? "",
                         Oggetto: e.Oggetto ?? "",
-                        Aperto: k.UnreadCount > 0 ? "N" : "Y",
-                        HasAttachments: false,
+                        Aperto: k.IsReadMention ? "Y" : "N",
+                        HasAttachments: allegatiMail.Any(),
                         ThreadLen: k.ThreadLen <= 0 ? 1 : k.ThreadLen,
                         Replies: Math.Max(0, (k.ThreadLen <= 0 ? 1 : k.ThreadLen) - 1),
                         Preview: preview,
-                        Allegati: null,
+                        Allegati: allegatiMail,
                         MessageId: null,
                         CasellaId: e.CasellaId,
-                        CasellaEmail: e.CasellaEmail ?? "",
+                        CasellaEmail: e.CasellaEmail,
                         ThreadKey: string.IsNullOrWhiteSpace(e.ThreadKey) ? null : e.ThreadKey,
                         AssegnatoA: utente,
-                        Destinatari: null,
-                        Cc: null,
-                        Ccn: null,
+                        Destinatari: e.Destinatari,
                         LettoSeguita: null,
                         LettoSeguitaIl: null,
-                        CanArchive: canArchive
+                        CanArchive: mentionedUserHasReplied,
+                        IsReadByCurrentUser: k.IsReadMention
                     );
                 })
                 .ToList();
@@ -545,6 +581,53 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             return list;
         }
 
+        public async Task<(int TotalInbox, int UnreadInbox)> GetInboxHomeCountsAsync(string utente)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var utenteNorm = utente.Trim().ToLower();
+            var minDate = GetMailUiMinDate();
+
+            var rows = await (
+                from e in db.EmailRicevute.AsNoTracking()
+                join a in db.EmailAssegnazione.AsNoTracking()
+                    on e.Id equals a.EmailId
+                where a.Utente != null
+                      && a.Utente.ToLower() == utenteNorm
+                      && (e.Eliminato == null || e.Eliminato != "Y")
+                      && (e.Blacklist == null || e.Blacklist != "Y")
+                      && (!minDate.HasValue || e.DataRicezione >= minDate.Value)
+                      && !db.EmailArchivio.Any(ar =>
+                            ar.IdEmail == e.Id &&
+                            ar.Utente != null &&
+                            ar.Utente.ToLower() == utenteNorm)
+                      && !db.EmailInboxSezioneMap.Any(m =>
+                            m.IdEmail == e.Id &&
+                            m.Utente != null &&
+                            m.Utente.ToLower() == utenteNorm)
+                select new
+                {
+                    e.Id,
+                    e.ThreadKey,
+
+                    LettureCount = db.EmailLetture.Count(l =>
+                        l.EmailId == e.Id &&
+                        l.Utente != null &&
+                        l.Utente.ToLower() == utenteNorm)
+                }
+            ).ToListAsync();
+
+            var grouped = rows
+                .GroupBy(x => string.IsNullOrWhiteSpace(x.ThreadKey)
+                    ? $"SINGLE_{x.Id}"
+                    : x.ThreadKey.Trim())
+                .ToList();
+
+            return (
+                TotalInbox: grouped.Count,
+                UnreadInbox: grouped.Count(g => g.Any(x => x.LettureCount == 0))
+            );
+        }
         public async Task<string> GetEmailAddressByUsernameAsync(string username)
         {
             // 🔍 Trova l’indirizzo email associato all’utente
@@ -945,51 +1028,6 @@ WHERE EMAIL_ID IN (
             return list;
         }
 
-        public async Task<int> GetConversationCountByThreadAccurateAsync(int emailId)
-        {
-            await using var conn = await GetOpenConnectionAsync();
-
-            string threadKey;
-            const string findThreadSql = @"
-SELECT THREAD_KEY FROM (
-    SELECT THREAD_KEY FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :id
-    UNION ALL
-    SELECT THREAD_KEY FROM SGAPP.EMAIL_INVIATE WHERE ID = :id
-) WHERE ROWNUM = 1";
-
-            await using (var findCmd = new OracleCommand(findThreadSql, conn))
-            {
-                findCmd.BindByName = true;
-                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
-                var result = await findCmd.ExecuteScalarAsync();
-                threadKey = result?.ToString() ?? "";
-            }
-
-            if (string.IsNullOrWhiteSpace(threadKey))
-                return 1;
-
-            const string countSql = @"
-SELECT COUNT(*)
-FROM (
-    SELECT r.ID
-    FROM SGAPP.EMAIL_RICEVUTE r
-    WHERE r.THREAD_KEY = :p_thread
-
-    UNION ALL
-
-    SELECT i.ID
-    FROM SGAPP.EMAIL_INVIATE i
-    WHERE i.THREAD_KEY = :p_thread
-)";
-
-            await using var countCmd = new OracleCommand(countSql, conn);
-            countCmd.BindByName = true;
-            countCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
-
-            var total = await countCmd.ExecuteScalarAsync();
-            return total == null ? 1 : Convert.ToInt32(total);
-        }
-
         public async Task<int> GetConversationCountByThreadFromRicevuteAsync(int emailId)
         {
             await using var conn = await GetOpenConnectionAsync();
@@ -1016,16 +1054,20 @@ WHERE ID = :id";
             const string countSql = @"
 SELECT COUNT(*)
 FROM (
-    SELECT r.ID
+    SELECT LOWER(TRIM(r.MESSAGE_ID)) AS MSG_KEY
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.THREAD_KEY = :p_thread
       AND NVL(r.ELIMINATO, 'N') = 'N'
+      AND r.MESSAGE_ID IS NOT NULL
+    GROUP BY LOWER(TRIM(r.MESSAGE_ID))
 
-    UNION ALL
+    UNION
 
-    SELECT i.ID
-    FROM SGAPP.EMAIL_INVIATE i
-    WHERE i.THREAD_KEY = :p_thread
+    SELECT 'NO_MSGID_' || TO_CHAR(r.ID) AS MSG_KEY
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE r.THREAD_KEY = :p_thread
+      AND NVL(r.ELIMINATO, 'N') = 'N'
+      AND r.MESSAGE_ID IS NULL
 )";
 
             await using var countCmd = new OracleCommand(countSql, conn);
@@ -1690,137 +1732,159 @@ LEFT JOIN thread_counts tc
         }
 
         public async Task<(List<EmailListItem_NEW> page, int total)> GetFollowedEmailsPagedAsync(
-     string utente,
-     int start,
-     int pageSize,
-     string? word = null,
-     string? address = null)
+    string utente,
+    int start,
+    int pageSize,
+    string? word = null,
+    string? address = null)
+{
+    if (string.IsNullOrWhiteSpace(utente))
+        return (new List<EmailListItem_NEW>(), 0);
+
+    await using var db = _dbFactory.CreateDbContext();
+
+    var utenteNorm = utente.Trim().ToLowerInvariant();
+    var wordNorm = word?.Trim().ToLowerInvariant();
+    var addrNorm = address?.Trim().ToLowerInvariant();
+
+    var query =
+        from e in db.EmailRicevute
+        join s in db.EmailSeguite on e.Id equals s.EmailId
+        join c in db.CasellePosta on e.CasellaId equals c.Id into caselle
+        from casella in caselle.DefaultIfEmpty()
+        where s.Utente == utenteNorm
+              && !db.EmailArchivio.Any(a => a.IdEmail == e.Id && a.Utente == utenteNorm)
+        select new { e, s, casella };
+
+    if (!string.IsNullOrWhiteSpace(wordNorm) && wordNorm.Length >= 2)
+    {
+        query = query.Where(x =>
+            (x.e.Oggetto != null && x.e.Oggetto.ToLower().Contains(wordNorm)) ||
+            (x.e.Mittente != null && x.e.Mittente.ToLower().Contains(wordNorm)) ||
+            (x.e.CorpoTesto != null && x.e.CorpoTesto.ToLower().Contains(wordNorm)));
+    }
+
+    if (!string.IsNullOrWhiteSpace(addrNorm))
+    {
+        query = query.Where(x =>
+            (x.e.Mittente != null && x.e.Mittente.ToLower().Contains(addrNorm)) ||
+            (x.e.Destinatari != null && x.e.Destinatari.ToLower().Contains(addrNorm)) ||
+            (x.casella != null && x.casella.Email != null && x.casella.Email.ToLower().Contains(addrNorm)));
+    }
+
+    var total = await query.CountAsync();
+
+    var rawPage = await query
+        .AsNoTracking()
+        .OrderBy(x => x.s.Letto == "Y" ? 1 : 0)
+        .ThenByDescending(x => x.e.DataRicezione)
+        .Skip(start)
+        .Take(pageSize)
+        .Select(x => new
         {
-            if (string.IsNullOrWhiteSpace(utente))
-                return (new List<EmailListItem_NEW>(), 0);
+            Id = x.e.Id,
+            Data = x.e.DataRicezione,
+            Mittente = x.e.Mittente,
+            Oggetto = x.e.Oggetto,
+            Aperto = x.e.Aperto,
+            Preview = x.e.CorpoTesto != null
+                ? x.e.CorpoTesto.Substring(0, Math.Min(200, x.e.CorpoTesto.Length))
+                : null,
+            MessageId = x.e.MessageId,
+            CasellaId = x.e.CasellaId,
+            CasellaEmail = x.casella != null ? x.casella.Email : null,
+            ThreadKey = x.e.ThreadKey,
+            Destinatari = x.e.Destinatari,
+            LettoSeguita = x.s.Letto,
+            LettoSeguitaIl = x.s.LettoIl
+        })
+        .ToListAsync();
 
-            await using var db = _dbFactory.CreateDbContext();
+    var page = rawPage
+        .Select(x => new EmailListItem_NEW(
+            Id: x.Id,
+            Data: x.Data,
+            Mittente: x.Mittente,
+            Oggetto: x.Oggetto,
+            Aperto: x.Aperto,
+            HasAttachments: false,
+            ThreadLen: 0,
+            Replies: 0,
+            Preview: x.Preview,
+            Allegati: null,
+            MessageId: x.MessageId,
+            CasellaId: x.CasellaId,
+            CasellaEmail: x.CasellaEmail,
+            ThreadKey: x.ThreadKey,
+            AssegnatoA: null,
+            Destinatari: x.Destinatari,
+            Cc: null,
+            Ccn: null,
+            LettoSeguita: x.LettoSeguita,
+            LettoSeguitaIl: x.LettoSeguitaIl,
+            CanArchive: true,
+            IsReadByCurrentUser: true
+        ))
+        .ToList();
 
-            var utenteNorm = utente.Trim().ToLowerInvariant();
-            var wordNorm = word?.Trim().ToLowerInvariant();
-            var addrNorm = address?.Trim().ToLowerInvariant();
+    var ids = page.Select(x => x.Id).ToList();
 
-            var query =
-                from e in db.EmailRicevute
-                join s in db.EmailSeguite on e.Id equals s.EmailId
-                join c in db.CasellePosta on e.CasellaId equals c.Id into caselle
-                from casella in caselle.DefaultIfEmpty()
-                where s.Utente == utenteNorm
-                      && !db.EmailArchivio.Any(a => a.IdEmail == e.Id && a.Utente == utenteNorm)
-                select new { e, s, casella };
-
-            if (!string.IsNullOrWhiteSpace(wordNorm) && wordNorm.Length >= 2)
+    if (ids.Any())
+    {
+        var allegati = await db.EmailAllegati
+            .AsNoTracking()
+            .Where(a => ids.Contains(a.EmailId))
+            .Select(a => new
             {
-                query = query.Where(x =>
-                    (x.e.Oggetto != null && x.e.Oggetto.ToLower().Contains(wordNorm)) ||
-                    (x.e.Mittente != null && x.e.Mittente.ToLower().Contains(wordNorm)) ||
-                    (x.e.CorpoTesto != null && x.e.CorpoTesto.ToLower().Contains(wordNorm)));
-            }
+                a.Id,
+                a.EmailId,
+                a.NomeFile,
+                a.MimeType
+            })
+            .ToListAsync();
 
-            if (!string.IsNullOrWhiteSpace(addrNorm))
+        page = page
+            .Select(mail =>
             {
-                query = query.Where(x =>
-                    (x.e.Mittente != null && x.e.Mittente.ToLower().Contains(addrNorm)) ||
-                    (x.e.Destinatari != null && x.e.Destinatari.ToLower().Contains(addrNorm)) ||
-                    (x.casella != null && x.casella.Email != null && x.casella.Email.ToLower().Contains(addrNorm)));
-            }
-
-            var total = await query.CountAsync();
-
-            var page = await query
-                .OrderBy(x => x.s.Letto == "Y" ? 1 : 0)
-                .ThenByDescending(x => x.e.DataRicezione)
-                .Skip(start)
-                .Take(pageSize)
-                .Select(x => new EmailListItem_NEW(
-                    x.e.Id,
-                    x.e.DataRicezione,
-                    x.e.Mittente,
-                    x.e.Oggetto,
-                    x.e.Aperto,
-                    false,
-                    0,
-                    0,
-                    x.e.CorpoTesto != null
-                        ? x.e.CorpoTesto.Substring(0, Math.Min(200, x.e.CorpoTesto.Length))
-                        : null,
-                    null,
-                    x.e.MessageId,
-                    x.e.CasellaId,
-                    x.casella != null ? x.casella.Email : null,
-                    x.e.ThreadKey,
-                    null,
-                    x.e.Destinatari,
-                    null,
-                    null,
-                    x.s.Letto,
-                    x.s.LettoIl,
-                    true
-                ))
-                .AsNoTracking()
-                .ToListAsync();
-
-            var ids = page.Select(x => x.Id).ToList();
-
-            if (ids.Any())
-            {
-                var allegati = await db.EmailAllegati
-                    .AsNoTracking()
-                    .Where(a => ids.Contains(a.EmailId))
-                    .Select(a => new
-                    {
+                var allegatiMail = allegati
+                    .Where(a => a.EmailId == mail.Id)
+                    .Select(a => new AllegatoItem_NEW(
                         a.Id,
-                        a.EmailId,
                         a.NomeFile,
                         a.MimeType
-                    })
-                    .ToListAsync();
-
-                page = page
-                    .Select(mail =>
-                    {
-                        var allegatiMail = allegati
-                            .Where(a => a.EmailId == mail.Id)
-                            .Select(a => new AllegatoItem_NEW(
-                                a.Id,
-                                a.NomeFile,
-                                a.MimeType
-                            ))
-                            .ToList();
-
-                        return new EmailListItem_NEW(
-                            mail.Id,
-                            mail.Data,
-                            mail.Mittente,
-                            mail.Oggetto,
-                            mail.Aperto,
-                            allegatiMail.Any(),
-                            mail.ThreadLen,
-                            mail.Replies,
-                            mail.Preview,
-                            allegatiMail,
-                            mail.MessageId,
-                            mail.CasellaId,
-                            mail.CasellaEmail,
-                            mail.ThreadKey,
-                            mail.AssegnatoA,
-                            mail.Destinatari,
-                            mail.Cc,
-                            mail.Ccn,
-                            mail.LettoSeguita,
-                            mail.LettoSeguitaIl
-                        );
-                    })
+                    ))
                     .ToList();
-            }
 
-            return (page, total);
-        }
+                return new EmailListItem_NEW(
+                    Id: mail.Id,
+                    Data: mail.Data,
+                    Mittente: mail.Mittente,
+                    Oggetto: mail.Oggetto,
+                    Aperto: mail.Aperto,
+                    HasAttachments: allegatiMail.Any(),
+                    ThreadLen: mail.ThreadLen,
+                    Replies: mail.Replies,
+                    Preview: mail.Preview,
+                    Allegati: allegatiMail,
+                    MessageId: mail.MessageId,
+                    CasellaId: mail.CasellaId,
+                    CasellaEmail: mail.CasellaEmail,
+                    ThreadKey: mail.ThreadKey,
+                    AssegnatoA: mail.AssegnatoA,
+                    Destinatari: mail.Destinatari,
+                    Cc: mail.Cc,
+                    Ccn: mail.Ccn,
+                    LettoSeguita: mail.LettoSeguita,
+                    LettoSeguitaIl: mail.LettoSeguitaIl,
+                    CanArchive: mail.CanArchive,
+                    IsReadByCurrentUser: mail.IsReadByCurrentUser
+                );
+            })
+            .ToList();
+    }
+
+    return (page, total);
+}
 
         private static async Task GatherFoldersRec(IMailFolder root, List<IMailFolder> acc, CancellationToken ct)
         {
@@ -1943,12 +2007,12 @@ LEFT JOIN thread_counts tc
 
         // 🔹 OVERLOAD: carica email da più caselle contemporaneamente
         public async Task<(List<EmailListItem_NEW>, int)> GetEmailPageAsync(
-      List<int> casellaIds,
-      int start,
-      int pageSize,
-      string folderUi,
-      string utente,
-      string? filtro)
+    List<int> casellaIds,
+    int start,
+    int pageSize,
+    string folderUi,
+    string utente,
+    string? filtro)
         {
             using var conn = new OracleConnection(_connectionString);
             await conn.OpenAsync();
@@ -1966,39 +2030,51 @@ WHERE 1=1";
             if (minDate.HasValue)
             {
                 whereSql += @"
-                  AND e.DATA_RICEZIONE >= :minDate";
+      AND e.DATA_RICEZIONE >= :minDate";
             }
+
+            if (folderUi != "blacklist")
+            {
+                whereSql += @"
+      AND NVL(e.BLACKLIST, 'N') <> 'Y'";
+            }
+            else
+            {
+                whereSql += @"
+      AND NVL(e.BLACKLIST, 'N') = 'Y'";
+            }
+
             if (folderUi == "inbox")
             {
                 whereSql += @"
-        AND EXISTS (
-            SELECT 1
-            FROM SGAPP.EMAIL_ASSEGNAZIONI x
-            WHERE x.EMAIL_ID = e.ID
-              AND x.UTENTE = :utente
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM SGAPP.EMAIL_ARCHIVIO ar
-            WHERE ar.ID_EMAIL = e.ID
-              AND ar.UTENTE = :utente
-        )
-        AND NOT EXISTS (
-            SELECT 1
-            FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP m
-            WHERE m.ID_EMAIL = e.ID
-              AND m.UTENTE = :utente
-        )";
+                AND EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_ASSEGNAZIONI x
+                    WHERE x.EMAIL_ID = e.ID
+                      AND x.UTENTE = :utente
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_ARCHIVIO ar
+                    WHERE ar.ID_EMAIL = e.ID
+                      AND ar.UTENTE = :utente
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP m
+                    WHERE m.ID_EMAIL = e.ID
+                      AND m.UTENTE = :utente
+                )";
             }
             else if (folderUi == "myarchive")
             {
                 whereSql += @"
-        AND EXISTS (
-            SELECT 1
-            FROM SGAPP.EMAIL_ARCHIVIO a
-            WHERE a.ID_EMAIL = e.ID
-              AND a.UTENTE = :utente
-        )";
+    AND EXISTS (
+        SELECT 1
+        FROM SGAPP.EMAIL_ARCHIVIO a
+        WHERE a.ID_EMAIL = e.ID
+          AND a.UTENTE = :utente
+    )";
             }
             else if (folderUi == "all")
             {
@@ -2008,19 +2084,19 @@ WHERE 1=1";
             if (!string.IsNullOrWhiteSpace(filtro))
             {
                 whereSql += @"
-        AND (
-              LOWER(NVL(e.OGGETTO,''))      LIKE :filtro
-           OR LOWER(NVL(e.MITTENTE,''))     LIKE :filtro
-           OR LOWER(NVL(e.DESTINATARI,''))  LIKE :filtro
-           OR LOWER(NVL(e.CC,''))           LIKE :filtro
-           OR LOWER(NVL(e.CCN,''))          LIKE :filtro
-           OR EXISTS (
-                SELECT 1
-                FROM SGAPP.EMAIL_ALLEGATI a
-                WHERE a.EMAIL_ID = e.ID
-                  AND LOWER(NVL(a.NOME_FILE,'')) LIKE :filtro
-           )
-        )";
+    AND (
+          LOWER(NVL(e.OGGETTO,''))      LIKE :filtro
+       OR LOWER(NVL(e.MITTENTE,''))     LIKE :filtro
+       OR LOWER(NVL(e.DESTINATARI,''))  LIKE :filtro
+       OR LOWER(NVL(e.CC,''))           LIKE :filtro
+       OR LOWER(NVL(e.CCN,''))          LIKE :filtro
+       OR EXISTS (
+            SELECT 1
+            FROM SGAPP.EMAIL_ALLEGATI a
+            WHERE a.EMAIL_ID = e.ID
+              AND LOWER(NVL(a.NOME_FILE,'')) LIKE :filtro
+       )
+    )";
             }
 
             // =========================================================
@@ -2040,6 +2116,22 @@ SELECT
     e.FOLDER_PATH,
     c.EMAIL AS CASELLA_EMAIL,
     NVL(e.APERTO, 'N') AS APERTO,
+
+    CASE
+        WHEN EXISTS (
+            SELECT 1
+            FROM SGAPP.EMAIL_LETTURE_UTENTE l
+            WHERE l.EMAIL_ID = e.ID
+              AND l.UTENTE IS NOT NULL
+              AND INSTR(
+                    ';' || LOWER(REPLACE(l.UTENTE, ' ', '')) || ';',
+                    ';' || LOWER(REPLACE(:utente, ' ', '')) || ';'
+                  ) > 0
+        )
+        THEN 1
+        ELSE 0
+    END AS IS_READ_BY_ME,
+
     e.CC,
     e.CCN,
     SUBSTR(NVL(e.CORPO_TESTO, e.CORPO_HTML), 1, 200) AS PREVIEW,
@@ -2066,8 +2158,12 @@ ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
 OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
                 await using var cmdAll = new OracleCommand(listSqlAll, conn) { BindByName = true };
+
+                cmdAll.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
+
                 if (minDate.HasValue)
-    cmdAll.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
+                    cmdAll.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
+
                 if (!string.IsNullOrWhiteSpace(filtro))
                     cmdAll.Parameters.Add("filtro", OracleDbType.Varchar2).Value = $"%{filtro.Trim().ToLower()}%";
 
@@ -2116,7 +2212,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                             Destinatari: GetStr(reader, "DESTINATARI"),
                             Cc: GetStr(reader, "CC"),
                             Ccn: GetStr(reader, "CCN"),
-                            ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY")
+                            ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY"),
+                            IsReadByCurrentUser: !reader.IsDBNull("IS_READ_BY_ME") && reader.GetInt32("IS_READ_BY_ME") == 1
                         ));
                     }
                 }
@@ -2144,14 +2241,19 @@ WITH base_rows AS (
         e.CC,
         e.CCN,
         SUBSTR(NVL(e.CORPO_TESTO, e.CORPO_HTML), 1, 200) AS PREVIEW,
+
         (
             SELECT LISTAGG(x.UTENTE, ';') WITHIN GROUP (ORDER BY x.ID)
             FROM SGAPP.EMAIL_ASSEGNAZIONI x
             WHERE x.EMAIL_ID = e.ID
         ) AS ASSEGNATO_A,
+
         CASE WHEN EXISTS (
-            SELECT 1 FROM SGAPP.EMAIL_ALLEGATI a WHERE a.EMAIL_ID = e.ID
+            SELECT 1
+            FROM SGAPP.EMAIL_ALLEGATI a
+            WHERE a.EMAIL_ID = e.ID
         ) THEN 1 ELSE 0 END AS HAS_ATTACH,
+
         (
             SELECT LISTAGG(
                 a.ID || '::' || a.NOME_FILE || '::' || NVL(a.MIME_TYPE,''),
@@ -2160,16 +2262,50 @@ WITH base_rows AS (
             FROM SGAPP.EMAIL_ALLEGATI a
             WHERE a.EMAIL_ID = e.ID
         ) AS ATT_PACK,
+
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                WHERE l.EMAIL_ID = e.ID
+                  AND l.UTENTE IS NOT NULL
+                  AND INSTR(
+                        ';' || LOWER(REPLACE(l.UTENTE, ' ', '')) || ';',
+                        ';' || LOWER(REPLACE(:utente, ' ', '')) || ';'
+                      ) > 0
+            )
+            THEN 1
+            ELSE 0
+        END AS IS_READ_BY_ME,
+
         ROW_NUMBER() OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
-        MAX(CASE WHEN NVL(e.APERTO, 'N') = 'N' THEN 1 ELSE 0 END) OVER (
+
+        MAX(
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                    WHERE l.EMAIL_ID = e.ID
+                      AND l.UTENTE IS NOT NULL
+                      AND INSTR(
+                            ';' || LOWER(REPLACE(l.UTENTE, ' ', '')) || ';',
+                            ';' || LOWER(REPLACE(:utente, ' ', '')) || ';'
+                          ) > 0
+                )
+                THEN 0
+                ELSE 1
+            END
+        ) OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
         ) AS HAS_UNREAD,
+
         COUNT(*) OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
         ) AS THREAD_LEN
+
     FROM SGAPP.EMAIL_RICEVUTE e
     JOIN SGAPP.CASELLEPOSTA c ON c.ID = e.CASELLA_ID
     {whereSql}
@@ -2185,6 +2321,7 @@ SELECT
     FOLDER_PATH,
     CASELLA_EMAIL,
     CASE WHEN HAS_UNREAD = 1 THEN 'N' ELSE 'Y' END AS APERTO,
+    IS_READ_BY_ME,
     CC,
     CCN,
     HAS_ATTACH,
@@ -2198,10 +2335,11 @@ ORDER BY DATA_RICEZIONE DESC, ID DESC
 OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
             await using var cmd = new OracleCommand(listSql, conn) { BindByName = true };
+
+            cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
+
             if (minDate.HasValue)
                 cmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
-            if (folderUi == "inbox" || folderUi == "myarchive")
-                cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
 
             if (!string.IsNullOrWhiteSpace(filtro))
                 cmd.Parameters.Add("filtro", OracleDbType.Varchar2).Value = $"%{filtro.Trim().ToLower()}%";
@@ -2210,22 +2348,23 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
             cmd.Parameters.Add("p_pageSize", OracleDbType.Int32).Value = pageSize;
 
             var rawRows = new List<(
-     int Id,
-     DateTime? Data,
-     string Mittente,
-     string Oggetto,
-     string Aperto,
-     bool HasAttachments,
-     string? Preview,
-     List<AllegatoItem_NEW>? Allegati,
-     int CasellaId,
-     string? CasellaEmail,
-     string? AssegnatoA,
-     string? Destinatari,
-     string? Cc,
-     string? Ccn,
-     string? ThreadKey
- )>();
+                int Id,
+                DateTime? Data,
+                string Mittente,
+                string Oggetto,
+                string Aperto,
+                bool HasAttachments,
+                string? Preview,
+                List<AllegatoItem_NEW>? Allegati,
+                int CasellaId,
+                string? CasellaEmail,
+                string? AssegnatoA,
+                string? Destinatari,
+                string? Cc,
+                string? Ccn,
+                string? ThreadKey,
+                bool IsReadByCurrentUser
+            )>();
 
             await using (var reader = await cmd.ExecuteReaderAsync())
             {
@@ -2264,7 +2403,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                         Destinatari: GetStr(reader, "DESTINATARI"),
                         Cc: GetStr(reader, "CC"),
                         Ccn: GetStr(reader, "CCN"),
-                        ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY")
+                        ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY"),
+                        IsReadByCurrentUser: !reader.IsDBNull("IS_READ_BY_ME") && reader.GetInt32("IS_READ_BY_ME") == 1
                     ));
                 }
             }
@@ -2293,7 +2433,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                     Destinatari: r.Destinatari,
                     Cc: r.Cc,
                     Ccn: r.Ccn,
-                    ThreadKey: r.ThreadKey
+                    ThreadKey: r.ThreadKey,
+                    IsReadByCurrentUser: r.IsReadByCurrentUser
                 );
             }).ToList();
 
@@ -2311,8 +2452,10 @@ FROM (
 WHERE RN = 1";
 
             await using var countCmd = new OracleCommand(countSql, conn) { BindByName = true };
+
             if (minDate.HasValue)
                 countCmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
+
             if (folderUi == "inbox" || folderUi == "myarchive")
                 countCmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
 
@@ -2542,6 +2685,54 @@ WHERE RN = 1";
         {
             await using var db = _dbFactory.CreateDbContext();
             return await db.EmailBozze.FirstOrDefaultAsync(x => x.Id == id && x.Utente == utente);
+        }
+
+        public async Task AddToBlacklistAsync(string email, string utente, int? emailId = null)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+                return;
+
+            email = email.Trim().ToLowerInvariant();
+
+            await using var db = _dbFactory.CreateDbContext();
+
+            var exists = await db.Database.SqlQueryRaw<int>(
+                @"SELECT COUNT(*) AS ""Value""
+          FROM SGAPP.EMAIL_BLACKLIST
+          WHERE LOWER(EMAIL) = :email
+            AND NVL(ATTIVA,'Y') = 'Y'",
+                new OracleParameter("email", email)
+            ).SingleAsync();
+
+            if (exists == 0)
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    @"INSERT INTO SGAPP.EMAIL_BLACKLIST
+              (EMAIL, INSERITO_DA, DATA_INSERIMENTO, ATTIVA)
+              VALUES (:email, :utente, SYSDATE, 'Y')",
+                    new OracleParameter("email", email),
+                    new OracleParameter("utente", utente)
+                );
+            }
+
+            if (emailId.HasValue)
+            {
+                await db.Database.ExecuteSqlRawAsync(
+                    @"UPDATE SGAPP.EMAIL_RICEVUTE
+              SET BLACKLIST = 'Y'
+              WHERE ID = :id",
+                    new OracleParameter("id", emailId.Value)
+                );
+            }
+        }
+
+        private static string ExtractEmailOnly(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
+
+            var match = Regex.Match(raw, @"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}");
+            return match.Success ? match.Value.ToLower() : raw.Trim().ToLower();
         }
 
         public async Task DeleteDraftAsync(long id, string utente)
@@ -3768,13 +3959,13 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
         }
 
         public async Task<(List<EmailListItem_NEW>, int)> GetEmailPageInSezioneAsync(
-     long idSezione,
-     string utente,
-     List<int> casellaIds,
-     int start,
-     int pageSize,
-     string? word = null,
-     string? address = null)
+    long idSezione,
+    string utente,
+    List<int> casellaIds,
+    int start,
+    int pageSize,
+    string? word = null,
+    string? address = null)
         {
             using var conn = new OracleConnection(_connectionString);
             await conn.OpenAsync();
@@ -3848,13 +4039,14 @@ WITH base_rows AS (
         e.OGGETTO,
         e.DATA_RICEZIONE,
         e.CASELLA_ID,
-        c.EMAIL as CASELLA_EMAIL,
-        e.APERTO,
+        c.EMAIL AS CASELLA_EMAIL,
         e.CC,
         e.CCN,
 
         CASE WHEN EXISTS (
-            SELECT 1 FROM SGAPP.EMAIL_ALLEGATI al WHERE al.EMAIL_ID = e.ID
+            SELECT 1 
+            FROM SGAPP.EMAIL_ALLEGATI al 
+            WHERE al.EMAIL_ID = e.ID
         ) THEN 1 ELSE 0 END AS HAS_ATTACH,
 
         (
@@ -3879,7 +4071,18 @@ WITH base_rows AS (
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
 
-        MAX(CASE WHEN NVL(e.APERTO, 'N') = 'N' THEN 1 ELSE 0 END) OVER (
+        MAX(
+            CASE 
+                WHEN NOT EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                    WHERE l.EMAIL_ID = e.ID
+                      AND LOWER(l.UTENTE) = LOWER(:utente)
+                )
+                THEN 1 
+                ELSE 0 
+            END
+        ) OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
         ) AS HAS_UNREAD,
 
@@ -3915,6 +4118,7 @@ ORDER BY DATA_RICEZIONE DESC, ID DESC
 OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
             cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
             cmd.Parameters.Add("idSezione", OracleDbType.Int64).Value = idSezione;
 
@@ -3928,22 +4132,22 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
             cmd.Parameters.Add("p_pageSize", OracleDbType.Int32).Value = pageSize;
 
             var rawRows = new List<(
-    int Id,
-    DateTime? Data,
-    string Mittente,
-    string Oggetto,
-    string Aperto,
-    bool HasAttachments,
-    string? Preview,
-    List<AllegatoItem_NEW>? Allegati,
-    int CasellaId,
-    string? CasellaEmail,
-    string? AssegnatoA,
-    string? Destinatari,
-    string? Cc,
-    string? Ccn,
-    string? ThreadKey
-)>();
+                int Id,
+                DateTime? Data,
+                string Mittente,
+                string Oggetto,
+                string Aperto,
+                bool HasAttachments,
+                string? Preview,
+                List<AllegatoItem_NEW>? Allegati,
+                int CasellaId,
+                string? CasellaEmail,
+                string? AssegnatoA,
+                string? Destinatari,
+                string? Cc,
+                string? Ccn,
+                string? ThreadKey
+            )>();
 
             int total = 0;
 
@@ -3954,9 +4158,12 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                     if (total == 0)
                         total = reader.GetInt32(reader.GetOrdinal("TOTAL_COUNT"));
 
-                    string? attPack = reader.IsDBNull("ATT_PACK") ? null : reader.GetString("ATT_PACK");
+                    string? attPack = reader.IsDBNull(reader.GetOrdinal("ATT_PACK"))
+                        ? null
+                        : reader.GetString(reader.GetOrdinal("ATT_PACK"));
 
                     List<AllegatoItem_NEW>? allegati = null;
+
                     if (!string.IsNullOrWhiteSpace(attPack))
                     {
                         allegati = attPack
@@ -3966,24 +4173,41 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                                 var parts = x.Split("::");
                                 var id = int.Parse(parts[0]);
                                 var nome = parts.Length > 1 ? parts[1] : "";
-                                var mime = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]) ? parts[2] : null;
+                                var mime = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])
+                                    ? parts[2]
+                                    : null;
+
                                 return new AllegatoItem_NEW(id, nome, mime);
                             })
                             .ToList();
                     }
 
                     rawRows.Add((
-                        Id: reader.GetInt32("ID"),
-                        Data: reader.IsDBNull("DATA_RICEZIONE") ? (DateTime?)null : reader.GetDateTime("DATA_RICEZIONE"),
-                        Mittente: reader.IsDBNull("MITTENTE") ? "" : reader.GetString("MITTENTE"),
-                        Oggetto: reader.IsDBNull("OGGETTO") ? "" : reader.GetString("OGGETTO"),
-                        Aperto: reader.IsDBNull("APERTO") ? "" : reader.GetString("APERTO"),
-                        HasAttachments: reader.GetInt32("HAS_ATTACH") == 1,
-                        Preview: reader.IsDBNull("PREVIEW") ? null : reader.GetString("PREVIEW"),
+                        Id: reader.GetInt32(reader.GetOrdinal("ID")),
+                        Data: reader.IsDBNull(reader.GetOrdinal("DATA_RICEZIONE"))
+                            ? null
+                            : reader.GetDateTime(reader.GetOrdinal("DATA_RICEZIONE")),
+                        Mittente: reader.IsDBNull(reader.GetOrdinal("MITTENTE"))
+                            ? ""
+                            : reader.GetString(reader.GetOrdinal("MITTENTE")),
+                        Oggetto: reader.IsDBNull(reader.GetOrdinal("OGGETTO"))
+                            ? ""
+                            : reader.GetString(reader.GetOrdinal("OGGETTO")),
+                        Aperto: reader.IsDBNull(reader.GetOrdinal("APERTO"))
+                            ? "N"
+                            : reader.GetString(reader.GetOrdinal("APERTO")),
+                        HasAttachments: reader.GetInt32(reader.GetOrdinal("HAS_ATTACH")) == 1,
+                        Preview: reader.IsDBNull(reader.GetOrdinal("PREVIEW"))
+                            ? null
+                            : reader.GetString(reader.GetOrdinal("PREVIEW")),
                         Allegati: allegati,
-                        CasellaId: reader.GetInt32("CASELLA_ID"),
-                        CasellaEmail: reader.IsDBNull("CASELLA_EMAIL") ? null : reader.GetString("CASELLA_EMAIL"),
-                        AssegnatoA: reader.IsDBNull("ASSEGNATO_A") ? null : reader.GetString("ASSEGNATO_A"),
+                        CasellaId: reader.GetInt32(reader.GetOrdinal("CASELLA_ID")),
+                        CasellaEmail: reader.IsDBNull(reader.GetOrdinal("CASELLA_EMAIL"))
+                            ? null
+                            : reader.GetString(reader.GetOrdinal("CASELLA_EMAIL")),
+                        AssegnatoA: reader.IsDBNull(reader.GetOrdinal("ASSEGNATO_A"))
+                            ? null
+                            : reader.GetString(reader.GetOrdinal("ASSEGNATO_A")),
                         Destinatari: GetStr(reader, "DESTINATARI"),
                         Cc: GetStr(reader, "CC"),
                         Ccn: GetStr(reader, "CCN"),
@@ -4016,7 +4240,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
                     Destinatari: r.Destinatari,
                     Cc: r.Cc,
                     Ccn: r.Ccn,
-                    ThreadKey: r.ThreadKey
+                    ThreadKey: r.ThreadKey,
+                    IsReadByCurrentUser: r.Aperto == "Y"
                 );
             }).ToList();
 

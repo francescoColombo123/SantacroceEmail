@@ -25,6 +25,7 @@ namespace SCemail.Components.Data
         [Column("REFERENCES_HDR")]
         public string? ReferencesHdr { get; set; }
         public CasellaPosta Casella { get; set; } = default!;
+        public string Blacklist { get; set; } = "N";
         public string? ThreadKey { get; set; }
         public ICollection<EmailAllegato> Allegati { get; set; } = new List<EmailAllegato>();
     }

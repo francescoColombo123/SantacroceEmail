@@ -497,16 +497,16 @@ FETCH FIRST 1 ROWS ONLY";
 
         if (string.IsNullOrWhiteSpace(threadKey))
             threadKey = messageId;
-
+        var blacklist = await IsSenderBlacklistedAsync(conn, message.From?.ToString(), ct);
         const string sql = @"
 INSERT INTO SGAPP.EMAIL_RICEVUTE
     (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, CC, CCN, OGGETTO,
      CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
-     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY)
+     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY, BLACKLIST)
 VALUES
     (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_cc, :p_ccn, :p_subj,
      :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
-     :p_inreply, :p_refs, :p_thread)
+     :p_inreply, :p_refs, :p_thread, :p_blacklist)
 RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -520,7 +520,7 @@ RETURNING ID INTO :p_id";
         cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = message.To?.ToString() ?? "";
         cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = message.Cc?.ToString() ?? "";
         cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = message.Bcc?.ToString() ?? "";
-
+       
         var emailRome = internalDateRome ?? TimeZoneInfo.ConvertTime(message.Date, RomeTz).DateTime;
 
         string subject = message.Subject?.Trim() ?? "";
@@ -552,7 +552,8 @@ RETURNING ID INTO :p_id";
 
         cmd.Parameters.Add("p_thread", OracleDbType.Varchar2, 500).Value =
             threadKey ?? (object)DBNull.Value;
-
+        cmd.Parameters.Add("p_blacklist", OracleDbType.Char, 1).Value =
+   blacklist ? "Y" : "N";
         var outId = new OracleParameter("p_id", OracleDbType.Int32)
         {
             Direction = ParameterDirection.Output
@@ -1861,6 +1862,44 @@ UPDATE SGAPP.EMAIL_ALLEGATI
         cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
 
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static string ExtractEmailAddress(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "";
+
+        raw = raw.Trim();
+
+        var match = System.Text.RegularExpressions.Regex.Match(
+            raw,
+            @"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+        );
+
+        return match.Success ? match.Value.Trim().ToLowerInvariant() : raw.ToLowerInvariant();
+    }
+
+    private async Task<bool> IsSenderBlacklistedAsync(
+        OracleConnection conn,
+        string? sender,
+        CancellationToken ct)
+    {
+        var email = ExtractEmailAddress(sender);
+
+        if (string.IsNullOrWhiteSpace(email))
+            return false;
+
+        const string sql = @"
+SELECT COUNT(*)
+FROM SGAPP.EMAIL_BLACKLIST
+WHERE LOWER(EMAIL) = :p_email
+  AND NVL(ATTIVA,'Y') = 'Y'";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_email", OracleDbType.Varchar2, 500).Value = email;
+
+        var result = await cmd.ExecuteScalarAsync(ct);
+        return Convert.ToInt32(result) > 0;
     }
 
 }

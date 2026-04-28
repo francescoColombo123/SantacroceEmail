@@ -392,18 +392,34 @@ else
                                                 @foreach (var item in _emails)
                                                 {
                                                     <li @key="item.Id"
-                                                        class="mail-row2 @GetRowClass(item)"
+                                                        class="@GetMailRowClass(item)"
                                                         @onclick="@(() => OpenEmailAndMarkRead(item, null))">
 
                                                         <div class="status-strip"></div>
 
                                                         <!-- LEFT: mittente + destinatari -->
                                                         <div class="ml-left">
-                                                            <MudTooltip Text="@item.Mittente">
-                                                                <div class="ml-from">@ExtractEmail(item.Mittente)</div>
-                                                            </MudTooltip>
 
-                                                            @* destinatari: nostra casella + eventuali extra *@
+                                                            <div class="ml-from-row">
+
+                                                                <!-- ICONA BLACKLIST -->
+                                                                <MudTooltip Text="Metti mittente in blacklist">
+                                                                    <div class="ml-icon" @onclick:stopPropagation="true">
+                                                                        <MudIconButton Icon="@Icons.Material.Filled.Report"
+                                                                                       Color="Color.Error"
+                                                                                       Size="Size.Small"
+                                                                                       OnClick="@(() => AddSenderToBlacklist(item))" />
+                                                                    </div>
+                                                                </MudTooltip>
+
+                                                                <!-- MITTENTE -->
+                                                                <MudTooltip Text="@item.Mittente">
+                                                                    <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                                </MudTooltip>
+
+                                                            </div>
+
+                                                            <!-- DESTINATARI -->
                                                             <MudTooltip Text="@BuildRecipientsTooltip(item)">
                                                                 <div class="ml-to">
                                                                     <span class="ml-to-label">@GetMainRecipientType(item)</span>
@@ -414,6 +430,7 @@ else
                                                                     }
                                                                 </div>
                                                             </MudTooltip>
+
                                                         </div>
 
                                                         <!-- CENTER: 2 righe -->
@@ -421,14 +438,14 @@ else
                                                             <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
                                                             <div class="ml-line1">
                                                                 <div class="ml-subject" title="@item.Oggetto">
-
                                                                     @if (item.ThreadLen > 0)
                                                                     {
-                                                                        <span class="thread-badge">@item.ThreadLen</span>
+                                                                        <MudTooltip Text="@GetThreadCountTooltip(item)">
+                                                                            <span class="thread-badge">@item.ThreadLen</span>
+                                                                        </MudTooltip>
                                                                     }
 
-                                                                    <strong>@(item.Oggetto ?? "")</strong>
-
+                                                                    <strong>@(string.IsNullOrWhiteSpace(item.Oggetto) ? "(nessun oggetto)" : item.Oggetto)</strong>
                                                                 </div>
                                                                 @{
                                                                     var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
@@ -556,18 +573,34 @@ else
                                                         @foreach (var item in sec.Emails)
                                                         {
                                                             <li @key="item.Id"
-                                                                class="mail-row2 @GetRowClass(item)"
+                                                                class="@GetMailRowClass(item)"
                                                                 @onclick="@(() => OpenEmailAndMarkRead(item, sec.Nome))">
 
                                                                 <div class="status-strip"></div>
 
                                                                 <!-- LEFT: mittente + destinatari -->
                                                                 <div class="ml-left">
-                                                                    <MudTooltip Text="@item.Mittente">
-                                                                        <div class="ml-from">@ExtractEmail(item.Mittente)</div>
-                                                                    </MudTooltip>
 
-                                                                    @* destinatari: nostra casella + eventuali extra *@
+                                                                    <div class="ml-from-row">
+
+                                                                        <!-- ICONA BLACKLIST -->
+                                                                        <MudTooltip Text="Metti mittente in blacklist">
+                                                                            <div class="ml-icon" @onclick:stopPropagation="true">
+                                                                                <MudIconButton Icon="@Icons.Material.Filled.Report"
+                                                                                               Color="Color.Error"
+                                                                                               Size="Size.Small"
+                                                                                               OnClick="@(() => AddSenderToBlacklist(item))" />
+                                                                            </div>
+                                                                        </MudTooltip>
+
+                                                                        <!-- MITTENTE -->
+                                                                        <MudTooltip Text="@item.Mittente">
+                                                                            <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                                        </MudTooltip>
+
+                                                                    </div>
+
+                                                                    <!-- DESTINATARI -->
                                                                     <MudTooltip Text="@BuildRecipientsTooltip(item)">
                                                                         <div class="ml-to">
                                                                             <span class="ml-to-label">@GetMainRecipientType(item)</span>
@@ -578,6 +611,7 @@ else
                                                                             }
                                                                         </div>
                                                                     </MudTooltip>
+
                                                                 </div>
 
                                                                 <!-- CENTER: 2 righe -->
@@ -585,7 +619,14 @@ else
                                                                     <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
                                                                     <div class="ml-line1">
                                                                         <div class="ml-subject" title="@item.Oggetto">
-                                                                            <strong>@(item.Oggetto ?? "")</strong>
+                                                                            @if (item.ThreadLen > 0)
+                                                                            {
+                                                                                <MudTooltip Text="@GetThreadCountTooltip(item)">
+                                                                                    <span class="thread-badge">@item.ThreadLen</span>
+                                                                                </MudTooltip>
+                                                                            }
+
+                                                                            <strong>@(string.IsNullOrWhiteSpace(item.Oggetto) ? "(nessun oggetto)" : item.Oggetto)</strong>
                                                                         </div>
 
                                                                         @{
@@ -688,18 +729,34 @@ else
                                     @foreach (var item in _emails)
                                     {
                                         <li @key="item.Id"
-                                                class="mail-row2 @GetRowClass(item)"
+                                                class="@GetMailRowClass(item)"
                                                 @onclick="@(() => OpenEmailAndMarkRead(item, null))">
 
                                             <div class="status-strip"></div>
 
                                             <!-- LEFT: mittente + destinatari -->
-                                            <div class="ml-left">
-                                                <MudTooltip Text="@item.Mittente">
-                                                    <div class="ml-from">@ExtractEmail(item.Mittente)</div>
-                                                </MudTooltip>
+                                                <div class="ml-left">
 
-                                                @* destinatari: nostra casella + eventuali extra *@
+                                                    <div class="ml-from-row">
+
+                                                        <!-- ICONA BLACKLIST -->
+                                                        <MudTooltip Text="Metti mittente in blacklist">
+                                                            <div class="ml-icon" @onclick:stopPropagation="true">
+                                                                <MudIconButton Icon="@Icons.Material.Filled.Report"
+                                                                               Color="Color.Error"
+                                                                               Size="Size.Small"
+                                                                               OnClick="@(() => AddSenderToBlacklist(item))" />
+                                                            </div>
+                                                        </MudTooltip>
+
+                                                        <!-- MITTENTE -->
+                                                        <MudTooltip Text="@item.Mittente">
+                                                            <div class="ml-from">@ExtractEmail(item.Mittente)</div>
+                                                        </MudTooltip>
+
+                                                    </div>
+
+                                                    <!-- DESTINATARI -->
                                                     <MudTooltip Text="@BuildRecipientsTooltip(item)">
                                                         <div class="ml-to">
                                                             <span class="ml-to-label">@GetMainRecipientType(item)</span>
@@ -710,15 +767,23 @@ else
                                                             }
                                                         </div>
                                                     </MudTooltip>
-                                            </div>
+
+                                                </div>
 
                                             <!-- CENTER: 2 righe -->
                                             <div class="ml-center">
                                                 <!-- Riga 1: Oggetto bold + chip assegnatari + data -->
                                                 <div class="ml-line1">
-                                                    <div class="ml-subject" title="@item.Oggetto">
-                                                        <strong>@(item.Oggetto ?? "")</strong>
-                                                    </div>
+                                                        <div class="ml-subject" title="@item.Oggetto">
+                                                            @if (item.ThreadLen > 0)
+                                                            {
+                                                                <MudTooltip Text="@GetThreadCountTooltip(item)">
+                                                                    <span class="thread-badge">@item.ThreadLen</span>
+                                                                </MudTooltip>
+                                                            }
+
+                                                            <strong>@(string.IsNullOrWhiteSpace(item.Oggetto) ? "(nessun oggetto)" : item.Oggetto)</strong>
+                                                        </div>
 
                                                     @{
                                                         var assList = GetAssignedList(item.AssegnatoA).Distinct().ToList();
@@ -1321,6 +1386,7 @@ else
 
     // input + suggerimenti indirizzo
     private string? _addrInput;
+    private int? _actionEmailId;
     private bool _showAddrSuggestions;
     private List<RecipientChip> _addrSuggestions = new();
     private RecipientChip? _selectedAddressChip;
@@ -1424,17 +1490,31 @@ else
         s = ToPlainText(s);          // rimuove tag + HtmlDecode + spazi
         return Truncate(s, 140);     // opzionale: accorcia un po’
     }
+    
     private async Task OpenDraft(long draftId)
     {
         var d = await MailSvc.GetDraftByIdAsync(draftId, _utente!);
-        await MailSvc.MarkDraftAsReadAsync(d.Id, _utente!);
-        if (_draftsUnreadCount > 0)
-            _draftsUnreadCount--;
+
         if (d == null)
         {
             Snackbar.Add("Bozza non trovata", Severity.Warning);
             return;
         }
+
+        // ✅ cambia colore subito nella UI
+        var idx = _drafts.FindIndex(x => x.Id == draftId);
+        if (idx >= 0 && !_drafts[idx].Letto)
+        {
+            _drafts[idx] = _drafts[idx] with { Letto = true };
+
+            if (_draftsUnreadCount > 0)
+                _draftsUnreadCount--;
+
+            StateHasChanged();
+        }
+
+        // ✅ aggiorna DB
+        await MailSvc.MarkDraftAsReadAsync(d.Id, _utente!);
 
         var parameters = new DialogParameters
         {
@@ -1447,29 +1527,67 @@ else
             ["DraftId"] = (long)d.Id
         };
 
-
         var dialog = DialogService.Show<ComposeDialog>(
             "Modifica bozza",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Large,
+                FullWidth = true,
+                CloseOnEscapeKey = false,
+                BackdropClick = false
+            }
         );
 
         var result = await dialog.Result;
 
-        // opzionale: se inviata, puoi eliminare la bozza
-        if (result.Data is true)
+        if (result.Data?.ToString() == "sent")
         {
             try
             {
                 await MailSvc.DeleteDraftAsync(d.Id, _utente!);
-                _draftIndex = 0;
-                _drafts.Clear();
-                _hasMoreDrafts = true;
-                await LoadMoreDrafts(_searchText);
             }
-            catch { /* non bloccare */ }
+            catch { }
         }
+
+        if (result.Data?.ToString() == "draft-deleted")
+        {
+            _drafts.RemoveAll(x => x.Id == d.Id);
+        }
+
+        _draftIndex = 0;
+        _drafts.Clear();
+        _hasMoreDrafts = true;
+        await LoadMoreDrafts(_searchText);
     }
+
+    private async Task AddSenderToBlacklist(EmailListItem_NEW item)
+    {
+        var email = ExtractEmail(item.Mittente);
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Conferma blacklist",
+            (MarkupString)$"Vuoi mettere <b>{email}</b> in blacklist? Tutte le mail di questo mittente verranno spostate nella sezione blacklist.",
+            yesText: "Blacklist",
+            noText: "Annulla");
+
+        if (confirm != true)
+            return;
+
+        await MailSvc.AddToBlacklistAsync(email, _utente!, item.Id);
+        _emails.RemoveAll(x => ExtractEmail(x.Mittente)
+            .Equals(email, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var sec in _sezioniVm)
+        {
+            sec.Emails.RemoveAll(x => ExtractEmail(x.Mittente)
+                .Equals(email, StringComparison.OrdinalIgnoreCase));
+        }
+
+        Snackbar.Add($"Mittente {email} aggiunto in blacklist", Severity.Success);
+        StateHasChanged();
+    }
+
     private async Task DeleteDraft(long id)
     {
         await MailSvc.DeleteDraftAsync(id, _utente!);
@@ -1515,6 +1633,16 @@ else
             _sentLoading = false;
             StateHasChanged();
         }
+    }
+
+    private string GetMailRowClass(EmailListItem_NEW item)
+    {
+        var classes = $"mail-row2 {GetRowClass(item)}";
+
+        if (_actionEmailId == item.Id)
+            classes += " action-selected";
+
+        return classes;
     }
 
     private string GetMainRecipientType(DraftListItem item)
@@ -1711,14 +1839,17 @@ else
     {
         try
         {
+            _actionEmailId = item.Id;
+            StateHasChanged();
+
             await MailSvc.UnarchiveEmailAsync(item.Id, _utente!);
 
             Snackbar.Add("Email ripristinata in Posta in arrivo ✅", Severity.Success);
 
-            // ✅ se sei nella lista archivio, toglila subito
             if (_folder == "myarchive")
                 _emails.RemoveAll(x => x.Id == item.Id);
 
+            _actionEmailId = null;
             StateHasChanged();
         }
         catch (Exception ex)
@@ -1743,6 +1874,34 @@ else
             Icons.Material.Filled.TableChart => f.EndsWith(".xls") || f.EndsWith(".xlsx"),
             _ => true
         };
+    }
+
+    private void MarkEmailAsReadInAllLists(int emailId)
+    {
+        var idx = _emails.FindIndex(e => e.Id == emailId);
+        if (idx >= 0)
+        {
+            _emails[idx] = _emails[idx] with
+            {
+                IsReadByCurrentUser = true,
+                Aperto = "Y",
+                LettoSeguita = _folder == "mailfollowed" ? "Y" : _emails[idx].LettoSeguita,
+                LettoSeguitaIl = _folder == "mailfollowed" ? DateTime.Now : _emails[idx].LettoSeguitaIl
+            };
+        }
+
+        foreach (var sec in _sezioniVm)
+        {
+            var secIdx = sec.Emails.FindIndex(e => e.Id == emailId);
+            if (secIdx >= 0)
+            {
+                sec.Emails[secIdx] = sec.Emails[secIdx] with
+                {
+                    IsReadByCurrentUser = true,
+                    Aperto = "Y"
+                };
+            }
+        }
     }
 
 
@@ -1881,6 +2040,16 @@ else
         {
             _scrollLoadLocks.Remove(elementId);
         }
+    }
+
+    private string GetThreadCountTooltip(EmailListItem_NEW item)
+    {
+        if (item.ThreadLen <= 0)
+            return "Nessuna corrispondenza interna";
+
+        return item.ThreadLen == 1
+            ? "1 corrispondenza interna"
+            : $"{item.ThreadLen} corrispondenze interne";
     }
 
     private void ResetFolderState()
@@ -2043,7 +2212,7 @@ else
         if (_folder == "mailfollowed")
             return item.LettoSeguita == "Y" ? "read" : "unread";
 
-        return item.Aperto == "Y" ? "read" : "unread";
+        return item.IsReadByCurrentUser ? "read" : "unread";
     }
 
     private bool CanAssignInCurrentFolder()
@@ -2395,11 +2564,16 @@ else
         var dialog = DialogService.Show<ComposeDialog>(
         "Rispondi",
         parameters,
-        new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
-    );
+        new DialogOptions
+        {
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseOnEscapeKey = false,
+            BackdropClick = false
+        });
 
         var result = await dialog.Result;
-        if (result.Data is true)
+        if (result.Data?.ToString() == "sent")
             Snackbar.Add("Risposta inviata ✅", Severity.Success);
     }
 
@@ -2459,30 +2633,47 @@ else
         var dialog = DialogService.Show<ComposeDialog>(
             "Rispondi a tutti",
             parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
-        );
+          new DialogOptions
+          {
+              MaxWidth = MaxWidth.Large,
+              FullWidth = true,
+              CloseOnEscapeKey = false,
+              BackdropClick = false
+          });
 
         var result = await dialog.Result;
-        if (result.Data is true)
-            Snackbar.Add("Risposta a tutti inviata ✅", Severity.Success);
+        if (result.Data?.ToString() == "sent")
+            Snackbar.Add("Risposta a Tutti inviata ✅", Severity.Success);
     }
 
     private async Task Archive(EmailListItem_NEW item)
     {
-        if (_folder == "mentions" && !item.CanArchive)
+        try
         {
-            Snackbar.Add("Puoi archiviare questa menzione solo dopo aver risposto.", Severity.Warning);
-            return;
+            _actionEmailId = item.Id;
+            StateHasChanged();
+
+            if (_folder == "mentions" && !item.CanArchive)
+            {
+                Snackbar.Add("Puoi archiviare questa menzione solo dopo aver risposto.", Severity.Warning);
+                return;
+            }
+
+            await MailSvc.ArchiveEmailAsync(item.Id, _utente!);
+
+            Snackbar.Add("Email archiviata ✔", Severity.Success);
+
+            if (_folder is "inbox" or "mentions" or "mailfollowed")
+                _emails.RemoveAll(x => x.Id == item.Id);
+
+            _actionEmailId = null;
+            StateHasChanged();
         }
-
-        await MailSvc.ArchiveEmailAsync(item.Id, _utente!);
-
-        Snackbar.Add("Email archiviata ✔", Severity.Success);
-
-        if (_folder is "inbox" or "mentions" or "mailfollowed")
-            _emails.RemoveAll(x => x.Id == item.Id);
-
-        StateHasChanged();
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Errore archiviazione: {ex.Message}");
+            Snackbar.Add("Errore durante archiviazione", Severity.Error);
+        }
     }
 
     public async Task<List<AdminEmailDto>> GetEmailInLavorazioneAsync()
@@ -2635,9 +2826,8 @@ else
                     _emails.AddRange(page.Where(x => !_emails.Any(e => e.Id == x.Id)));
 
                 _currentIndex += page.Count;
-                _hasMore = page.Count == _pageSize;
-
-                _mentionsCount = _emails.Count(x => x.Aperto == "N");
+                _hasMore = _emails.Count < total;
+                _mentionsCount = total;
                 return;
             }
 
@@ -2998,6 +3188,9 @@ else
     {
         try
         {
+            _actionEmailId = item.Id;
+            StateHasChanged();
+
             var full = await MailSvc.GetEmailDetailAsync(item.Id, onlyMeta: false);
 
             if (full == null)
@@ -3006,7 +3199,6 @@ else
                 return;
             }
 
-            // 2️⃣ Chiama la versione originale del metodo
             await Forward(full);
         }
         catch (Exception ex)
@@ -3037,61 +3229,31 @@ else
     {
         try
         {
-            // UI: marca letta
+            MarkEmailAsReadInAllLists(item.Id);
+            StateHasChanged();
+
             if (_folder == "mailfollowed")
-            {
-                if (item.LettoSeguita != "Y")
-                {
-                    var updated = item with { LettoSeguita = "Y", LettoSeguitaIl = DateTime.Now };
-                    var idx = _emails.FindIndex(e => e.Id == item.Id);
-                    if (idx >= 0) _emails[idx] = updated;
-                    StateHasChanged();
-                }
-            }
-            else
-            {
-                if (item.Aperto != "Y")
-                {
-                    var updated = item with { Aperto = "Y" };
-                    var idx = _emails.FindIndex(e => e.Id == item.Id);
-                    if (idx >= 0) _emails[idx] = updated;
-                    StateHasChanged();
-                }
-            }
+                await MailSvc.MarkEmailSeguitaAsReadAsync(item.Id, _utente!);
 
-            // DB: fire-and-forget
-            _ = SafeForget(async () =>
-            {
-                if (_folder == "mailfollowed")
-                {
-                    await MailSvc.MarkEmailSeguitaAsReadAsync(item.Id, _utente!);
-                }
-
-                await MailSvc.SegnaLettaAsync(item.Id, item.AssegnatoA);
-                await MailSvc.MarkOpenedAsync(item.Id);
-                await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
-            });
+            await MailSvc.SegnaLettaAsync(item.Id, _utente!);
+            await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
 
             var query = new Dictionary<string, string?>
             {
                 ["fromFolder"] = _folder,
-                ["fromSection"] = fromSection
+                ["fromSection"] = fromSection,
+                ["assegnatoA"] = item.AssegnatoA
+
             };
 
-            // PASSA GLI IDS PER TUTTE LE LISTE NORMALI
-            // NON passarli solo se stai aprendo da una sezione
-            if (string.IsNullOrWhiteSpace(fromSection))
-            {
-                var idsCorrenti = _emails
-                    .Select(x => x.Id)
-                    .Distinct()
-                    .ToList();
+            var idsCorrenti = string.IsNullOrWhiteSpace(fromSection)
+                ? _emails.Select(x => x.Id).Distinct().ToList()
+                : _sezioniVm
+                    .FirstOrDefault(s => s.Nome == fromSection)?
+                    .Emails.Select(x => x.Id).Distinct().ToList() ?? new();
 
-                if (idsCorrenti.Count > 0)
-                {
-                    query["ids"] = string.Join(",", idsCorrenti);
-                }
-            }
+            if (idsCorrenti.Count > 0)
+                query["ids"] = string.Join(",", idsCorrenti);
 
             var url = QueryHelpers.AddQueryString(
                 $"/mail-detail/{item.Id}/{_cp}",
@@ -3203,9 +3365,15 @@ else
     {
         var parameters = new DialogParameters { ["Utente"] = _utente };
         var dialog = DialogService.Show<ComposeDialog>("Nuova email", parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+           new DialogOptions
+           {
+               MaxWidth = MaxWidth.Large,
+               FullWidth = true,
+               CloseOnEscapeKey = false,
+               BackdropClick = false
+           });
         var result = await dialog.Result;
-        if (result.Data is true)
+        if (result.Data?.ToString() == "sent")
             Snackbar.Add("Email inviata ✅", Severity.Success);
     }
 
@@ -3474,22 +3642,22 @@ else
 
     .workspace {
         background: #f1f3f4;
-        display: flex;
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr) clamp(200px, 14vw, 240px);
         height: 100vh;
         width: 100%;
         overflow: hidden;
-        min-width: 0;
     }
 
     .sidebar {
-        width: 64px;
+        grid-column: 1;
         background: #eef4ff;
         border-right: 1px solid #d9e6ff;
         display: flex;
         flex-direction: column;
         overflow: hidden;
         z-index: 10;
-        flex-shrink: 0;
+        height: 100vh;
     }
 
     .sidebar-inner {
@@ -3583,11 +3751,10 @@ else
     }
 
     .mail-container {
-        position: relative;
-        flex: 1;
+        grid-column: 2;
         display: grid;
-        grid-template-rows: auto auto auto 1fr;
-        height: 100%;
+        grid-template-rows: auto auto 1fr;
+        height: 100vh;
         overflow: hidden;
         background: #f9fbff;
         min-width: 0;
@@ -3597,10 +3764,9 @@ else
         display: grid;
         grid-template-columns: minmax(460px, 1fr) minmax(0, 1fr);
         height: 100%;
+        min-height: 0;
         overflow: hidden;
-        min-width: 0;
     }
-
     .mail-grid.full-list {
         grid-template-columns: 1fr;
     }
@@ -3626,6 +3792,7 @@ else
         flex-direction: column;
         height: 100%;
         min-height: 0;
+        overflow: hidden;
     }
 
     .list-scroll {
@@ -3643,6 +3810,7 @@ else
         padding: 8px 12px;
         border-bottom: 1px solid var(--line);
         background: #fff;
+        flex-shrink: 0;
     }
 
     .top-toolbar-left {
@@ -3725,11 +3893,11 @@ else
     }
 
     .postit-wrapper {
-    flex-shrink: 0;
-    background: #f1f2f4;
-    border-bottom: 1px solid #ddd;
-    overflow: hidden;
-}
+        flex-shrink: 0;
+        background: #f1f2f4;
+        border-bottom: 1px solid #ddd;
+        overflow: hidden;
+    }
 
 .postit-board {
     width: 100%;
@@ -3782,6 +3950,16 @@ else
     transition: transform .15s ease, box-shadow .15s ease;
     overflow: hidden;
 }
+
+    .mail-row2.action-selected {
+        border: 2px solid #e53935 !important;
+        background: #fff3f3 !important;
+        box-shadow: 0 0 0 2px rgba(229, 57, 53, .12);
+    }
+
+        .mail-row2.action-selected .status-strip {
+            background: #e53935 !important;
+        }
 
 .postit-card:hover {
     transform: translateY(-1px);
@@ -3882,13 +4060,14 @@ else
     }
 
     .tasks-panel {
-        width: clamp(200px, 14vw, 240px);
-        flex-shrink: 0;
+        grid-column: 3;
         background: #ffffff;
         border-left: 1px solid #e0e0e0;
         display: flex;
         flex-direction: column;
         min-width: 0;
+        height: 100vh;
+        overflow: hidden;
     }
 
     .tasks-header {
@@ -3912,6 +4091,7 @@ else
         flex-direction: column;
         gap: 8px;
         overflow: auto;
+        min-height: 0;
     }
 
     .task-mini {
@@ -4080,24 +4260,29 @@ else
     }
 
     .ml-center {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    min-width: 0;
-}
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        min-width: 0;
+        overflow: hidden;
+    }
 
     .ml-line1 {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto auto;
-        gap: 6px;
+        gap: 8px;
         align-items: center;
         min-width: 0;
+        line-height: 1.1;
     }
 
     .ml-subject {
+        display: flex;
+        align-items: center;
+        gap: 6px;
         min-width: 0;
-        white-space: nowrap;
         overflow: hidden;
+        white-space: nowrap;
         text-overflow: ellipsis;
         font-size: 12px;
         color: #0b2542;
@@ -4133,20 +4318,20 @@ else
     }
 
     .ml-date {
-        font-size: 11px;
-        color: #6b7ba3;
         white-space: nowrap;
+        font-size: 12px;
+        color: #6b7ba3;
         text-align: right;
-        min-width: 92px;
-        flex-shrink: 0;
+        padding-right: 10px;
     }
 
     .ml-line2 {
         display: grid;
         grid-template-columns: minmax(0, 1fr) auto;
-        gap: 6px;
+        gap: 8px;
         align-items: center;
         min-width: 0;
+        line-height: 1.1;
     }
 
     .inbox-block,
@@ -4175,6 +4360,7 @@ else
         flex-shrink: 0;
         justify-content: flex-end;
         min-width: fit-content;
+        padding-right: 12px;
     }
 
     .ml-tools {
@@ -4183,12 +4369,11 @@ else
         gap: 2px;
         flex-shrink: 0;
     }
-    
+
     .ml-att {
         display: inline-flex;
         align-items: center;
         gap: 2px;
-        margin-left: 0;
         flex-shrink: 0;
     }
 
@@ -4410,6 +4595,8 @@ else
 
     .mail-detail {
         background: var(--panel);
+        height: 100%;
+        min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
     }
@@ -4709,10 +4896,7 @@ else
         overflow: hidden;
     }
 
-    .ml-line1 {
-        grid-template-columns: minmax(0, 1fr) auto auto;
-    }
-
+    
     .ml-line2 {
         grid-template-columns: minmax(0, 1fr) auto;
     }
@@ -4726,7 +4910,13 @@ else
     }
 
     .ml-right {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
         justify-content: flex-end;
+        min-width: fit-content;
+        padding-right: 10px;
         white-space: nowrap;
     }
 
@@ -4745,17 +4935,54 @@ else
             white-space: nowrap;
         }
 
+    .ml-from-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr);
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+    }
+
+    .ml-icon {
+        width: 18px;
+        height: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+        .ml-icon .mud-icon-button {
+            width: 18px !important;
+            height: 18px !important;
+            padding: 0 !important;
+        }
+
+        .ml-icon .mud-icon-root {
+            font-size: 15px !important;
+        }
+
+    .ml-from {
+        font-weight: 700;
+        font-size: 11px !important;
+        color: #0b2542;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
+    }
     .thread-badge {
         display: inline-flex;
         justify-content: center;
         align-items: center;
-        width: 32px; /* 🔥 larghezza fissa */
+        min-width: 20px;
         height: 20px;
+        padding: 0 6px;
         font-size: 12px;
         font-weight: 600;
         background: #e3f2fd;
         color: #1976d2;
         border-radius: 10px;
-        flex-shrink: 0; /* 🔥 non si comprime */
+        flex-shrink: 0;
     }
-</style>
+    </style>

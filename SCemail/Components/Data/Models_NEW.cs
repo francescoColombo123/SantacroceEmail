@@ -109,7 +109,8 @@ namespace SCemail.Components.Data
     string? Ccn = null,           // BCC/CCN
     string? LettoSeguita = null,  // Y / N
     DateTime? LettoSeguitaIl = null,
-        bool CanArchive = true
+        bool CanArchive = true,
+            bool IsReadByCurrentUser = false
 
  );
 

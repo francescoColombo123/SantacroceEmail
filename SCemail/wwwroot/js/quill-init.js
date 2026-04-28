@@ -23,7 +23,7 @@
         fresh.style.cssText = el.style.cssText;
         parent.appendChild(fresh);
     }
-
+    window.__composeAutoSaveRegistered = false;
     try { el.__quill = null; } catch (e) { }
     try { el.__quillHandler = null; } catch (e) { }
 };
@@ -161,6 +161,27 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, quoteHtml) => {
     host.__quillHandler = handler;
     quill.on("text-change", handler);
     handler();
+};
+
+window.registerComposeAutoSaveClose = function (dotnetRef) {
+    if (window.__composeAutoSaveRegistered)
+        return;
+
+    window.__composeAutoSaveRegistered = true;
+
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+            dotnetRef.invokeMethodAsync("CloseFromJs");
+        }
+    });
+
+    document.addEventListener("mousedown", function (e) {
+        const dialog = document.querySelector(".mud-dialog");
+
+        if (dialog && !dialog.contains(e.target)) {
+            dotnetRef.invokeMethodAsync("CloseFromJs");
+        }
+    });
 };
 
 window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {

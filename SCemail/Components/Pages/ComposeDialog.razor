@@ -10,17 +10,20 @@
 @inject MailService_NEW MailSvc
 @inject ILogger<ComposeDialog> Logger
 @inject IJSRuntime JSRuntime
-
+@inject NavigationManager Nav
 <MudDialog>
     <DialogContent>
+        <div class="compose-layout">
+    <div class="compose-main">
 
         <!-- Mittente -->
-        <MudSelect T="string" Label="Da"
-                   Value="_selectedCasella"
-                   ValueChanged="OnCasellaChanged"
-                   FullWidth="true"
-                   Dense="true"
-                   Disabled="_fromLocked">
+                <MudSelect T="string" Label="Da"
+                           Value="_selectedCasella"
+                           ValueChanged="OnCasellaChanged"
+                           FullWidth="true"
+                           Dense="true"
+                           Margin="Margin.Dense"
+                           Disabled="_fromLocked">
             @foreach (var mail in _caselleDisponibili)
             {
                 <MudSelectItem Value="@mail">@mail</MudSelectItem>
@@ -190,11 +193,12 @@
 
         <!-- Oggetto -->
         <MudTextField T="string"
-                      Label="Oggetto"
-                      Dense="false"
-                      FullWidth="true"
-                      Class="subject-big"
-                      @bind-Value="_composeSubject" />
+                        Label="Oggetto"
+                        Dense="true"
+                        Margin="Margin.Dense"
+                        FullWidth="true"
+                        Class="subject-big"
+                        @bind-Value="_composeSubject" />
         <!-- Editor -->
         <div style="margin-top: 12px;">
             <label class="msg-label">Messaggio</label>
@@ -209,9 +213,12 @@
                 <div>@((MarkupString)_firmaHtml)</div>
             </div>
         }
+        </div>
 
-        <!-- Allegati -->
-        <div id="dropZone" class="drop-zone mt-3" @ref="_dropZoneRef">
+        <aside class="compose-side">
+            <div class="attachments-title">Allegati</div>
+
+            <div id="dropZone" class="drop-zone mt-3" @ref="_dropZoneRef">
             <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Large" Color="Color.Primary" />
             <div>Trascina qui i file o clicca per selezionarli</div>
             <InputFile OnChange="OnFileSelected" multiple />
@@ -259,6 +266,8 @@
                 }
             </div>
         }
+            </aside>
+        </div>
 
         @if (_pending is not null)
         {
@@ -319,12 +328,21 @@
             Invia
         </MudButton>
 
-        <MudButton OnClick="Cancel"
-                   Variant="Variant.Text"
+        <MudButton OnClick="CloseAndSaveDraft"
+                Variant="Variant.Text"
                    Disabled="_uploadingAttachments">
             Chiudi
         </MudButton>
-
+        @if (DraftId.HasValue)
+        {
+            <MudButton Color="Color.Error"
+                       Variant="Variant.Outlined"
+                       StartIcon="@Icons.Material.Filled.Delete"
+                       OnClick="DeleteCurrentDraft"
+                       Disabled="_uploadingAttachments">
+                Elimina bozza
+            </MudButton>
+        }
         <MudButton Color="Color.Secondary"
                    Variant="Variant.Outlined"
                    OnClick="SaveDraft"
@@ -716,7 +734,102 @@
         font-weight: 600;
         color: #35507a;
     }
-</style>
+
+    .compose-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 280px;
+        gap: 14px;
+        align-items: start;
+    }
+
+    .compose-main {
+        min-width: 0;
+    }
+
+    .compose-side {
+        border-left: 1px solid #e5e7eb;
+        padding-left: 12px;
+        position: sticky;
+        top: 0;
+    }
+
+    .attachments-title {
+        font-size: 14px;
+        font-weight: 800;
+        color: #35507a;
+        margin-bottom: 8px;
+    }
+
+    .recipient-container {
+        margin-bottom: 4px !important;
+    }
+
+    .recipient-head {
+        margin: 2px 2px 2px 2px !important;
+    }
+
+    .recipient-box {
+        min-height: 34px !important;
+        padding: 2px 4px !important;
+    }
+
+    .chip-pill {
+        padding: 0 5px !important;
+        min-height: 24px !important;
+    }
+
+    .subject-big {
+        margin-top: 4px !important;
+    }
+
+        .subject-big .mud-input-slot {
+            font-size: 15px !important;
+            font-weight: 700 !important;
+            padding: 8px 10px !important;
+        }
+
+    .msg-label {
+        margin-top: 4px !important;
+    }
+
+    #editor .ql-container {
+        min-height: 420px !important;
+        height: 420px !important;
+    }
+
+    #editor .ql-editor {
+        min-height: 420px !important;
+    }
+
+    .drop-zone {
+        margin-top: 0 !important;
+        padding: 14px 10px !important;
+        min-height: 120px;
+    }
+
+    .gmail-attachment-name {
+        max-width: 170px !important;
+    }
+
+    .gmail-attachment-row {
+        padding: 8px 10px !important;
+    }
+
+    @@media (max-width: 900px) {
+        .compose-layout
+
+    {
+        grid-template-columns: 1fr;
+    }
+
+    .compose-side {
+        border-left: none;
+        padding-left: 0;
+        position: static;
+    }
+
+    }
+    </style>
 
 @code {
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
@@ -835,8 +948,15 @@
             _firmaHtml = null;
         }
 
-        _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
-
+        if (DraftId.HasValue)
+        {
+            _bodyHtml = CorpoIniziale ?? "";
+            _quoteHtml = "";
+        }
+        else
+        {
+            _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
+        }
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
         _allRecipients = (recenti ?? new List<string>())
             .Select(ParseAddressToChip)
@@ -956,7 +1076,7 @@
             await p.ExecuteAsync(p.Cts.Token);
 
             if (forceClose || p.CloseOnExecute)
-                MudDialog.Close(DialogResult.Ok(true));
+                MudDialog.Close(DialogResult.Ok("sent"));
         }
         catch (OperationCanceledException)
         {
@@ -972,6 +1092,29 @@
             try { p.Cts.Dispose(); } catch { }
         }
     }
+    private async Task DeleteCurrentDraft()
+    {
+        if (!DraftId.HasValue)
+            return;
+
+        try
+        {
+            await MailSvc.DeleteDraftAsync(DraftId.Value, Utente);
+
+            await SafeDestroyEditor();
+
+            MudDialog.Close(DialogResult.Ok("draft-deleted"));
+
+            await Task.Delay(200);
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore eliminazione bozza");
+            Snackbar.Add("Errore durante eliminazione bozza ❌", Severity.Error);
+        }
+    }
+
     private async Task<IEnumerable<RecipientChip>> SearchRecipientsHybrid(string value, CancellationToken token)
     {
         var query = (value ?? "").Trim();
@@ -1016,7 +1159,12 @@
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
             await JSRuntime.InvokeVoidAsync("initFileDropZone", _dropZoneRef);
+
+            _dotnetRef ??= DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("registerComposeAutoSaveClose", _dotnetRef);
+        }
 
         if (!_pendingQuillInit)
             return;
@@ -1044,6 +1192,11 @@
 
     [JSInvokable]
     public void UpdateBodyHtml(string html) => _bodyHtml = html;
+    [JSInvokable]
+    public async Task CloseFromJs()
+    {
+        await CloseAndSaveDraft();
+    }
     [JSInvokable]
     public void CreateRecipientFromJs(string value)
     {
@@ -1074,10 +1227,7 @@
     private List<RecipientChip> _suggestionsBcc = new();
     private async Task Cancel()
     {
-        await CancelPendingInternal();
-
-        await SafeDestroyEditor();
-        MudDialog.Cancel();
+        await CloseAndSaveDraft();
     }
 
     private async Task SafeDestroyEditor()
@@ -1147,6 +1297,53 @@
         );
     }
 
+    private bool _isClosing;
+
+    private async Task CloseAndSaveDraft()
+    {
+        if (_isClosing)
+            return;
+
+        _isClosing = true;
+
+        try
+        {
+            if (_uploadingAttachments)
+            {
+                Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
+                _isClosing = false;
+                return;
+            }
+
+            await CancelPendingInternal();
+
+            _bodyHtml = _bodyHtml?.Trim() ?? "";
+
+            _draftId = await MailSvc.SaveDraftAsync(
+                utente: Utente,
+                to: string.Join(";", ChipsToEmails(_toList)),
+                cc: string.Join(";", ChipsToEmails(_ccList)),
+                ccn: string.Join(";", ChipsToEmails(_bccList)),
+                subject: _composeSubject,
+                bodyHtml: _bodyHtml,
+                draftId: _draftId
+            );
+
+            await SafeDestroyEditor();
+
+            MudDialog.Close(DialogResult.Ok("draft"));
+
+            await Task.Delay(200);
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore salvataggio bozza in chiusura");
+            Snackbar.Add("Errore nel salvataggio della bozza ❌", Severity.Error);
+            _isClosing = false;
+        }
+    }
+
     private RecipientChip CreateRecipientFromText(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -1196,37 +1393,7 @@
 
     private async Task SaveDraft()
     {
-        if (_uploadingAttachments)
-        {
-            Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
-            return;
-        }
-        await StartUndoableAction(
-        kind: PendingActionKind.SaveDraft,
-        label: "Salvataggio bozza…",
-        executeAsync: async (ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-
-                var to = string.Join(";", ChipsToEmails(_toList));
-                var cc = string.Join(";", ChipsToEmails(_ccList));
-                var ccn = string.Join(";", ChipsToEmails(_bccList));
-
-                _draftId = await MailSvc.SaveDraftAsync(
-                    utente: Utente,
-                    to: to,
-                    cc: cc,
-                    ccn: ccn,
-                    subject: _composeSubject,
-                    bodyHtml: _bodyHtml,
-                    draftId: _draftId
-                );
-
-                Snackbar.Add("💾 Bozza salvata!", Severity.Success);
-            },
-            seconds: 10,
-            closeOnExecute: true
-        );
+        await CloseAndSaveDraft();
     }
 
     private static string FormatFileSize(long bytes)
@@ -1607,15 +1774,24 @@
 
         return s;
     }
+    
     protected override void OnParametersSet()
     {
         _composeSubject = Oggetto ?? string.Empty;
-        _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
-        _bodyHtml ??= "";
 
-        _pendingQuillInit = true; // ✅ ogni volta che cambiano parametri (reply/forward/bozza)
+        if (DraftId.HasValue)
+        {
+            _bodyHtml = CorpoIniziale ?? "";
+            _quoteHtml = "";
+        }
+        else
+        {
+            _bodyHtml ??= "";
+            _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
+        }
+
+        _pendingQuillInit = true;
     }
-
     private static string NormalizeEmailValue(string? value)
     {
         return (value ?? "").Trim();

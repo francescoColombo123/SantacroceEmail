@@ -23,6 +23,7 @@ namespace SCemail.Components.Data
         public DbSet<EmailInboxSezione> EmailInboxSezioni => Set<EmailInboxSezione>();
         public DbSet<EmailInboxSezioneMap> EmailInboxSezioneMap => Set<EmailInboxSezioneMap>();
         public DbSet<EmailSeguita> EmailSeguite => Set<EmailSeguita>();
+        public DbSet<EmailBlacklist> EmailBlacklist { get; set; }
         public DbSet<EmailTask> EmailTasks => Set<EmailTask>();
         public DbSet<EmailBozza> EmailBozze => Set<EmailBozza>();
         public DbSet<BozzaAllegato> BozzaAllegati => Set<BozzaAllegato>();
@@ -319,6 +320,19 @@ namespace SCemail.Components.Data
                      .IsRequired();
             });
 
+            mb.Entity<EmailBlacklist>(entity =>
+            {
+                entity.ToTable("EMAIL_BLACKLIST", "SGAPP");
+
+                entity.HasKey(e => e.Id);
+
+                entity.Property(e => e.Id).HasColumnName("ID");
+                entity.Property(e => e.Email).HasColumnName("EMAIL");
+                entity.Property(e => e.InseritoDa).HasColumnName("INSERITO_DA");
+                entity.Property(e => e.DataInserimento).HasColumnName("DATA_INSERIMENTO");
+                entity.Property(e => e.Attiva).HasColumnName("ATTIVA");
+            });
+
             mb.Entity<EmailTaskComment>(e =>
             {
                 e.ToTable("EMAIL_TASK_COMMENTS");
@@ -389,7 +403,7 @@ namespace SCemail.Components.Data
                 e.Property(x => x.InReplyTo).HasColumnName("IN_REPLY_TO");
                 e.Property(x => x.ReferencesHdr).HasColumnName("REFERENCES_HDR");
                 e.Property(x => x.ThreadKey).HasColumnName("THREAD_KEY"); // ✅ AGGIUNTA QUESTA
-
+                e.Property(e => e.Blacklist).HasColumnName("BLACKLIST");
 
                 e.HasOne(x => x.Casella)
                     .WithMany(c => c.EmailRicevute)

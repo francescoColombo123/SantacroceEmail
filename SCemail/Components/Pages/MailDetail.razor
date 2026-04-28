@@ -61,20 +61,37 @@
                 </div>
 
                 <div class="head-actions">
+
+                    @if (!string.IsNullOrWhiteSpace(_assegnatoA))
+                    {
+                        <div class="assigned-badge" title="@_assegnatoA">
+                            <MudIcon Icon="@Icons.Material.Filled.Person" Size="Size.Small" />
+                            <span>@_assegnatoA</span>
+                        </div>
+                    }
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Report"
+                                   Title="Metti mittente in blacklist"
+                                   Color="Color.Error"
+                                   Class="head-action-btn"
+                                   OnClick="@AddCurrentSenderToBlacklist" />
+
                     <MudIconButton Icon="@Icons.Material.Filled.MarkEmailUnread"
                                    Title="Segna da leggere"
                                    Color="Color.Default"
+                                   Class="head-action-btn"
                                    OnClick="@MarkUnreadThread" />
 
                     <MudIconButton Icon="@Icons.Material.Filled.Archive"
                                    Title="Archivia"
                                    Color="Color.Primary"
+                                   Class="head-action-btn"
                                    OnClick="@ArchiveThread" />
 
                     <MudIconButton Icon="@Icons.Material.Filled.ForwardToInbox"
                                    Color="Color.Primary"
-                                   Size="Size.Small"
                                    Title="Assegna"
+                                   Class="head-action-btn"
                                    OnClick="@(() => AssignThread())" />
 
                     <div class="move-select-wrap">
@@ -354,6 +371,8 @@
     private List<EmailInboxSezione> _sezioni = new();
     private long? _sezioneSelezionata;
     private bool _moving = false;
+    private string? _assegnatoA;
+
     public class EmailReplyInfo
     {
         public string CasellaMittente { get; set; } = "";
@@ -530,70 +549,107 @@
         var last = GetThreadLast();
         if (last == null) return;
 
-        var requireComment = true;
-       
-       
-        if (await AccessiSrv.IsAdminAsync(_utente))
-            requireComment = false;
-
-        var parameters = new DialogParameters
+        try
         {
-            ["Users"] = await MailSvc1.GetUserListAsync(),
-            ["RequireComment"] = requireComment,
-            ["Title"] = "Assegna internamente"
-        };
+            var requireComment = true;
 
-        var dialog = DialogService.Show<ForwardDialog>(
-            "Assegna email",
-            parameters,
-            new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
-        );
+            if (await AccessiSrv.IsAdminAsync(_utente))
+                requireComment = false;
 
-        var result = await dialog.Result;
+            var parameters = new DialogParameters
+            {
+                ["Users"] = await MailSvc1.GetUserListAsync(),
+                ["RequireComment"] = requireComment,
+                ["Title"] = "Assegna internamente"
+            };
 
-        if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
-            return;
+            var dialog = DialogService.Show<ForwardDialog>(
+                "Assegna email",
+                parameters,
+                new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true }
+            );
 
-        if (requireComment && string.IsNullOrWhiteSpace(fr.AssignedComment))
-        {
-            Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
-            return;
-        }
+            var result = await dialog.Result;
 
-        // assegnazione classica
-        await MailSvc1.AssignEmailAsync(
-    last.Id,
-    fr.User,
-    soloInvio: false,
-    commento: fr.AssignedComment,
-    eseguitoDa: _utente,
-    keepExecutorUnarchived: fr.FollowMe
-);
+            if (result.Canceled || result.Data is not ForwardDialog.ForwardResult fr)
+                return;
 
-        int? commentId = null;
+            if (requireComment && string.IsNullOrWhiteSpace(fr.AssignedComment))
+            {
+                Snackbar.Add("Per assegnare è obbligatorio inserire un commento.", Severity.Warning);
+                return;
+            }
 
-        // commento generale con menzioni
-        if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
-        {
-            commentId = await MailSvc.AddCommentAsync(
-                emailId: last.Id,
-                autore: _utente!,
-                testo: fr.MentionsComment
+            await MailSvc1.AssignEmailAsync(
+                last.Id,
+                fr.User,
+                soloInvio: false,
+                commento: fr.AssignedComment,
+                eseguitoDa: _utente,
+                keepExecutorUnarchived: fr.FollowMe
+            );
+
+            int? commentId = null;
+
+            if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+            {
+                commentId = await MailSvc.AddCommentAsync(
+                    emailId: last.Id,
+                    autore: _utente!,
+                    testo: fr.MentionsComment
+                );
+
+                await MailSvc.MarkEmailSeguiteAsUnreadAsync(
+                    emailId: last.Id,
+                    commentId: commentId.Value,
+                    autore: _utente!
+                );
+            }
+
+            var mentionedUsers = fr.MentionedUsers
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Select(u => u.Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (commentId.HasValue)
+            {
+                foreach (var u in mentionedUsers)
+                {
+                    if (u.Equals(_utente, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    await MailSvc.RegistraEventoChatAsync(
+                        emailId: last.Id,
+                        utente: u,
+                        isMention: true,
+                        commentoId: commentId.Value,
+                        autore: _utente!
+                    );
+                }
+            }
+
+            if (fr.FollowMe)
+            {
+                await MailSvc.EnsureEmailSeguitaAsync(
+                    last.Id,
+                    _utente!,
+                    commentId
+                );
+            }
+
+            Snackbar.Add(
+                fr.FollowMe
+                    ? $"Email assegnata a {fr.User} e aggiunta ai tuoi seguiti ✅"
+                    : $"Email assegnata a {fr.User} ✅",
+                Severity.Success
             );
         }
-
-        // SOLO utenti davvero menzionati
-        var utentiSeguiti = fr.MentionedUsers
-            .Where(u => !string.IsNullOrWhiteSpace(u))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        foreach (var u in utentiSeguiti)
+        catch (Exception ex)
         {
-            await MailSvc.EnsureEmailSeguitaAsync(last.Id, u, commentId);
+            Console.WriteLine($"❌ Errore in AssignThread: {ex.Message}");
+            Snackbar.Add($"Errore nell'assegnazione: {ex.Message}", Severity.Error);
         }
-
-        Snackbar.Add($"Assegnata a {fr.User} ✅", Severity.Success);
     }
 
    private async Task ForwardExternalThread()
@@ -695,10 +751,10 @@
             parameters,
              new DialogOptions
              {
-                 MaxWidth = MaxWidth.Medium,
+                 MaxWidth = MaxWidth.Large,
                  FullWidth = true,
-                 BackdropClick = false,     
-                 CloseOnEscapeKey = false   
+                 CloseOnEscapeKey = false,
+                 BackdropClick = false
              });
 
         var result = await dialog.Result;
@@ -974,6 +1030,10 @@
 
         if (q.TryGetValue("fromSection", out var s))
             _fromSection = s.ToString();
+        _assegnatoA = null;
+
+        if (q.TryGetValue("assegnatoA", out var ass))
+            _assegnatoA = ass.ToString();
 
         if (q.TryGetValue("ids", out var idsRaw))
         {
@@ -1107,6 +1167,37 @@
         // testo -> HTML safe
         return "<pre style='white-space:pre-wrap;font-family:inherit;margin:0'>" + Html(cleaned) + "</pre>";
     }
+    private async Task AddCurrentSenderToBlacklist()
+    {
+        var last = GetThreadLast();
+
+        if (last == null)
+            return;
+
+        var email = ExtractEmailOnly(last.Mittente);
+
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            Snackbar.Add("Mittente non trovato.", Severity.Warning);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Conferma blacklist",
+            (MarkupString)$"Vuoi mettere <b>{email}</b> in blacklist?",
+            yesText: "Blacklist",
+            noText: "Annulla");
+
+        if (confirm != true)
+            return;
+
+        await MailSvc1.AddToBlacklistAsync(email, _utente!, last.Id);
+
+        Snackbar.Add($"Mittente {email} aggiunto in blacklist", Severity.Success);
+
+        GoBack();
+    }
+
     private string BuildForwardChainAsText(EmailDetail_NEW selected)
     {
         var ordered = _thread?.OrderBy(x => x.Data).ToList() ?? new List<EmailDetail_NEW>();
@@ -1235,13 +1326,13 @@
         var dialog = DialogService.Show<ComposeDialog>(
             "Inoltra (esterno)",
             parameters,
-             new DialogOptions
-             {
-                 MaxWidth = MaxWidth.Medium,
-                 FullWidth = true,
-                 BackdropClick = false,    
-                 CloseOnEscapeKey = false  
-             });
+            new DialogOptions
+            {
+                MaxWidth = MaxWidth.Large,
+                FullWidth = true,
+                CloseOnEscapeKey = false,
+                BackdropClick = false
+            });
 
         var result = await dialog.Result;
         if (result.Data is true)
@@ -1280,6 +1371,10 @@
             }
 
             await MailSvc.MarkOpenedAsync(_email.Id);
+
+            // ✅ QUESTA È QUELLA CHE TI MANCA
+            await MailSvc1.SegnaLettaAsync(_email.Id, _utente);
+
             await MailSvc1.SegnaNotificheVisteAsync(_email.Id, _utente);
         }
         catch (Exception ex)
@@ -1850,18 +1945,41 @@
         font-weight: 600;
     }
 .detail-shell{display:grid;grid-template-columns:2fr 1fr;gap:16px;height:calc(100vh - 90px);padding:16px;background:#f5f8ff}
-.left-pane{background:#fff;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.06);overflow-y:auto}
+
+    .left-pane {
+        background: #fff;
+        border-radius: 10px;
+        padding: 0 14px 14px 14px;
+        box-shadow: 0 1px 4px rgba(0,0,0,.06);
+        overflow-y: auto;
+        position: relative;
+    }
 
     .email-head {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        background: #fff;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
         border-bottom: 1px solid #e8eefc;
-        padding: 10px 4px 12px 4px;
+        padding: 12px 4px;
         margin-bottom: 10px;
         flex-wrap: nowrap;
     }
+
+        .email-head::after {
+            content: "";
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: -8px;
+            height: 8px;
+            background: linear-gradient(to bottom, rgba(255,255,255,1), rgba(255,255,255,0));
+            pointer-events: none;
+        }
 
     .head-left {
         display: flex;
@@ -2510,5 +2628,38 @@
         font-size: 12px;
         font-weight: 700;
         color: #667085;
+    }
+
+    .assigned-badge {
+        height: 36px;
+        max-width: 220px;
+        padding: 0 10px;
+        border: 1px solid #d6e6ff;
+        border-radius: 10px;
+        background: #f7faff;
+        color: #1d7034;
+        font-size: 12px;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+        .assigned-badge span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+    .head-action-btn {
+        width: 36px !important;
+        height: 36px !important;
+        padding: 6px !important;
+        flex: 0 0 36px;
+    }
+
+    .head-actions {
+        align-items: center;
     }
 </style>

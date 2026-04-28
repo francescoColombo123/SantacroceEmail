@@ -1,0 +1,169 @@
+﻿@page "/blacklist"
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.JSInterop
+@using SCemail.Components.Data
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+@inject IJSRuntime JS
+
+<div class="container my-4">
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">🚫 Blacklist mittenti</h5>
+
+            <button class="btn btn-light btn-sm" @onclick="TornaHome">
+                ⬅️ Home
+            </button>
+        </div>
+
+        <div class="card-body">
+            <input class="form-control"
+                   placeholder="Cerca email..."
+                   @bind="_search"
+                   @bind:event="oninput" />
+
+            <small class="text-muted">
+                Totale: @BlacklistFiltrata.Count()
+            </small>
+        </div>
+    </div>
+
+    <div class="card shadow-sm mt-3">
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Email</th>
+                        <th>Inserito da</th>
+                        <th>Data</th>
+                        <th class="text-center">Stato</th>
+                        <th class="text-center">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_loading)
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center py-4">Caricamento...</td>
+                        </tr>
+                    }
+                    else if (BlacklistFiltrata.Any())
+                    {
+                        @foreach (var b in BlacklistFiltrata)
+                        {
+                            <tr>
+                                <td><b>@b.Email</b></td>
+                                <td>@b.InseritoDa</td>
+                                <td>@b.DataInserimento.ToString("dd/MM/yyyy HH:mm")</td>
+                                <td class="text-center">
+                                    <span class="badge bg-danger">Attiva</span>
+                                </td>
+                                <td class="text-center">
+                                    <button class="btn btn-sm btn-outline-danger"
+                                            @onclick="() => RimuoviBlacklist(b)">
+                                        🗑 Rimuovi
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                    else
+                    {
+                        <tr>
+                            <td colspan="5" class="text-center py-4 text-muted">
+                                Nessun indirizzo in blacklist.
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+@code {
+    private string? _cp;
+    private string? _utente;
+    private bool _isAdmin;
+    private bool _loading = true;
+    private string _search = "";
+
+    private List<EmailBlacklist> _blacklist = new();
+
+    private IEnumerable<EmailBlacklist> BlacklistFiltrata =>
+        _blacklist.Where(x =>
+            string.IsNullOrWhiteSpace(_search) ||
+            (x.Email ?? "").Contains(_search, StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(x => x.DataInserimento);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
+
+        _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+        _isAdmin = await AccessiSrv.IsAdminAsync(_utente);
+
+        if (!_isAdmin)
+        {
+            Snackbar.Add("Accesso consentito solo agli admin.", Severity.Warning);
+            Nav.NavigateTo($"/?cp={_cp}");
+            return;
+        }
+
+        await LoadBlacklist();
+    }
+
+    private async Task LoadBlacklist()
+    {
+        _loading = true;
+
+        await using var db = DbFactory.CreateDbContext();
+
+        _blacklist = await db.EmailBlacklist
+            .AsNoTracking()
+            .Where(x => x.Attiva == "Y")
+            .OrderByDescending(x => x.DataInserimento)
+            .ToListAsync();
+
+        _loading = false;
+    }
+
+    private async Task RimuoviBlacklist(EmailBlacklist item)
+    {
+        var ok = await JS.InvokeAsync<bool>(
+            "confirm",
+            $"Vuoi rimuovere '{item.Email}' dalla blacklist? Le nuove email verranno prese regolarmente."
+        );
+
+        if (!ok)
+            return;
+
+        await using var db = DbFactory.CreateDbContext();
+
+        var row = await db.EmailBlacklist.FirstOrDefaultAsync(x => x.Id == item.Id);
+
+        if (row is null)
+        {
+            Snackbar.Add("Riga non trovata.", Severity.Warning);
+            return;
+        }
+
+        db.EmailBlacklist.Remove(row);
+        await db.SaveChangesAsync();
+
+        _blacklist.RemoveAll(x => x.Id == item.Id);
+
+        Snackbar.Add($"'{item.Email}' rimosso dalla blacklist ✅", Severity.Success);
+    }
+
+    private void TornaHome()
+    {
+        Nav.NavigateTo(string.IsNullOrWhiteSpace(_cp) ? "/" : $"/?cp={_cp}");
+    }
+}

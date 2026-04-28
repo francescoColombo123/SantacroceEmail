@@ -1,460 +1,738 @@
 ﻿@page "/"
 @using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.WebUtilities
+@using Microsoft.Extensions.Configuration
 @using MudBlazor
+@using SCemail.Components.Data
+@using System.Globalization
+
+@inject IConfiguration Configuration
 @inject NavigationManager Nav
 @inject SCemail.Components.Data.AccessiService AccessiSrv
-@using Microsoft.AspNetCore.WebUtilities
-@using SCemail.Components.Data
 @inject IDbContextFactory<MailDbContext> DbFactory
-@inject ISnackbar Snackbar
 @inject IEmailTasksClient TaskClient
+@inject MailService_NEW MailSvc
+
 @code {
     private string? _cp;
     private string? _utente;
-    private bool _hasCasella;
-    private int _mentionsCount = 0;
-    private bool _showMentionsAlert = false;
-    private List<EmailMenzione> _mentions = new();
+
+    private int _assegnateCount;
+    private int _nuoveDaLeggereCount;
+
+    private int _seguiteCount;
+    private int _mentionsCount;
+    private int _taskApertiCount;
+
     private List<string> _caselleErrore = new();
-    private bool _showCaselleAlert = false;
+    private bool _showCaselleAlert;
+
     private TaskHomeBadgesDto? _taskBadges;
+
+    private List<HomeSectionItem> _dynamicSections = new();
+
+    private static readonly HashSet<string> AdminUsers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "admin",
+        "c.diiorio",
+        "b.demilio",
+        "n.santacroce"
+    };
+
+    private bool IsAdmin =>
+        !string.IsNullOrWhiteSpace(_utente) &&
+        AdminUsers.Contains(_utente);
+
+    private sealed class HomeSectionItem
+    {
+        public long Id { get; set; }
+        public string Codice { get; set; } = "";
+        public string Nome { get; set; } = "";
+        public long Ordine { get; set; }
+        public int Count { get; set; }
+    }
+
+    private sealed class MailThreadRow
+    {
+        public long Id { get; set; }
+        public string ThreadGroupKey { get; set; } = "";
+        public bool IsUnreadForUser { get; set; }
+    }
+
+    private DateTime? GetMailUiMinDate()
+    {
+        var value = Configuration["MailUi:MinDate"];
+
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (DateTime.TryParseExact(
+            value,
+            "yyyy-MM-dd",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.None,
+            out var parsed))
+        {
+            return parsed.Date;
+        }
+
+        return null;
+    }
+
+    private static bool UtentePresente(string valoreDb, string utenteNorm)
+    {
+        if (string.IsNullOrWhiteSpace(valoreDb))
+            return false;
+
+        var parti = valoreDb
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => x.Trim().ToLowerInvariant());
+
+        return parti.Contains(utenteNorm);
+    }
+
+    private static string BuildThreadGroupKey(long id, string? threadKey)
+    {
+        return string.IsNullOrWhiteSpace(threadKey)
+            ? $"SINGLE_{id}"
+            : threadKey.Trim();
+    }
+
     protected override async Task OnInitializedAsync()
     {
         var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
-        _cp = q.TryGetValue("cp", out var v) && !string.IsNullOrWhiteSpace(v)
-            ? v.ToString()
-            : null;
+        _cp = q.TryGetValue("cp", out var v) ? v.ToString() : null;
 
         _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
 
         if (string.IsNullOrWhiteSpace(_utente))
             return;
 
-        // ✅ badges task (ora è sicuro fare Trim)
-        _taskBadges = await TaskClient.GetHomeBadgesAsync(_utente.Trim().ToLowerInvariant());
+        var utenteNorm = _utente.Trim().ToLowerInvariant();
+        var minDate = GetMailUiMinDate();
 
         await using var db = await DbFactory.CreateDbContextAsync();
 
-        _hasCasella = await db.CasellaAbilitazioni.CountAsync(a => a.Username == _utente) > 0;
-
-        _mentions = await db.emailMenzionis
+        // =========================================================
+        // CASELLE CON ERRORE
+        // =========================================================
+        var caselleIdsQuery = db.CasellaAbilitazioni
             .AsNoTracking()
-            .Where(m => m.Utente == _utente && m.Visto == "N")
-            .OrderByDescending(m => m.DataMenzione)
+            .Where(x => x.Username != null && x.Username.ToLower() == utenteNorm)
+            .Select(x => x.CasellaId)
+            .Distinct();
+
+        var qCaselleErrore = db.CasellePosta
+            .AsNoTracking()
+            .Where(c =>
+                (c.Attiva == null || c.Attiva == "Y") &&
+                (c.StatoConn == null || c.StatoConn != "OK"));
+
+        if (!IsAdmin)
+            qCaselleErrore = qCaselleErrore.Where(c => caselleIdsQuery.Contains(c.Id));
+
+        _caselleErrore = await qCaselleErrore
+            .Where(c => c.Email != null)
+            .Select(c => c.Email!)
+            .OrderBy(x => x)
             .ToListAsync();
 
-        _mentionsCount = _mentions.Count;
-
-        _caselleErrore = await db.CasellePosta
-        .AsNoTracking()
-        .Where(c =>
-            (c.Attiva == null || c.Attiva == "Y") &&
-            (c.StatoConn == null || c.StatoConn != "OK"))
-        .Select(c => c.Email!)
-        .ToListAsync();
-
         _showCaselleAlert = _caselleErrore.Any();
-    }
 
-    private string AdminDashboardHref =>
-    string.IsNullOrWhiteSpace(_cp)
-        ? "/admin-dashboard"
-        : $"/admin-dashboard?cp={Uri.EscapeDataString(_cp)}";
+        // =========================================================
+        // BASE MAIL ASSEGNATE A ME
+        // =========================================================
+        var assegnazioniUtente = db.EmailAssegnazione
+            .AsNoTracking()
+            .Where(a => a.Utente != null && a.Utente.ToLower() == utenteNorm);
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender || string.IsNullOrWhiteSpace(_utente))
-            return;
+        var ricevuteAssegnateBase =
+            from e in db.EmailRicevute.AsNoTracking()
+            join a in assegnazioniUtente on e.Id equals a.EmailId
+            where (e.Eliminato == null || e.Eliminato != "Y")
+                  && (e.Blacklist == null || e.Blacklist != "Y")
+                  && (!minDate.HasValue || e.DataRicezione >= minDate.Value)
+            select e;
 
-        if (firstRender && _mentionsCount > 0)
-        {
-            // Snackbar compatibile (solo testo)
-            Snackbar.Add(
-                $"Hai {_mentionsCount} nuove menzioni!",
-                Severity.Warning,
-                options =>
-                {
-                    options.ShowCloseIcon = true;
-                    options.RequireInteraction = false;
-                });
+        var archivioUtente = db.EmailArchivio
+            .AsNoTracking()
+            .Where(x => x.Utente != null && x.Utente.ToLower() == utenteNorm);
 
-            // Mostra l’alert cliccabile nella pagina
-            _showMentionsAlert = true;
-            StateHasChanged();
-        }
+        var sezioneMapUtente = db.EmailInboxSezioneMap
+            .AsNoTracking()
+            .Where(x => x.Utente != null && x.Utente.ToLower() == utenteNorm);
 
+        // =========================================================
+        // INBOX PURA = assegnate a me, non archiviate, non sezionate
+        // =========================================================
+        var inboxCounts = await MailSvc.GetInboxHomeCountsAsync(utenteNorm);
+        _assegnateCount = inboxCounts.TotalInbox;
+        _nuoveDaLeggereCount = inboxCounts.UnreadInbox;
+
+        // =========================================================
+        // SEZIONI DINAMICHE HOME - COUNT PER THREAD
+        // =========================================================
+        var sezioniAttive = await db.EmailInboxSezioni
+            .AsNoTracking()
+            .Where(s => s.Attiva == "Y")
+            .OrderBy(s => s.Ordine)
+            .ThenBy(s => s.Nome)
+            .Select(s => new
+            {
+                s.Id,
+                s.Codice,
+                s.Nome,
+                s.Ordine
+            })
+            .ToListAsync();
+
+        var sectionRows = await (
+            from m in db.EmailInboxSezioneMap.AsNoTracking()
+            join e in ricevuteAssegnateBase on m.IdEmail equals e.Id
+            where m.Utente != null && m.Utente.ToLower() == utenteNorm
+                  && !archivioUtente.Any(ar => ar.IdEmail == e.Id)
+            select new
+            {
+                IdSezione = (long)m.IdSezione,
+                EmailId = (long)e.Id,
+                ThreadKey = e.ThreadKey
+            }
+        ).Distinct().ToListAsync();
+
+        var sectionCountMap = sectionRows
+            .GroupBy(x => x.IdSezione)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(x => BuildThreadGroupKey(x.EmailId, x.ThreadKey)).Distinct().Count()
+            );
+
+        _dynamicSections = sezioniAttive
+            .Select(s => new HomeSectionItem
+            {
+                Id = (long)s.Id,
+                Codice = s.Codice ?? "",
+                Nome = s.Nome ?? $"Sezione {s.Id}",
+                Ordine = s.Ordine,
+                Count = sectionCountMap.TryGetValue((long)s.Id, out var c) ? c : 0
+            })
+            .ToList();
+
+        // =========================================================
+        // SEGUITE - STESSA LOGICA DELLA PAGINA
+        // =========================================================
         try
         {
-            await using var db = await DbFactory.CreateDbContextAsync();
+            var (_, totalSeguite) = await MailSvc.GetFollowedEmailsPagedAsync(
+                utenteNorm,
+                0,
+                1,
+                null,
+                null
+            );
 
-            _hasCasella = await db.CasellaAbilitazioni.CountAsync(a => a.Username == _utente) > 0;
-
-            _mentionsCount = await db.emailMenzionis
-                .AsNoTracking()
-                .IgnoreAutoIncludes()
-                .Where(m => m.Utente == _utente && m.Visto == "N")
-                .CountAsync();
-
-            _taskBadges = await TaskClient.GetHomeBadgesAsync(_utente.Trim().ToLowerInvariant());
-            StateHasChanged();
+            _seguiteCount = totalSeguite;
         }
-        catch (Exception ex)
+        catch
         {
-            Console.WriteLine("Errore durante il controllo casella: " + ex.Message);
-            _hasCasella = false;
+            _seguiteCount = 0;
         }
-    }
-    private async void NavigateToMention()
-    {
-        await using var db = await DbFactory.CreateDbContextAsync();
 
-        // 1️⃣ Se c’è solo UNA menzione non vista → apri direttamente quel messaggio
-        if (_mentionsCount == 1)
-        {
-            var mention = await db.emailMenzionis
-                .AsNoTracking()
-                .Where(m => m.Utente == _utente && m.Visto == "N")
-                .OrderBy(m => m.Id)
-                .FirstOrDefaultAsync();
-
-            if (mention != null)
+        // =========================================================
+        // MENZIONI - STESSA LOGICA DELLA PAGINA
+        // =========================================================
+        var mentionRows = await (
+            from m in db.emailMenzionis.AsNoTracking()
+            join e in db.EmailRicevute.AsNoTracking() on m.EmailId equals e.Id
+            where m.Utente != null
+                  && m.Utente.ToLower() == utenteNorm
+                  && m.Visto == "N"
+                  && (e.Eliminato == null || e.Eliminato != "Y")
+                  && (!minDate.HasValue || e.DataRicezione >= minDate.Value)
+            select new
             {
-                Nav.NavigateTo($"/mail-detail/{mention.EmailId}/{_cp}");
-                return;
+                Id = (long)e.Id,
+                ThreadKey = e.ThreadKey
             }
-        }
+        ).Distinct().ToListAsync();
 
-        // 2️⃣ Altrimenti → apri la cartella “Menzioni”
-        Nav.NavigateTo($"/mail-new?cp={_cp}&folder=mentions");
+        _mentionsCount = mentionRows
+            .Select(x => BuildThreadGroupKey(x.Id, x.ThreadKey))
+            .Distinct()
+            .Count();
+
+        // =========================================================
+        // TASK
+        // =========================================================
+        _taskBadges = await TaskClient.GetHomeBadgesAsync(utenteNorm);
+        _taskApertiCount = _taskBadges?.AssignedUnreadTotal ?? 0;
     }
 
-    private string MailHref => string.IsNullOrWhiteSpace(_cp) ? "/mail" : $"/mail-new?cp={Uri.EscapeDataString(_cp)}";
-    private string TaskHref => string.IsNullOrWhiteSpace(_cp) ? "/tasks" : $"/tasks-new?cp={Uri.EscapeDataString(_cp)}";
-    private string AbilitazioniHref => string.IsNullOrWhiteSpace(_cp) ? "/abilitazioni" : $"/abilitazioni?cp={Uri.EscapeDataString(_cp)}";
-    private string ConfigurazioneHref => string.IsNullOrWhiteSpace(_cp)
-    ? "/configurazione"
-    : $"/configurazione?cp={Uri.EscapeDataString(_cp)}";
-    private string RegoleHref =>
-    string.IsNullOrWhiteSpace(_cp)
-        ? "/regole"
-        : $"/regole?cp={Uri.EscapeDataString(_cp)}";
     private string RubricaHref =>
+    string.IsNullOrWhiteSpace(_cp)
+        ? "/rubrica"
+        : $"/rubrica?cp={Uri.EscapeDataString(_cp)}";
+
+
+    private string RegoleHref =>
 string.IsNullOrWhiteSpace(_cp)
-    ? "/rubrica"
-    : $"/rubrica?cp={Uri.EscapeDataString(_cp)}";
+    ? "/regole"
+    : $"/regole?cp={Uri.EscapeDataString(_cp)}";
+    private string ConfigurazioneAdminHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/configurazione"
+            : $"/configurazione?cp={Uri.EscapeDataString(_cp)}";
 
-    private static readonly HashSet<string> AdminUsers = new(StringComparer.OrdinalIgnoreCase)
+    private string AbilitazioniHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/abilitazioni"
+            : $"/abilitazioni?cp={Uri.EscapeDataString(_cp)}";
+
+    private string MailHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/mail-new"
+            : $"/mail-new?cp={Uri.EscapeDataString(_cp)}";
+
+    private string TaskHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/tasks-new"
+            : $"/tasks-new?cp={Uri.EscapeDataString(_cp)}";
+
+    private string ConfigurazioneHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/configurazione"
+            : $"/configurazione?cp={Uri.EscapeDataString(_cp)}";
+
+    private string MailInboxHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/mail-new?folder=inbox"
+            : $"/mail-new?cp={Uri.EscapeDataString(_cp)}&folder=inbox";
+
+    private string MailFollowedHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/mail-new?folder=mailfollowed"
+            : $"/mail-new?cp={Uri.EscapeDataString(_cp)}&folder=mailfollowed";
+    private void GoToBlacklist()
     {
-        "admin",
-        "c.diiorio",
-        "b.demilio"
-    };
+        Nav.NavigateTo($"/blacklist?cp={Uri.EscapeDataString(_cp ?? "")}");
+    }
 
-    private bool IsAdmin => AdminUsers.Contains(_utente);
+    private string MailMentionsHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/mail-new?folder=mentions"
+            : $"/mail-new?cp={Uri.EscapeDataString(_cp)}&folder=mentions";
 }
 
 <PageTitle>GS – Workspace</PageTitle>
 
-<div class="page">
-    <div class="welcome">
-        <div class="hero">
-            <h1>Benvenuto in <span>GS – WORKSPACE</span></h1>
-            <p>Gestisci <b>Mail</b> e <b>Task</b> nella stessa interfaccia.</p>
-            <div class="cta">
-                <MudButton Color="Color.Primary" Variant="Variant.Filled" Href="@MailHref" StartIcon="@Icons.Material.Filled.Mail">
-                    Apri Mail
-                   
-
-                </MudButton>
-                <MudButton Color="Color.Secondary" Variant="Variant.Outlined" Href="@TaskHref" StartIcon="@Icons.Material.Filled.TaskAlt">
-                    Vai ai Task
-                </MudButton>
-
-                @if (IsAdmin)
-                {
-                    <MudButton Color="Color.Info" Variant="Variant.Outlined" Href="@AbilitazioniHref" StartIcon="@Icons.Material.Filled.PersonAdd">
-                        Abilitazioni
-                    </MudButton>
-                    <MudButton Color="Color.Warning" Variant="Variant.Outlined" Href="@ConfigurazioneHref" StartIcon="@Icons.Material.Filled.Settings">
-                        Configurazione
-                    </MudButton>
-                    <MudButton Color="Color.Success" Variant="Variant.Outlined" Href="@RegoleHref" StartIcon="@Icons.Material.Filled.Rule">
-                        Regole
-                    </MudButton>
-                    <MudButton Color="Color.Primary"
-                               Variant="Variant.Filled"
-                               Href="@AdminDashboardHref"
-                               StartIcon="@Icons.Material.Filled.Dashboard">
-                        Dashboard Amministrazione
-                    </MudButton>
-                    <MudButton Color="Color.Info"
-                               Variant="Variant.Outlined"
-                               Href="@RubricaHref"
-                               StartIcon="@Icons.Material.Filled.Contacts">
-                        Rubrica
-                    </MudButton>
-                }
+<div class="home-page">
+    <div class="home-hero">
+        <div class="hero-left">
+            <h1>GS – WORKSPACE</h1>
+            <div class="hero-sub">
+                panoramica rapida delle attività da fare
             </div>
-            @if (_mentions.Any())
+        </div>
+
+        <div class="hero-actions">
+            <MudButton Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       Href="@MailHref"
+                       StartIcon="@Icons.Material.Filled.Mail">
+                Mail
+            </MudButton>
+
+            <MudButton Color="Color.Secondary"
+                       Variant="Variant.Outlined"
+                       Href="@TaskHref"
+                       StartIcon="@Icons.Material.Filled.TaskAlt">
+                Task
+            </MudButton>
+
+            @if (IsAdmin)
             {
-                <div class="mentions-panel">
-                    <div class="mentions-title">
-                        🔔 Attività nelle chat che segui
-                    </div>
+                <MudButton Color="Color.Info"
+                           Variant="Variant.Outlined"
+                           Href="@RubricaHref"
+                           StartIcon="@Icons.Material.Filled.Contacts">
+                    Rubrica
+                </MudButton>
 
-                    @foreach (var m in _mentions.Take(3))
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo($"/mail-detail/{m.EmailId}/{_cp}"))">
+                <MudButton Color="Color.Warning"
+                           Variant="Variant.Outlined"
+                           Href="@ConfigurazioneAdminHref"
+                           StartIcon="@Icons.Material.Filled.Settings">
+                    Configurazione
+                </MudButton>
 
-                            <span class="badge @(m.TipoEvento == "MENTION" ? "mention" : "update")">
-                                @(m.TipoEvento == "MENTION" ? "@ menzione" : "💬 nuovo messaggio")
-                            </span>
-
-                            <span class="text">
-                                Email #@m.EmailId
-                            </span>
-                        </div>
-                    }
-
-                    @if (_mentions.Count > 3)
-                    {
-                        <div class="mention-more"
-                             @onclick="@(() => Nav.NavigateTo($"/mail-new?cp={_cp}&folder=mentions"))">
-                            Vedi tutte (@_mentions.Count)
-                        </div>
-                    }
-                </div>
+                <MudButton Color="Color.Success"
+                           Variant="Variant.Outlined"
+                           Href="@AbilitazioniHref"
+                           StartIcon="@Icons.Material.Filled.AdminPanelSettings">
+                    Abilitazioni
+                </MudButton>
+                <MudButton Color="Color.Default"
+                           Variant="Variant.Outlined"
+                           Href="@RegoleHref"
+                           StartIcon="@Icons.Material.Filled.Rule">
+                    Regole
+                </MudButton>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.Report"
+                           OnClick="@GoToBlacklist">
+                    Blacklist
+                </MudButton>
             }
-            @if (_taskBadges is not null && _taskBadges.AssignedUnreadTotal > 0)
-            {
-                <div class="mentions-panel" style="background:#fff7e6; border:1px solid #ffd591;">
-                    <div class="mentions-title" style="color:#ad4e00;">
-                        🆕 Nuovi task assegnati
-                    </div>
-
-                    <div class="mention-row"
-                         @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}"))">
-                        <span class="badge mention">NUOVI</span>
-                        <span class="text">Hai <b>@_taskBadges.AssignedUnreadTotal</b> nuovi task assegnati</span>
-                    </div>
-
-                    @foreach (var t in _taskBadges.AssignedTop)
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
-                            <span class="badge mention">@t.UnreadCount</span>
-                            <span class="text">#@t.TaskId — @t.Titolo <span style="opacity:.75;">(@t.LastEventText)</span></span>
-                        </div>
-                    }
-                </div>
-            }
-            @if (_taskBadges is not null && _taskBadges.UnreadTotal > 0)
-            {
-                <div class="mentions-panel" style="background:#e6ffed; border:1px solid #b7ebc6;">
-                    <div class="mentions-title" style="color:#137333;">
-                        💬 Nuovi commenti Task
-                    </div>
-
-                    <div class="mention-row"
-                         @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}"))">
-                        <span class="badge update">NUOVI</span>
-                        <span class="text">Hai <b>@_taskBadges.UnreadTotal</b> nuove notifiche nei task</span>
-                    </div>
-
-                    @foreach (var t in _taskBadges.UnreadTop)
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
-                            <span class="badge update">@t.UnreadCount</span>
-                            <span class="text">#@t.TaskId — @t.Titolo <span style="opacity:.75;">(@t.LastEventText)</span></span>
-                        </div>
-                    }
-                </div>
-            }
-
-            @if (_taskBadges is not null && (_taskBadges.ToCloseCount > 0 || _taskBadges.WaitingReviewCount > 0))
-            {
-                <div class="mentions-panel" style="background:#e8f0fe; border:1px solid #c7dbff;">
-                    <div class="mentions-title" style="color:#174ea6;">
-                        ✅ Attività Task
-                    </div>
-                   
-                    @if (_taskBadges.ToCloseCount > 0)
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&view=toClose"))">
-                            <span class="badge update">DA CHIUDERE</span>
-                            <span class="text">Hai <b>@_taskBadges.ToCloseCount</b> task pronti da chiudere</span>
-                        </div>
-
-                        @foreach (var t in _taskBadges.ToCloseTop)
-                        {
-                            <div class="mention-row"
-                                 @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
-                                <span class="badge update">✅</span>
-                                <span class="text">#@t.TaskId — @t.Titolo</span>
-                            </div>
-                        }
-                    }
-
-                    @if (_taskBadges.WaitingReviewCount > 0)
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&view=waiting"))">
-                            <span class="badge mention">IN ATTESA</span>
-                            <span class="text">Hai <b>@_taskBadges.WaitingReviewCount</b> task completati da te in attesa di chiusura</span>
-                        </div>
-
-                        @foreach (var t in _taskBadges.WaitingReviewTop)
-                        {
-                            <div class="mention-row"
-                                 @onclick="@(() => Nav.NavigateTo($"/tasks-new?cp={_cp}&openTaskId={t.TaskId}"))">
-                                <span class="badge mention">⏳</span>
-                                <span class="text">#@t.TaskId — @t.Titolo</span>
-                            </div>
-                        }
-                    }
-                </div>
-            }
-            @if (_showCaselleAlert && IsAdmin)
-            {
-                <div class="mentions-panel" style="background:#fdecea; border:1px solid #f5c6cb;">
-                    <div class="mentions-title" style="color:#721c24;">
-                        🔐 Attenzione: password email non valida
-                    </div>
-
-                    @foreach (var mail in _caselleErrore)
-                    {
-                        <div class="mention-row"
-                             @onclick="@(() => Nav.NavigateTo(ConfigurazioneHref))">
-
-                            <span class="badge mention">ERRORE</span>
-
-                            <span class="text">
-                                È necessario aggiornare la <b>password per l’app</b> della casella
-                                <b>@mail</b>
-                            </span>
-                        </div>
-                    }
-                </div>
-            }
+        </div>
     </div>
 
+    @if (_showCaselleAlert)
+    {
+        <div class="pwd-alert" @onclick="() => Nav.NavigateTo(ConfigurazioneHref)">
+            <div class="pwd-alert-title">
+                🔐 Attenzione: password email non valida
+                <span class="pwd-alert-count">(@_caselleErrore.Count)</span>
+            </div>
 
+            <div class="pwd-alert-list">
+                @foreach (var mail in _caselleErrore.Take(5))
+                {
+                    <span class="pwd-chip">@mail</span>
+                }
+
+                @if (_caselleErrore.Count > 5)
+                {
+                    <span class="pwd-more">+@(_caselleErrore.Count - 5)</span>
+                }
+            </div>
+        </div>
+    }
+
+    <div class="summary-board">
+        <div class="summary-row summary-row-main" @onclick="() => Nav.NavigateTo(MailInboxHref)">
+            <div class="summary-left">
+                <div class="summary-label">E-mail assegnate</div>
+                <div class="summary-value">@_assegnateCount</div>
+            </div>
+
+            <div class="summary-middle">
+                @if (_dynamicSections.Any())
+                {
+                    @foreach (var sec in _dynamicSections)
+                    {
+                        <div class="mini-stat">
+                            <span class="mini-label">@sec.Nome</span>
+                            <span class="mini-value">@sec.Count</span>
+                        </div>
+                    }
+                }
+            </div>
+
+            <div class="summary-right">
+                @if (_nuoveDaLeggereCount > 0)
+                {
+                    <div class="new-badge">
+                        <span class="new-dot"></span>
+                        <span>@_nuoveDaLeggereCount nuove mail da leggere</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="new-badge muted">
+                        nessuna nuova mail
+                    </div>
+                }
+            </div>
+        </div>
+
+        <div class="summary-row" @onclick="() => Nav.NavigateTo(MailFollowedHref)">
+            <div class="summary-left">
+                <div class="summary-label">E-mail seguite</div>
+                <div class="summary-value">@_seguiteCount</div>
+            </div>
+            <div class="summary-right single">
+                monitoraggio conversazioni seguite
+            </div>
+        </div>
+
+        <div class="summary-row" @onclick="() => Nav.NavigateTo(MailMentionsHref)">
+            <div class="summary-left">
+                <div class="summary-label">E-mail menzionate</div>
+                <div class="summary-value">@_mentionsCount</div>
+            </div>
+            <div class="summary-right single">
+                @if (_mentionsCount > 0)
+                {
+                    <span class="new-badge">
+                        <span class="new-dot"></span>
+                        <span>@_mentionsCount nuove menzioni</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="new-badge muted">nessuna nuova menzione</span>
+                }
+            </div>
+        </div>
+
+        <div class="summary-row" @onclick="() => Nav.NavigateTo(TaskHref)">
+            <div class="summary-left">
+                <div class="summary-label">Task aperti</div>
+                <div class="summary-value">@_taskApertiCount</div>
+            </div>
+            <div class="summary-right single">
+                @if (_taskApertiCount > 0)
+                {
+                    <span class="new-badge">
+                        <span class="new-dot"></span>
+                        <span>@_taskApertiCount task da controllare</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="new-badge muted">nessun task aperto</span>
+                }
+            </div>
+        </div>
     </div>
 </div>
 
 <style>
-    .welcome {
-        padding: 8px;
+    .home-page {
+        padding: 18px;
+        background: #f5f7fb;
+        min-height: 100vh;
     }
 
-    .hero {
-        background: #E3EEFB;
-        border: 2px ridge #166AEE;
-        border-radius: 10px;
-        padding: 22px;
+    .home-hero {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 14px;
+        padding: 12px 14px;
+        background: #eaf2ff;
+        border: 1px solid #d9e6ff;
+        border-radius: 14px;
     }
 
-    .mention-badge {
-        background: #d32f2f;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 12px;
-        margin-left: 6px;
-        font-size: 12px;
+    .hero-left h1 {
+        margin: 0;
+        font-size: 24px;
+        color: #163a72;
     }
 
-        .hero h1 {
-            margin: 0 0 6px;
-            font: 700 24px system-ui, sans-serif;
-            color: #003482;
-        }
+    .hero-sub {
+        margin-top: 4px;
+        font-size: 13px;
+        color: #5b6e93;
+    }
 
-            .hero h1 span {
-                color: #166AEE;
-            }
-
-        .hero p {
-            margin: 0 0 12px;
-            color: #405069;
-        }
-
-        .mentions-panel {
-            margin-top: 20px;
-            background: #fff3cd;
-            border: 1px solid #ffe69c;
-            border-radius: 10px;
-            padding: 14px;
-        }
-
-        .mentions-title {
-            font-weight: 700;
-            margin-bottom: 10px;
-            color: #856404;
-        }
-
-        .mention-row {
-            display: flex;
-            gap: 10px;
-            padding: 8px;
-            border-radius: 6px;
-            cursor: pointer;
-        }
-
-            .mention-row:hover {
-                background: #fff8e1;
-            }
-
-        .badge {
-            font-size: 12px;
-            padding: 2px 6px;
-            border-radius: 6px;
-            font-weight: 600;
-        }
-
-            .badge.mention {
-                background: #dc3545;
-                color: white;
-            }
-
-            .badge.update {
-                background: #0d6efd;
-                color: white;
-            }
-
-        .mention-more {
-            margin-top: 10px;
-            font-size: 13px;
-            color: #0d6efd;
-            cursor: pointer;
-        }
-
-    .cta {
+    .hero-actions {
         display: flex;
         gap: 10px;
         flex-wrap: wrap;
     }
-    .mentions-bar {
-    margin-top: 16px;
-    background: #0F47A1;
-    border: 1px solid #0A3780;
-    color: white;
-    padding: 12px 16px;
-    border-radius: 8px;
-    font-size: 15px;
-    cursor: pointer;
-    user-select: none;
-    transition: background .25s ease, transform .15s ease;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
 
-.mentions-bar:hover {
-    background: #0C3A8A;
-    transform: translateY(-1px);
-}
+    .pwd-alert {
+        margin-bottom: 14px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        background: #fff1f1;
+        border: 1px solid #ffd0d0;
+        border-left: 6px solid #e53935;
+        cursor: pointer;
+        transition: transform .15s ease, box-shadow .15s ease;
+    }
 
+    .pwd-alert:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 10px rgba(0,0,0,.06);
+    }
+
+    .pwd-alert-title {
+        font-weight: 700;
+        color: #842029;
+    }
+
+    .pwd-alert-count {
+        font-weight: 800;
+    }
+
+    .pwd-alert-list {
+        margin-top: 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+
+    .pwd-chip {
+        background: #fff;
+        border: 1px solid #ffd0d0;
+        color: #842029;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+    }
+
+    .pwd-more {
+        background: #ffe3e3;
+        color: #842029;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .summary-board {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .summary-row {
+        display: grid;
+        grid-template-columns: 320px 1fr 260px;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 18px;
+        background: #fff;
+        border: 1px solid #d9deea;
+        border-radius: 14px;
+        cursor: pointer;
+        transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+    }
+
+    .summary-row:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px rgba(0,0,0,.05);
+        border-color: #bfd0f8;
+    }
+
+    .summary-row-main {
+        grid-template-columns: 260px 1fr 300px;
+    }
+
+    .summary-left {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+
+    .summary-label {
+        font-size: 18px;
+        font-weight: 700;
+        color: #1c2f55;
+        white-space: nowrap;
+    }
+
+    .summary-value {
+        font-size: 22px;
+        font-weight: 800;
+        color: #166aee;
+        white-space: nowrap;
+    }
+
+    .summary-middle {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        min-width: 0;
+        flex-wrap: wrap;
+    }
+
+    .mini-stat {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+    }
+
+    .mini-label {
+        font-size: 15px;
+        color: #5c6d8f;
+        font-weight: 600;
+    }
+
+    .mini-value {
+        font-size: 18px;
+        color: #1e2f52;
+        font-weight: 800;
+    }
+
+    .summary-right {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        min-width: 0;
+    }
+
+    .summary-right.single {
+        color: #617391;
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .new-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: #d62828;
+        font-weight: 800;
+        font-size: 14px;
+        white-space: nowrap;
+    }
+
+    .new-badge.muted {
+        color: #8a97ad;
+        font-weight: 600;
+    }
+
+    .new-dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #e53935;
+        box-shadow: 0 0 0 0 rgba(229,57,53,.7);
+        animation: pulseDot 1.6s infinite;
+        flex-shrink: 0;
+    }
+
+    @@keyframes pulseDot {
+        0% {
+            box-shadow: 0 0 0 0 rgba(229,57,53,.7);
+        }
+
+        70% {
+            box-shadow: 0 0 0 10px rgba(229,57,53,0);
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 rgba(229,57,53,0);
+        }
+    }
+
+    @@media (max-width: 1200px) {
+        .summary-row,
+        .summary-row-main {
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .summary-right {
+            justify-content: flex-start;
+        }
+    }
+
+    @@media (max-width: 720px) {
+        .home-hero {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .summary-middle {
+            gap: 14px;
+        }
+    }
 </style>
