@@ -56,6 +56,12 @@ else
                                 <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" />
                             </MudTooltip>
                         </li>
+                        <li @onclick="@(() => ChangeFolder("spam"))"
+                            class="@IsActive("spam")">
+                            <MudTooltip Text="Spam / Blacklist" Placement="Placement.Right">
+                                <MudIcon Icon="@Icons.Material.Filled.Report" />
+                            </MudTooltip>
+                        </li>
                     }
 
                     @if (_hasAdminCaselle)
@@ -402,21 +408,9 @@ else
 
                                                             <div class="ml-from-row">
 
-                                                                <!-- ICONA BLACKLIST -->
-                                                                <MudTooltip Text="Metti mittente in blacklist">
-                                                                    <div class="ml-icon" @onclick:stopPropagation="true">
-                                                                        <MudIconButton Icon="@Icons.Material.Filled.Report"
-                                                                                       Color="Color.Error"
-                                                                                       Size="Size.Small"
-                                                                                       OnClick="@(() => AddSenderToBlacklist(item))" />
-                                                                    </div>
-                                                                </MudTooltip>
-
-                                                                <!-- MITTENTE -->
                                                                 <MudTooltip Text="@item.Mittente">
                                                                     <div class="ml-from">@ExtractEmail(item.Mittente)</div>
                                                                 </MudTooltip>
-
                                                             </div>
 
                                                             <!-- DESTINATARI -->
@@ -581,23 +575,13 @@ else
                                                                 <!-- LEFT: mittente + destinatari -->
                                                                 <div class="ml-left">
 
+                                                             
+
+                                                                    <!-- MITTENTE -->
                                                                     <div class="ml-from-row">
-
-                                                                        <!-- ICONA BLACKLIST -->
-                                                                        <MudTooltip Text="Metti mittente in blacklist">
-                                                                            <div class="ml-icon" @onclick:stopPropagation="true">
-                                                                                <MudIconButton Icon="@Icons.Material.Filled.Report"
-                                                                                               Color="Color.Error"
-                                                                                               Size="Size.Small"
-                                                                                               OnClick="@(() => AddSenderToBlacklist(item))" />
-                                                                            </div>
-                                                                        </MudTooltip>
-
-                                                                        <!-- MITTENTE -->
                                                                         <MudTooltip Text="@item.Mittente">
                                                                             <div class="ml-from">@ExtractEmail(item.Mittente)</div>
                                                                         </MudTooltip>
-
                                                                     </div>
 
                                                                     <!-- DESTINATARI -->
@@ -737,23 +721,14 @@ else
                                             <!-- LEFT: mittente + destinatari -->
                                                 <div class="ml-left">
 
+
+                                                       
+                                                    <!-- MITTENTE -->
+                                                  
                                                     <div class="ml-from-row">
-
-                                                        <!-- ICONA BLACKLIST -->
-                                                        <MudTooltip Text="Metti mittente in blacklist">
-                                                            <div class="ml-icon" @onclick:stopPropagation="true">
-                                                                <MudIconButton Icon="@Icons.Material.Filled.Report"
-                                                                               Color="Color.Error"
-                                                                               Size="Size.Small"
-                                                                               OnClick="@(() => AddSenderToBlacklist(item))" />
-                                                            </div>
-                                                        </MudTooltip>
-
-                                                        <!-- MITTENTE -->
                                                         <MudTooltip Text="@item.Mittente">
                                                             <div class="ml-from">@ExtractEmail(item.Mittente)</div>
                                                         </MudTooltip>
-
                                                     </div>
 
                                                     <!-- DESTINATARI -->
@@ -1235,7 +1210,7 @@ else
         "drafts" => "Bozze",
         "unassigned" => "Email non assegnate (caselle admin)",
         "mailfollowed" => "Mail seguite",
-
+        "spam" => "Spam / Blacklist",
         _ => "Posta"
     };
     private string? _searchText;
@@ -2216,14 +2191,13 @@ else
     }
 
     private bool CanAssignInCurrentFolder()
-        => _folder is "inbox" or "mentions" or "unassigned";
+     => _folder != "spam" && _folder is "inbox" or "mentions" or "unassigned";
 
     private bool CanArchiveInCurrentFolder()
-        => _folder is "inbox" or "mailfollowed" or "mentions";
+        => _folder != "spam" && _folder is "inbox" or "mailfollowed" or "mentions";
 
     private bool CanUnarchiveInCurrentFolder()
-        => _folder == "myarchive";
-    
+        => _folder != "spam" && _folder == "myarchive";
 
     private async Task LoadMoreSezione(SezioneVm sec)
     {
@@ -2855,7 +2829,27 @@ else
                 return;
             }
 
+            if (_folder == "spam")
+            {
+                var (pageSpam, totalSpam) = await MailSvc.GetSpamEmailsPagedAsync(
+                    start: _currentIndex,
+                    pageSize: _pageSize,
+                    word: filtroEffettivo,
+                    address: _selectedAddressChip?.Email
+                );
 
+                pageSpam = await ApplyThreadCountsToPageAsync(pageSpam);
+
+                if (_currentIndex == 0)
+                    _emails = pageSpam;
+                else
+                    _emails.AddRange(pageSpam.Where(x => !_emails.Any(e => e.Id == x.Id)));
+
+                _currentIndex += pageSpam.Count;
+                _hasMore = _emails.Count < totalSpam;
+
+                return;
+            }
 
             // 📭 NON ASSEGNATE
 
@@ -4937,7 +4931,7 @@ else
 
     .ml-from-row {
         display: grid;
-        grid-template-columns: 18px minmax(0, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         align-items: center;
         gap: 3px;
         min-width: 0;

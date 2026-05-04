@@ -628,6 +628,76 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 UnreadInbox: grouped.Count(g => g.Any(x => x.LettureCount == 0))
             );
         }
+        public async Task<(List<EmailListItem_NEW> Page, int Total)> GetSpamEmailsPagedAsync(
+    int start,
+    int pageSize,
+    string? word = null,
+    string? address = null)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var q = db.EmailRicevute
+                .AsNoTracking()
+                .Include(e => e.Casella)
+                .Include(e => e.Allegati)
+                .Where(e =>
+                    e.Blacklist == "Y" &&
+                    (e.Eliminato == null || e.Eliminato != "Y"));
+
+            if (!string.IsNullOrWhiteSpace(word) && word.Length >= 2)
+            {
+                var w = word.Trim().ToLower();
+
+                q = q.Where(e =>
+                    (e.Oggetto != null && e.Oggetto.ToLower().Contains(w)) ||
+                    (e.Mittente != null && e.Mittente.ToLower().Contains(w)) ||
+                    (e.CorpoTesto != null && e.CorpoTesto.ToLower().Contains(w)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(address))
+            {
+                var a = address.Trim().ToLower();
+
+                q = q.Where(e =>
+                    (e.Mittente != null && e.Mittente.ToLower().Contains(a)) ||
+                    (e.Destinatari != null && e.Destinatari.ToLower().Contains(a)));
+            }
+
+            var total = await q.CountAsync();
+
+            var raw = await q
+                .OrderByDescending(e => e.DataRicezione)
+                .Skip(start)
+                .Take(pageSize)
+                .ToListAsync();
+
+            var page = raw.Select(e => new EmailListItem_NEW(
+                Id: e.Id,
+                Data: e.DataRicezione,
+                Mittente: e.Mittente,
+                Oggetto: e.Oggetto,
+                Aperto: e.Aperto,
+                HasAttachments: e.Allegati.Any(),
+                ThreadLen: 1,
+                Replies: 0,
+                Preview: e.CorpoTesto ?? e.CorpoHtml,
+                Allegati: e.Allegati.Select(a => new AllegatoItem_NEW
+                {
+                    Id = a.Id,
+                    NomeFile = a.NomeFile,
+                    MimeType = a.MimeType
+                }).ToList(),
+                MessageId: e.MessageId,
+                CasellaId: e.CasellaId,
+                CasellaEmail: e.Casella.Email,
+                ThreadKey: e.ThreadKey,
+                Destinatari: e.Destinatari,
+                IsReadByCurrentUser: e.Aperto == "Y"
+            )).ToList();
+
+            return (page, total);
+        }
+
         public async Task<string> GetEmailAddressByUsernameAsync(string username)
         {
             // 🔍 Trova l’indirizzo email associato all’utente
@@ -1094,7 +1164,6 @@ FROM (
 
             try
             {
-                // 1) Leggo eventuali assegnatari attuali diversi dal nuovo
                 const string sqlOldAssignees = @"
 SELECT DISTINCT UTENTE
 FROM SGAPP.EMAIL_ASSEGNAZIONI
@@ -1107,7 +1176,6 @@ WHERE EMAIL_ID = :p_eid
                 {
                     cmdOld.BindByName = true;
                     cmdOld.Transaction = tx;
-
                     cmdOld.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
                     cmdOld.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
 
@@ -1119,7 +1187,6 @@ WHERE EMAIL_ID = :p_eid
                     }
                 }
 
-                // 2) Archivia la mail per i vecchi assegnatari SOLO se richiesto
                 const string sqlInsertArchivio = @"
 INSERT INTO SGAPP.EMAIL_ARCHIVIO (ID_EMAIL, UTENTE, DATA_ARCHIVIAZIONE)
 SELECT :p_eid, :p_user, SYSDATE
@@ -1133,13 +1200,6 @@ WHERE NOT EXISTS (
 
                 foreach (var vecchioUtente in vecchiUtenti)
                 {
-                    if (keepExecutorUnarchived &&
-                        !string.IsNullOrWhiteSpace(eseguitoDa) &&
-                        vecchioUtente.Equals(eseguitoDa, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
                     await using var cmdArch = new OracleCommand(sqlInsertArchivio, conn)
                     {
                         BindByName = true,
@@ -1154,7 +1214,14 @@ WHERE NOT EXISTS (
                     await cmdArch.ExecuteNonQueryAsync(ct);
                 }
 
-                // 3) Elimino le vecchie assegnazioni diverse dal nuovo utente
+                if (keepExecutorUnarchived && !string.IsNullOrWhiteSpace(eseguitoDa))
+                {
+                    await EnsureEmailSeguitaTxAsync(conn, tx, emailId, eseguitoDa, ct);
+
+                    foreach (var oldUser in vecchiUtenti)
+                        await EnsureEmailSeguitaTxAsync(conn, tx, emailId, oldUser, ct);
+                }
+
                 const string sqlDeleteOldAssignments = @"
 DELETE FROM SGAPP.EMAIL_ASSEGNAZIONI
 WHERE EMAIL_ID = :p_eid
@@ -1164,14 +1231,12 @@ WHERE EMAIL_ID = :p_eid
                 {
                     cmdDel.BindByName = true;
                     cmdDel.Transaction = tx;
-
                     cmdDel.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
                     cmdDel.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
 
                     await cmdDel.ExecuteNonQueryAsync(ct);
                 }
 
-                // 4) Se il nuovo assegnatario aveva già l'email archiviata, la tolgo dall'archivio
                 const string sqlDeleteArchiveForNewAssignee = @"
 DELETE FROM SGAPP.EMAIL_ARCHIVIO
 WHERE ID_EMAIL = :p_eid
@@ -1181,40 +1246,39 @@ WHERE ID_EMAIL = :p_eid
                 {
                     cmdUnarchive.BindByName = true;
                     cmdUnarchive.Transaction = tx;
-
                     cmdUnarchive.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
                     cmdUnarchive.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
 
                     await cmdUnarchive.ExecuteNonQueryAsync(ct);
                 }
 
-                // 5) Inserisco la nuova assegnazione solo se non esiste già
                 const string sqlAssegna = @"
-INSERT INTO SGAPP.EMAIL_ASSEGNAZIONI (EMAIL_ID, UTENTE, SOLO_INVIO)
-SELECT :p_eid, :p_user, :p_solo
-FROM DUAL
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM SGAPP.EMAIL_ASSEGNAZIONI
-    WHERE EMAIL_ID = :p_eid_check
-      AND UPPER(UTENTE) = UPPER(:p_user_check)
-)";
+MERGE INTO SGAPP.EMAIL_ASSEGNAZIONI t
+USING (
+    SELECT :p_eid AS EMAIL_ID, :p_user AS UTENTE, :p_solo AS SOLO_INVIO
+    FROM DUAL
+) s
+ON (
+    t.EMAIL_ID = s.EMAIL_ID
+    AND UPPER(t.UTENTE) = UPPER(s.UTENTE)
+)
+WHEN MATCHED THEN
+    UPDATE SET t.SOLO_INVIO = s.SOLO_INVIO
+WHEN NOT MATCHED THEN
+    INSERT (EMAIL_ID, UTENTE, SOLO_INVIO)
+    VALUES (s.EMAIL_ID, s.UTENTE, s.SOLO_INVIO)";
 
                 await using (var cmd = new OracleCommand(sqlAssegna, conn))
                 {
                     cmd.BindByName = true;
                     cmd.Transaction = tx;
-
                     cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
                     cmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
                     cmd.Parameters.Add("p_solo", OracleDbType.Char).Value = soloInvio ? "Y" : "N";
-                    cmd.Parameters.Add("p_eid_check", OracleDbType.Int32).Value = emailId;
-                    cmd.Parameters.Add("p_user_check", OracleDbType.Varchar2).Value = utente;
 
                     await cmd.ExecuteNonQueryAsync(ct);
                 }
 
-                // 6) Commento manuale, se presente
                 if (!string.IsNullOrWhiteSpace(commento))
                 {
                     const string sqlCommento = @"
@@ -1234,15 +1298,7 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                     await cmd2.ExecuteNonQueryAsync(ct);
                 }
 
-                // 7) Activity automatica
-                await AddAssignActivityAsync(
-                    conn,
-                    tx,
-                    emailId,
-                    eseguitoDa ?? "unknown",
-                    utente,
-                    ct
-                );
+                await AddAssignActivityAsync(conn, tx, emailId, eseguitoDa ?? "unknown", utente, ct);
 
                 await tx.CommitAsync(ct);
             }
@@ -1251,6 +1307,45 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                 await tx.RollbackAsync(ct);
                 throw;
             }
+        }
+
+        private static async Task EnsureEmailSeguitaTxAsync(
+    OracleConnection conn,
+    OracleTransaction tx,
+    int emailId,
+    string utente,
+    CancellationToken ct)
+        {
+            if (string.IsNullOrWhiteSpace(utente))
+                return;
+
+            const string sql = @"
+MERGE INTO SGAPP.EMAIL_SEGUITE t
+USING (
+    SELECT :p_eid AS EMAIL_ID, :p_user AS UTENTE
+    FROM DUAL
+) s
+ON (
+    t.EMAIL_ID = s.EMAIL_ID
+    AND UPPER(t.UTENTE) = UPPER(s.UTENTE)
+)
+WHEN MATCHED THEN
+    UPDATE SET 
+        t.LETTO = NVL(t.LETTO, 'Y')
+WHEN NOT MATCHED THEN
+    INSERT (EMAIL_ID, UTENTE, CREATA_IL, LETTO)
+    VALUES (s.EMAIL_ID, s.UTENTE, SYSDATE, 'Y')";
+
+            await using var cmd = new OracleCommand(sql, conn)
+            {
+                BindByName = true,
+                Transaction = tx
+            };
+
+            cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
+            cmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente.Trim();
+
+            await cmd.ExecuteNonQueryAsync(ct);
         }
         public async Task ArchiveEmailAsync(int emailId, string utente)
         {
@@ -1300,7 +1395,9 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                 return new List<EmailListItem_NEW>();
 
             var whereSql = @"WHERE 1=1";
-            var minDate = GetMailUiMinDate();
+            var minDate = folderUi == "all"
+                ? null
+                : GetMailUiMinDate();
 
             if (minDate.HasValue)
             {
@@ -1625,6 +1722,24 @@ LEFT JOIN thread_totals t
 
             var r = await cmd.ExecuteScalarAsync();
             return r != null;
+        }
+
+        public async Task<string?> GetAssegnatariEmailAsync(int emailId)
+        {
+            await using var db = _dbFactory.CreateDbContext();
+
+            var utenti = await db.EmailAssegnazione
+                .AsNoTracking()
+                .Where(a => a.EmailId == emailId)
+                .Select(a => a.Utente)
+                .Where(u => u != null && u != "")
+                .Distinct()
+                .OrderBy(u => u)
+                .ToListAsync();
+
+            return utenti.Count == 0
+                ? null
+                : string.Join("; ", utenti);
         }
 
         public async Task<Dictionary<int, int>> GetConversationCountsByThreadAsync(List<int> emailIds)
@@ -2025,7 +2140,9 @@ LEFT JOIN thread_counts tc
             var whereSql = @"
 WHERE 1=1";
 
-            var minDate = GetMailUiMinDate();
+            var minDate = folderUi == "all"
+                ? null
+                : GetMailUiMinDate();
 
             if (minDate.HasValue)
             {
@@ -2708,7 +2825,7 @@ WHERE RN = 1";
             {
                 await db.Database.ExecuteSqlRawAsync(
                     @"INSERT INTO SGAPP.EMAIL_BLACKLIST
-              (EMAIL, INSERITO_DA, DATA_INSERIMENTO, ATTIVA)
+              (EMAIL, INSERITO_DA, CREATA_IL, ATTIVA)
               VALUES (:email, :utente, SYSDATE, 'Y')",
                     new OracleParameter("email", email),
                     new OracleParameter("utente", utente)
@@ -4305,32 +4422,43 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
         public record PagedResult<T>(List<T> Page, int Total);
 
         public async Task<PagedResult<SentEmailListItemDto>> GetSentPagedAsync(
-            string utente,
-            int start,
-            int pageSize,
-            string? searchText = null,
-            CancellationToken ct = default)
+    string utente,
+    int start,
+    int pageSize,
+    string? searchText = null,
+    CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
 
+            var caselleIds = await db.CasellaAbilitazioni
+                .AsNoTracking()
+                .Where(a => a.Username == utente)
+                .Select(a => a.CasellaId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (caselleIds.Count == 0)
+                return new PagedResult<SentEmailListItemDto>(new(), 0);
+
             var q = db.EmailInviate
                 .AsNoTracking()
-                .Where(x => x.Utente == utente);
+                .Where(x => caselleIds.Contains(x.CasellaId));
 
-            // ricerca semplice su oggetto/destinatari (sent)
             var s = (searchText ?? "").Trim();
+
             if (s.Length >= 2)
             {
+                var ss = s.ToLower();
+
                 q = q.Where(x =>
-                    (x.Oggetto ?? "").ToLower().Contains(s.ToLower()) ||
-                    (x.Destinatari ?? "").ToLower().Contains(s.ToLower()) ||
-                    (x.Cc ?? "").ToLower().Contains(s.ToLower()) ||
-                    (x.Bcc ?? "").ToLower().Contains(s.ToLower()));
+                    (x.Oggetto ?? "").ToLower().Contains(ss) ||
+                    (x.Destinatari ?? "").ToLower().Contains(ss) ||
+                    (x.Cc ?? "").ToLower().Contains(ss) ||
+                    (x.Bcc ?? "").ToLower().Contains(ss));
             }
 
             var total = await q.CountAsync(ct);
 
-            // pagina
             var page = await q
                 .OrderByDescending(x => x.DataInvio)
                 .Skip(start)
@@ -4343,11 +4471,10 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                     x.CasellaId,
                     x.Destinatari,
                     x.Oggetto,
-                    Preview = (x.CorpoTesto ?? x.CorpoHtml ?? "")
+                    Preview = x.CorpoTesto ?? x.CorpoHtml ?? ""
                 })
                 .ToListAsync(ct);
 
-            // allegati: query unica per tutti gli id pagina (evita N+1)
             var ids = page.Select(p => p.Id).ToList();
 
             var att = await db.InviataAllegati
@@ -4372,10 +4499,11 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
             string Strip(string htmlOrText)
             {
                 if (string.IsNullOrWhiteSpace(htmlOrText)) return "";
-                // il tuo StripHtml va bene, ma qui lo tengo locale per completezza:
+
                 var plain = System.Text.RegularExpressions.Regex.Replace(htmlOrText, "<.*?>", " ");
                 plain = System.Net.WebUtility.HtmlDecode(plain);
                 plain = System.Text.RegularExpressions.Regex.Replace(plain, @"\s+", " ").Trim();
+
                 return plain;
             }
 
@@ -4389,16 +4517,29 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                 Allegati: attMap.TryGetValue(p.Id, out var list) ? list : new()
             )).ToList();
 
-            return new(dto, total);
+            return new PagedResult<SentEmailListItemDto>(dto, total);
         }
 
-        public async Task<SentEmailDetailDto?> GetSentDetailAsync(int id, string utente, CancellationToken ct = default)
+        public async Task<SentEmailDetailDto?> GetSentDetailAsync(
+            int id,
+            string utente,
+            CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
 
+            var caselleIds = await db.CasellaAbilitazioni
+                .AsNoTracking()
+                .Where(a => a.Username == utente)
+                .Select(a => a.CasellaId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (caselleIds.Count == 0)
+                return null;
+
             var mail = await db.EmailInviate
                 .AsNoTracking()
-                .Where(x => x.Id == id && x.Utente == utente)
+                .Where(x => x.Id == id && caselleIds.Contains(x.CasellaId))
                 .Select(x => new
                 {
                     x.Id,
@@ -4415,7 +4556,8 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                 })
                 .FirstOrDefaultAsync(ct);
 
-            if (mail == null) return null;
+            if (mail == null)
+                return null;
 
             var allegati = await db.InviataAllegati
                 .AsNoTracking()

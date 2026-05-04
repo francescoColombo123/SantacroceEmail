@@ -196,7 +196,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
             foldersToProcess.Add(client.Inbox);
 
-            //TryAddSpecial(client, SpecialFolder.All, foldersToProcess, email);
+            TryAddSpecial(client, SpecialFolder.Sent, foldersToProcess, email);
             TryAddSpecial(client, SpecialFolder.Junk, foldersToProcess, email);
 
             // dedup + noselect
@@ -220,11 +220,12 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     folder.FullName, folder.Unread, folder.Recent, folder.Count);
 
                 List<IMessageSummary> newSummaries;
-
+                var isSentFolder = IsSentFolder(folder);
+                var isSpamFolder = IsSpamFolder(folder);
                 if (!nightMode)
                 {
                     // GIORNO: solo oggi (anche All/Spam)
-                    newSummaries = await FetchTodayBatchAsync(dbConn, folder, casellaId, folder.FullName, ct);
+                    newSummaries = await FetchTodayBatchAsync(dbConn, folder, casellaId, folder.FullName, ct, isSentFolder);
                     _logger.LogInformation("DAYSCAN cid={Cid} folder='{Folder}' oggi={N}", casellaId, folder.FullName, newSummaries.Count);
                 }
                 else
@@ -234,8 +235,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     if (newSummaries.Count > 0)
                         _logger.LogInformation("🆕 '{Folder}': nuove da processare={N}", folder.FullName, newSummaries.Count);
                 }
-
-                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, seenMessageIds, ct);
+                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, seenMessageIds, ct, isSentFolder, isSpamFolder);
                 // ✅ B) BACKFILL SOLO DI NOTTE (UNA VOLTA)
                 if (nightMode)
                 {
@@ -243,7 +243,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     if (backSummaries.Count > 0)
                         _logger.LogInformation("⏪ '{Folder}': backfill da processare={N}", folder.FullName, backSummaries.Count);
 
-                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, seenMessageIds, ct);
+                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, seenMessageIds, ct, isSentFolder, isSpamFolder);
                 }
 
                 await folder.CloseAsync(false, ct);
@@ -280,44 +280,88 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
         try
         {
             var f = client.GetFolder(special);
-            if (f != null) { list.Add(f); return; }
+            if (f != null)
+            {
+                list.Add(f);
+                return;
+            }
         }
         catch { }
 
-        // fallback PEC Aruba
-        try
+        var fallbackNames = special switch
         {
-            if (special == SpecialFolder.Junk)
+            SpecialFolder.Sent => new[]
             {
-                var f = client.GetFolder("INBOX.Spam");
-                if (f != null) list.Add(f);
-            }
-        }
-        catch (Exception ex)
+            "Sent",
+            "Sent Mail",
+            "INBOX.Sent",
+            "INBOX.Sent Mail",
+            "Posta inviata",
+            "Inviata",
+            "[Gmail]/Posta inviata",
+            "[Gmail]/Sent Mail"
+        },
+
+            SpecialFolder.Junk => new[]
+            {
+            "INBOX.Spam",
+            "Spam",
+            "Junk",
+            "Posta indesiderata"
+        },
+
+            _ => Array.Empty<string>()
+        };
+
+        foreach (var name in fallbackNames)
         {
-            _logger.LogDebug(ex, "SpecialFolder {Spec} non risolto per {Email}", special, email);
+            try
+            {
+                var f = client.GetFolder(name);
+                if (f != null)
+                {
+                    list.Add(f);
+                    return;
+                }
+            }
+            catch { }
         }
+
+        _logger.LogDebug("SpecialFolder {Special} non trovato per {Email}", special, email);
     }
 
+    private static bool IsSentFolder(IMailFolder folder)
+    {
+        var name = NormalizeFolderPath(folder.FullName).ToLowerInvariant();
+
+        return name.Contains("sent")
+            || name.Contains("inviata")
+            || name.Contains("posta inviata");
+    }
 
     private async Task ProcessSummariesAsync(
-    IMailFolder folder,
-    List<IMessageSummary> summaries,
-    OracleConnection dbConn,
-    int casellaId,
-    string accountEmail,
-    HashSet<string> seenMessageIds,
-    CancellationToken ct)
+  IMailFolder folder,
+  List<IMessageSummary> summaries,
+  OracleConnection dbConn,
+  int casellaId,
+  string accountEmail,
+  HashSet<string> seenMessageIds,
+  CancellationToken ct,
+  bool isSentFolder,
+  bool isSpamFolder)
     {
         if (summaries == null || summaries.Count == 0) return;
 
         foreach (var s in summaries.OrderBy(x => x.UniqueId.Id))
         {
+            int? forcedExistingSentId = null;
             var envMid = NormalizeMessageId(s.Envelope?.MessageId);
 
             if (!string.IsNullOrWhiteSpace(envMid))
             {
-                if (!seenMessageIds.Add(envMid))
+                var memoryKey = $"{(isSentFolder ? "SENT" : "INBOX")}:{envMid}";
+
+                if (!seenMessageIds.Add(memoryKey))
                 {
                     _logger.LogDebug(
                         "SKIP duplicata in memoria [{Acc}] {Folder} uid={Uid} mid={Mid}",
@@ -325,13 +369,16 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     continue;
                 }
 
-                var existsByEnvelope = await GetExistingEmailIdByMessageId(dbConn, casellaId, envMid, ct);
+                var existsByEnvelope = isSentFolder
+                    ? await GetExistingSentEmailIdByMessageId(dbConn, casellaId, envMid, ct)
+                    : await GetExistingEmailIdByMessageId(dbConn, casellaId, envMid, ct);
+
                 if (existsByEnvelope.HasValue)
                 {
-                    _logger.LogDebug(
-                        "SKIP duplicata già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
-                        accountEmail, folder.FullName, (long)s.UniqueId.Id, envMid);
-                    continue;
+                    if (isSentFolder)
+                        forcedExistingSentId = existsByEnvelope.Value;
+                    else
+                        continue;
                 }
             }
 
@@ -344,7 +391,9 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             // aggiungo al set SOLO se non avevo già aggiunto envMid
             if (string.IsNullOrWhiteSpace(envMid))
             {
-                if (!seenMessageIds.Add(mid))
+                var memoryKey2 = $"{(isSentFolder ? "SENT" : "INBOX")}:{mid}";
+
+                if (!seenMessageIds.Add(memoryKey2))
                 {
                     _logger.LogDebug(
                         "SKIP duplicata post-fetch in memoria [{Acc}] {Folder} uid={Uid} mid={Mid}",
@@ -352,14 +401,23 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     continue;
                 }
             }
+            var existingId = isSentFolder
+                ? await GetExistingSentEmailIdByMessageId(dbConn, casellaId, mid, ct)
+                : await GetExistingEmailIdByMessageId(dbConn, casellaId, mid, ct);
 
-            var existingId = await GetExistingEmailIdByMessageId(dbConn, casellaId, mid, ct);
             if (existingId.HasValue)
             {
-                _logger.LogDebug(
-                    "SKIP duplicata post-fetch già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
-                    accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
-                continue;
+                if (isSentFolder)
+                {
+                    forcedExistingSentId = existingId.Value;
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "SKIP duplicata post-fetch già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                        accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
+                    continue;
+                }
             }
 
             var uid = (long)s.UniqueId.Id;
@@ -375,18 +433,45 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                 emailDateRome = TimeZoneInfo.ConvertTime(msgOffset, RomeTz).DateTime;
             }
 
-            int emailId = await SaveEmail(
-                dbConn,
-                casellaId,
-                mid,
-                full,
-                ct,
-                folder.FullName,
-                uid,
-                emailDateRome
-            );
+            int emailId;
 
-            await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, accountEmail,  ct);
+            if (isSentFolder)
+            {
+                emailId = forcedExistingSentId ?? await SaveSentEmail(
+                    dbConn,
+                    casellaId,
+                    mid,
+                    full,
+                    ct,
+                    folder.FullName,
+                    uid,
+                    emailDateRome
+                );
+            }
+            else
+            {
+                emailId = await SaveEmail(
+                    dbConn,
+                    casellaId,
+                    mid,
+                    full,
+                    ct,
+                    folder.FullName,
+                    uid,
+                    emailDateRome
+                );
+
+                var isBlacklisted = await IsSenderBlacklistedAsync(dbConn, full.From?.ToString(), ct);
+
+                if (isSpamFolder)
+                {
+                    await AddSenderToBlacklistAsync(dbConn, full.From?.ToString(), "SYSTEM-SPAM", emailId, ct);
+                }
+                else if (!isBlacklisted)
+                {
+                    await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, accountEmail, ct);
+                }
+            }
 
             var body = s.Body;
             if (body == null)
@@ -395,8 +480,36 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                 body = fetched.FirstOrDefault()?.Body;
             }
 
-            var atts = await SaveAttachmentsMetadata(dbConn, emailId, body, full, ct);
-            await DownloadAndStoreAttachmentsAsync(folder, s.UniqueId, casellaId, emailId, atts, body, dbConn, ct);
+            if (isSentFolder)
+            {
+                var atts = await SaveSentAttachmentsMetadata(dbConn, emailId, body, full, ct);
+
+                await DownloadAndStoreSentAttachmentsAsync(
+                    folder,
+                    s.UniqueId,
+                    casellaId,
+                    emailId,
+                    atts,
+                    body,
+                    dbConn,
+                    ct
+                );
+            }
+            else
+            {
+                var atts = await SaveAttachmentsMetadata(dbConn, emailId, body, full, ct);
+
+                await DownloadAndStoreAttachmentsAsync(
+                    folder,
+                    s.UniqueId,
+                    casellaId,
+                    emailId,
+                    atts,
+                    body,
+                    dbConn,
+                    ct
+                );
+            }
 
             _logger.LogInformation(
                 "🆕 NUOVA id={Id} [{Acc}] {Folder} uid={Uid} mid={Mid} subj='{Subj}'",
@@ -710,7 +823,9 @@ RETURNING ID INTO :p_id";
         return res;
     }
 
-    private static void CollectAttachmentParts(BodyPart part, List<(string FileName, string Mime, string PartSpec)> acc)
+    private static void CollectAttachmentParts(
+    BodyPart part,
+    List<(string FileName, string Mime, string PartSpec)> acc)
     {
         if (part is BodyPartBasic basic)
         {
@@ -718,11 +833,14 @@ RETURNING ID INTO :p_id";
             var mime = basic.ContentType?.MimeType ?? "application/octet-stream";
             var disp = basic.ContentDisposition?.Disposition?.Trim();
 
+            var isInline = string.Equals(disp, "inline", StringComparison.OrdinalIgnoreCase);
+
             var isAttachment =
                 !string.IsNullOrWhiteSpace(fileName) ||
-                string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase);
+                string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase) ||
+                (!isInline && !mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase));
 
-            if (isAttachment)
+            if (isAttachment && !string.IsNullOrWhiteSpace(basic.PartSpecifier))
             {
                 acc.Add((
                     string.IsNullOrWhiteSpace(fileName) ? "allegato" : fileName,
@@ -771,6 +889,37 @@ RETURNING ID INTO :p_id";
                 _logger.LogInformation("📥 Applicata regola {Id} per email '{Subj}'", id, message.Subject);
             }
         }
+    }
+
+    private async Task<int?> GetExistingSentEmailIdByMessageId(
+    OracleConnection conn,
+    int casellaId,
+    string messageId,
+    CancellationToken ct)
+    {
+        messageId = NormalizeMessageId(messageId);
+        if (string.IsNullOrWhiteSpace(messageId))
+            return null;
+
+        const string sql = @"
+SELECT ID
+  FROM SGAPP.EMAIL_INVIATE
+ WHERE CASELLA_ID = :p_cid
+   AND LOWER(MESSAGE_ID) = :p_mid
+ FETCH FIRST 1 ROWS ONLY";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
+        cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId.ToLowerInvariant();
+
+        var obj = await cmd.ExecuteScalarAsync(ct);
+        if (obj == null || obj == DBNull.Value)
+            return null;
+
+        if (obj is Oracle.ManagedDataAccess.Types.OracleDecimal od)
+            return od.ToInt32();
+
+        return Convert.ToInt32(obj);
     }
 
     private async Task DownloadAndStoreAttachmentsAsync(
@@ -1188,7 +1337,8 @@ WHEN NOT MATCHED THEN
         await conn.OpenAsync(ct);
 
         var missing = await LoadMissingAttachmentsAsync(conn, limit, ct);
-        if (missing.Count == 0)
+        var missingSent = await LoadMissingSentAttachmentsAsync(conn, limit, ct);
+        if (missing.Count == 0 && missingSent.Count == 0)
             return;
 
         _logger.LogInformation("📎 Backfill allegati mancanti: {N} (limit={L})", missing.Count, limit);
@@ -1253,6 +1403,66 @@ WHEN NOT MATCHED THEN
             catch (Exception ex)
             {
                 _logger.LogError(ex, "📎 Backfill: errore su casellaId={Id}", casellaId);
+            }
+            finally
+            {
+                try { if (client.IsConnected) await client.DisconnectAsync(true, ct); } catch { }
+            }
+        }
+        foreach (var byMailbox in missingSent.GroupBy(x => x.CasellaId))
+        {
+            var casellaId = byMailbox.Key;
+
+            var acc = await LoadMailboxAsync(conn, casellaId, ct);
+            if (acc == null)
+                continue;
+
+            using var proto = new ProtocolLogger(Stream.Null);
+            using var client = new ImapClient(proto);
+
+            client.AuthenticationMechanisms.Remove("XOAUTH2");
+            var socket = acc.Value.UseSsl
+                ? SecureSocketOptions.SslOnConnect
+                : SecureSocketOptions.StartTlsWhenAvailable;
+
+            try
+            {
+                await client.ConnectAsync(acc.Value.Host, acc.Value.Port, socket, ct);
+                await client.AuthenticateAsync(acc.Value.Email, acc.Value.Password, ct);
+
+                foreach (var byFolder in byMailbox.GroupBy(x => x.FolderPath ?? ""))
+                {
+                    var folder = await GetFolderSafeAsync(client, byFolder.Key, ct);
+                    if (folder == null) continue;
+
+                    await folder.OpenAsync(FolderAccess.ReadOnly, ct);
+
+                    foreach (var a in byFolder)
+                    {
+                        if (a.MessageUid <= 0 || a.MessageUid > uint.MaxValue)
+                            continue;
+
+                        var uid = new UniqueId((uint)a.MessageUid);
+
+                        await DownloadSingleSentAttachmentBackfillAsync(
+                            folder,
+                            uid,
+                            a.CasellaId,
+                            a.EmailId,
+                            a.AllegatoId,
+                            a.FileName,
+                            a.PartSpec,
+                            a.Mime,
+                            conn,
+                            ct);
+                    }
+
+                    await folder.CloseAsync(false, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "📎 Backfill inviati: errore su casellaId={Id}", casellaId);
             }
             finally
             {
@@ -1576,12 +1786,13 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
 
         return summaries.OrderBy(s => s.UniqueId.Id).ToList();
     }
-    private async Task<List<IMessageSummary>> FetchTodayBatchAsync(
-        OracleConnection conn,
-        IMailFolder folder,
-        int casellaId,
-        string folderPath,
-        CancellationToken ct)
+   private async Task<List<IMessageSummary>> FetchTodayBatchAsync(
+    OracleConnection conn,
+    IMailFolder folder,
+    int casellaId,
+    string folderPath,
+    CancellationToken ct,
+    bool isSentFolder)
     {
         var folderCorrect = NormalizeFolderPath(folderPath);
 
@@ -1663,8 +1874,9 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
             if (string.IsNullOrWhiteSpace(mid))
                 mid = BuildStableFallbackMessageId(msg);
 
-            var exists = await GetExistingEmailIdByMessageId(conn, casellaId, mid, ct);
-            if (!exists.HasValue)
+            var exists = isSentFolder
+                ? await GetExistingSentEmailIdByMessageId(conn, casellaId, mid, ct)
+                : await GetExistingEmailIdByMessageId(conn, casellaId, mid, ct); if (!exists.HasValue)
                 keep.Add(s);
         }
 
@@ -1902,4 +2114,579 @@ WHERE LOWER(EMAIL) = :p_email
         return Convert.ToInt32(result) > 0;
     }
 
+    private static bool IsSpamFolder(IMailFolder folder)
+    {
+        var name = NormalizeFolderPath(folder.FullName).ToLowerInvariant();
+
+        return name.Contains("spam")
+            || name.Contains("junk")
+            || name.Contains("posta indesiderata")
+            || name.Contains("indesiderata");
+    }
+
+    private async Task<int> SaveSentEmail(
+    OracleConnection conn,
+    int casellaId,
+    string messageId,
+    MimeMessage message,
+    CancellationToken ct,
+    string folderPath,
+    long? messageUid,
+    DateTime? internalDateRome = null)
+    {
+        messageId = NormalizeMessageId(messageId);
+        if (string.IsNullOrWhiteSpace(messageId))
+            messageId = BuildStableFallbackMessageId(message);
+
+        var emailRome = internalDateRome ?? TimeZoneInfo.ConvertTime(message.Date, RomeTz).DateTime;
+
+        var subject = message.Subject?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(subject))
+            subject = $"(Senza oggetto) - {emailRome:yyyy-MM-dd HH:mm}";
+
+        if (subject.Length > 1000)
+            subject = subject[..1000];
+
+        var threadKey = messageId;
+
+        const string sql = @"
+INSERT INTO SGAPP.EMAIL_INVIATE
+    (CASELLA_ID, UTENTE, CORPO_TESTO, DATA_INVIO, CORPO_HTML,
+     DESTINATARI, OGGETTO, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR,
+     THREAD_KEY, CC, BCC,FOLDER_PATH, MESSAGE_UID)
+VALUES
+    (:p_cid, :p_utente, :p_text, :p_dt, :p_html,
+     :p_to, :p_subj, :p_mid, :p_inreply, :p_refs,
+     :p_thread, :p_cc, :p_bcc, :p_fp, :p_uid )
+RETURNING ID INTO :p_id";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
+        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
+
+        // per ora metto la mail come utente; se hai username reale, meglio passarlo
+        cmd.Parameters.Add("p_utente", OracleDbType.Varchar2, 255).Value =
+            ExtractEmailAddress(message.From?.ToString());
+
+        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value =
+            (object?)message.TextBody ?? DBNull.Value;
+
+        cmd.Parameters.Add("p_dt", OracleDbType.Date).Value = emailRome;
+
+        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value =
+            (object?)message.HtmlBody ?? DBNull.Value;
+
+        cmd.Parameters.Add("p_to", OracleDbType.Clob).Value =
+            message.To?.ToString() ?? "";
+
+        cmd.Parameters.Add("p_subj", OracleDbType.Clob).Value = subject;
+
+        cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId;
+
+        cmd.Parameters.Add("p_inreply", OracleDbType.Varchar2, 500).Value =
+            !string.IsNullOrWhiteSpace(message.InReplyTo)
+                ? NormalizeMessageId(message.InReplyTo)
+                : DBNull.Value;
+
+        cmd.Parameters.Add("p_refs", OracleDbType.Clob).Value =
+            message.References != null && message.References.Any()
+                ? string.Join(" ", message.References.Select(NormalizeMessageId))
+                : DBNull.Value;
+
+        cmd.Parameters.Add("p_thread", OracleDbType.Varchar2, 500).Value = threadKey;
+
+        cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 4000).Value =
+            message.Cc?.ToString() ?? "";
+
+        cmd.Parameters.Add("p_bcc", OracleDbType.Varchar2, 4000).Value =
+            message.Bcc?.ToString() ?? "";
+        cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value = NormalizeFolderPath(folderPath);
+        cmd.Parameters.Add("p_uid", OracleDbType.Int64).Value = (object?)messageUid ?? DBNull.Value;
+        var outId = new OracleParameter("p_id", OracleDbType.Int32)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        cmd.Parameters.Add(outId);
+
+        try
+        {
+            await cmd.ExecuteNonQueryAsync(ct);
+
+            if (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od)
+                return od.ToInt32();
+
+            return Convert.ToInt32(outId.Value?.ToString());
+        }
+        catch (OracleException ex) when (ex.Number == 1)
+        {
+            var existing = await GetExistingSentEmailIdByMessageId(conn, casellaId, messageId, ct);
+            if (existing.HasValue)
+                return existing.Value;
+
+            throw;
+        }
+    }
+
+    private async Task<List<(int AllegatoId, string FileName, string Mime, string PartSpec)>> SaveSentAttachmentsMetadata(
+    OracleConnection conn,
+    int emailId,
+    BodyPart? body,
+    MimeMessage fullMessage,
+    CancellationToken ct)
+    {
+        var res = new List<(int, string, string, string)>();
+        var list = new List<(string FileName, string Mime, string PartSpec)>();
+
+        if (body != null)
+            CollectAttachmentParts(body, list);
+
+        if (list.Count == 0 && fullMessage?.Attachments != null)
+        {
+            int fallbackIndex = 1;
+
+            foreach (var att in fullMessage.Attachments)
+            {
+                if (att is MimePart mp)
+                {
+                    var fileName = string.IsNullOrWhiteSpace(mp.FileName)
+                        ? $"allegato_{fallbackIndex}"
+                        : mp.FileName;
+
+                    var mime = mp.ContentType?.MimeType ?? "application/octet-stream";
+
+                    list.Add((fileName, mime, $"fallback-{fallbackIndex}"));
+                    fallbackIndex++;
+                }
+                else if (att is MessagePart)
+                {
+                    list.Add(($"allegato_{fallbackIndex}.eml", "message/rfc822", $"fallback-{fallbackIndex}"));
+                    fallbackIndex++;
+                }
+            }
+        }
+
+        foreach (var a in list)
+        {
+            const string existsSql = @"
+SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
+  FROM SGAPP.INVIATA_ALLEGATI
+ WHERE EMAIL_ID = :p_eid
+   AND PART_SPEC = :p_part";
+
+            await using (var cmdEx = new OracleCommand(existsSql, conn) { BindByName = true })
+            {
+                cmdEx.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
+                cmdEx.Parameters.Add("p_part", OracleDbType.Varchar2, 64).Value = a.PartSpec ?? "";
+
+                await using var r = await cmdEx.ExecuteReaderAsync(ct);
+                if (await r.ReadAsync(ct))
+                {
+                    var existingId = r.GetInt32(0);
+                    var fn = r.IsDBNull(1) ? a.FileName : r.GetString(1);
+                    var mm = r.IsDBNull(2) ? a.Mime : r.GetString(2);
+
+                    res.Add((existingId, fn, mm, a.PartSpec));
+                    continue;
+                }
+            }
+
+            const string sql = @"
+            INSERT INTO SGAPP.INVIATA_ALLEGATI
+                (EMAIL_ID, NOME_FILE, MIME_TYPE, PART_SPEC, CONTENT)
+            VALUES
+                (:p_eid, :p_name, :p_mime, :p_part, EMPTY_BLOB())
+            RETURNING ID INTO :p_id";
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
+            cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
+            cmd.Parameters.Add("p_name", OracleDbType.Varchar2, 512).Value = a.FileName ?? "allegato";
+            cmd.Parameters.Add("p_mime", OracleDbType.Varchar2, 255).Value = a.Mime ?? "application/octet-stream";
+            cmd.Parameters.Add("p_part", OracleDbType.Varchar2, 64).Value = a.PartSpec ?? "";
+            var outId = new OracleParameter("p_id", OracleDbType.Int32)
+            {
+                Direction = ParameterDirection.Output
+            };
+
+            cmd.Parameters.Add(outId);
+
+            await cmd.ExecuteNonQueryAsync(ct);
+
+            var id = outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od
+                ? od.ToInt32()
+                : Convert.ToInt32(outId.Value?.ToString());
+
+            res.Add((id, a.FileName ?? "allegato", a.Mime ?? "application/octet-stream", a.PartSpec ?? ""));
+        }
+
+        return res;
+    }
+
+    private async Task DownloadAndStoreSentAttachmentsAsync(
+    IMailFolder folder,
+    UniqueId uid,
+    int casellaId,
+    int emailId,
+    List<(int AllegatoId, string FileName, string Mime, string PartSpec)> attachments,
+    BodyPart? bodyStructure,
+    OracleConnection conn,
+    CancellationToken ct)
+    {
+        if (attachments == null || attachments.Count == 0)
+            return;
+
+        if (bodyStructure == null)
+        {
+            var sums = await folder.FetchAsync(new[] { uid }, MessageSummaryItems.BodyStructure, ct);
+            bodyStructure = sums.FirstOrDefault()?.Body;
+            if (bodyStructure == null)
+                return;
+        }
+
+        var emailDir = Path.Combine(_attachmentsBasePath, "inviati", casellaId.ToString(), emailId.ToString());
+        Directory.CreateDirectory(emailDir);
+
+        foreach (var a in attachments)
+        {
+            string? filePath = null;
+
+            try
+            {
+                var safeName = SanitizeFileName(string.IsNullOrWhiteSpace(a.FileName) ? "allegato" : a.FileName);
+
+                filePath = Path.Combine(emailDir, $"{a.AllegatoId}_{safeName}");
+
+                var relPath = Path.Combine(
+                    "inviati",
+                    casellaId.ToString(),
+                    emailId.ToString(),
+                    $"{a.AllegatoId}_{safeName}"
+                );
+
+                if (!string.IsNullOrWhiteSpace(a.PartSpec) &&
+                    a.PartSpec.StartsWith("fallback-", StringComparison.OrdinalIgnoreCase))
+                {
+                    var full = await folder.GetMessageAsync(uid, ct);
+                    var allAtts = full.Attachments.ToList();
+
+                    var suffix = a.PartSpec.Substring("fallback-".Length);
+
+                    if (int.TryParse(suffix, out var fallbackIndex))
+                    {
+                        var idx = fallbackIndex - 1;
+
+                        if (idx >= 0 && idx < allAtts.Count)
+                        {
+                            var fallbackEntity = allAtts[idx];
+
+                            long fallbackSize;
+
+                            await using (var fs = new FileStream(
+                                filePath,
+                                FileMode.Create,
+                                FileAccess.Write,
+                                FileShare.None,
+                                81920,
+                                useAsync: true))
+                            {
+                                if (fallbackEntity is MimePart fallbackMp)
+                                    await fallbackMp.Content.DecodeToAsync(fs, ct);
+                                else if (fallbackEntity is MessagePart fallbackMsgPart)
+                                    await fallbackMsgPart.Message.WriteToAsync(fs, ct);
+                                else
+                                    await fallbackEntity.WriteToAsync(fs, ct);
+
+                                await fs.FlushAsync(ct);
+                                fallbackSize = fs.Length;
+                            }
+
+                            await UpdateSentAttachmentPathAsync(conn, a.AllegatoId, relPath, fallbackSize, ct);
+                            continue;
+                        }
+                    }
+
+                    continue;
+                }
+
+                var bp = FindBodyPartBySpecifier(bodyStructure, a.PartSpec);
+                if (bp == null)
+                    continue;
+
+                var imapEntity = await folder.GetBodyPartAsync(uid, bp, ct);
+                if (imapEntity == null)
+                    continue;
+
+                long size;
+
+                await using (var fs = new FileStream(
+                    filePath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    81920,
+                    useAsync: true))
+                {
+                    if (imapEntity is MimePart mp)
+                        await mp.Content.DecodeToAsync(fs, ct);
+                    else if (imapEntity is MessagePart msgPart)
+                        await msgPart.Message.WriteToAsync(fs, ct);
+                    else
+                        await imapEntity.WriteToAsync(fs, ct);
+
+                    await fs.FlushAsync(ct);
+                    size = fs.Length;
+                }
+
+                await UpdateSentAttachmentPathAsync(conn, a.AllegatoId, relPath, size, ct);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+                        File.Delete(filePath);
+                }
+                catch { }
+
+                _logger.LogError(ex, "Errore salvataggio allegato inviato ID={AllegatoId} email={EmailId}", a.AllegatoId, emailId);
+            }
+        }
+    }
+
+    private static async Task UpdateSentAttachmentPathAsync(
+    OracleConnection conn,
+    int allegatoId,
+    string relPath,
+    long size,
+    CancellationToken ct)
+    {
+        const string sql = @"
+UPDATE SGAPP.INVIATA_ALLEGATI
+   SET PATH = :p_path,
+       FILE_SIZE = :p_size
+ WHERE ID = :p_id
+   AND PATH IS NULL";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_path", OracleDbType.Varchar2, 1024).Value = relPath;
+        cmd.Parameters.Add("p_size", OracleDbType.Int64).Value = size;
+        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private async Task<List<(int AllegatoId, int EmailId, int CasellaId, string FolderPath, long MessageUid, string FileName, string Mime, string PartSpec)>>
+LoadMissingSentAttachmentsAsync(OracleConnection conn, int limit, CancellationToken ct)
+    {
+        const string sql = @"
+SELECT a.ID AS ALLEGATO_ID,
+       a.EMAIL_ID,
+       e.CASELLA_ID,
+       e.FOLDER_PATH,
+       e.MESSAGE_UID,
+       a.NOME_FILE,
+       a.MIME_TYPE,
+       a.PART_SPEC
+  FROM SGAPP.INVIATA_ALLEGATI a
+  JOIN SGAPP.EMAIL_INVIATE e ON e.ID = a.EMAIL_ID
+ WHERE a.PATH IS NULL
+   AND e.MESSAGE_UID IS NOT NULL
+ ORDER BY e.CASELLA_ID, e.FOLDER_PATH, e.MESSAGE_UID, a.ID
+ FETCH FIRST :p_limit ROWS ONLY";
+
+        var list = new List<(int, int, int, string, long, string, string, string)>();
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_limit", OracleDbType.Int32).Value = limit;
+
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+        {
+            list.Add((
+                r.GetInt32(0),
+                r.GetInt32(1),
+                r.GetInt32(2),
+                r.IsDBNull(3) ? "" : r.GetString(3),
+                r.GetInt64(4),
+                r.IsDBNull(5) ? "allegato" : r.GetString(5),
+                r.IsDBNull(6) ? "application/octet-stream" : r.GetString(6),
+                r.IsDBNull(7) ? "" : r.GetString(7)
+            ));
+        }
+
+        return list;
+    }
+
+    private async Task DownloadSingleSentAttachmentBackfillAsync(
+    IMailFolder folder,
+    UniqueId uid,
+    int casellaId,
+    int emailId,
+    int allegatoId,
+    string fileName,
+    string partSpec,
+    string mime,
+    OracleConnection conn,
+    CancellationToken ct)
+    {
+        string? filePath = null;
+
+        try
+        {
+            var safeName = SanitizeFileName(string.IsNullOrWhiteSpace(fileName) ? "allegato" : fileName);
+
+            var emailDir = Path.Combine(_attachmentsBasePath, "inviati", casellaId.ToString(), emailId.ToString());
+            Directory.CreateDirectory(emailDir);
+
+            filePath = Path.Combine(emailDir, $"{allegatoId}_{safeName}");
+
+            var relPath = Path.Combine(
+                "inviati",
+                casellaId.ToString(),
+                emailId.ToString(),
+                $"{allegatoId}_{safeName}"
+            );
+
+            if (File.Exists(filePath))
+            {
+                var fi = new FileInfo(filePath);
+                await UpdateSentAttachmentPathAsync(conn, allegatoId, relPath, fi.Length, ct);
+                return;
+            }
+
+            // ✅ CASO FALLBACK: partSpec = fallback-1 / fallback-2 / ecc.
+            if (!string.IsNullOrWhiteSpace(partSpec) &&
+                partSpec.StartsWith("fallback-", StringComparison.OrdinalIgnoreCase))
+            {
+                var full = await folder.GetMessageAsync(uid, ct);
+                var allAtts = full.Attachments.ToList();
+
+                var suffix = partSpec.Substring("fallback-".Length);
+
+                if (int.TryParse(suffix, out var fallbackIndex))
+                {
+                    var idx = fallbackIndex - 1;
+
+                    if (idx >= 0 && idx < allAtts.Count)
+                    {
+                        var fallbackEntity = allAtts[idx];
+
+                        long fallbackSize;
+
+                        await using (var fs = new FileStream(
+                            filePath,
+                            FileMode.Create,
+                            FileAccess.Write,
+                            FileShare.None,
+                            81920,
+                            useAsync: true))
+                        {
+                            if (fallbackEntity is MimePart mp)
+                                await mp.Content.DecodeToAsync(fs, ct);
+                            else if (fallbackEntity is MessagePart msgPart)
+                                await msgPart.Message.WriteToAsync(fs, ct);
+                            else
+                                await fallbackEntity.WriteToAsync(fs, ct);
+
+                            await fs.FlushAsync(ct);
+                            fallbackSize = fs.Length;
+                        }
+
+                        await UpdateSentAttachmentPathAsync(conn, allegatoId, relPath, fallbackSize, ct);
+                    }
+                }
+
+                return;
+            }
+
+            // ✅ CASO NORMALE: partSpec reale tipo "2", "3.1", ecc.
+            var summaries = await folder.FetchAsync(new[] { uid }, MessageSummaryItems.BodyStructure, ct);
+            var body = summaries.FirstOrDefault()?.Body;
+            if (body == null) return;
+
+            var bp = FindBodyPartBySpecifier(body, partSpec);
+            if (bp == null) return;
+
+            var entity = await folder.GetBodyPartAsync(uid, bp, ct);
+            if (entity == null) return;
+
+            long size;
+
+            await using (var fs = new FileStream(
+                filePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                useAsync: true))
+            {
+                if (entity is MimePart mp)
+                    await mp.Content.DecodeToAsync(fs, ct);
+                else if (entity is MessagePart msgPart)
+                    await msgPart.Message.WriteToAsync(fs, ct);
+                else
+                    await entity.WriteToAsync(fs, ct);
+
+                await fs.FlushAsync(ct);
+                size = fs.Length;
+            }
+
+            await UpdateSentAttachmentPathAsync(conn, allegatoId, relPath, size, ct);
+        }
+        catch
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+                    File.Delete(filePath);
+            }
+            catch { }
+
+            throw;
+        }
+    }
+
+    private async Task AddSenderToBlacklistAsync(
+    OracleConnection conn,
+    string? sender,
+    string utente,
+    int emailId,
+    CancellationToken ct)
+    {
+        var email = ExtractEmailAddress(sender);
+
+        if (string.IsNullOrWhiteSpace(email))
+            return;
+
+        const string mergeSql = @"
+MERGE INTO SGAPP.EMAIL_BLACKLIST t
+USING (
+    SELECT :p_email AS EMAIL,
+           :p_utente AS INSERITO_DA
+    FROM dual
+) s
+ON (LOWER(t.EMAIL) = LOWER(s.EMAIL) AND NVL(t.ATTIVA,'Y') = 'Y')
+WHEN NOT MATCHED THEN
+    INSERT (EMAIL, INSERITO_DA, DATA_INSERIMENTO, ATTIVA)
+    VALUES (s.EMAIL, s.INSERITO_DA, SYSDATE, 'Y')";
+
+        await using (var cmd = new OracleCommand(mergeSql, conn) { BindByName = true })
+        {
+            cmd.Parameters.Add("p_email", OracleDbType.Varchar2, 500).Value = email;
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2, 200).Value = utente;
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+
+        const string updateSql = @"
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET BLACKLIST = 'Y'
+ WHERE ID = :p_id";
+
+        await using (var cmd = new OracleCommand(updateSql, conn) { BindByName = true })
+        {
+            cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId;
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
 }

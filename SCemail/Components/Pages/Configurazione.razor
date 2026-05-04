@@ -175,6 +175,8 @@
                             <select class="form-select" @onchange="OnProviderChanged">
                                 <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
                                 <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
+                                <option value="Legalmail" selected="@("Legalmail" == form.Provider)">Legalmail</option>
+                                <option value="InterfreePEC" selected="@("InterfreePEC" == form.Provider)">Interfree PEC</option>
                             </select>
                         </div>
 
@@ -391,10 +393,15 @@
                     return;
                 }
 
+                var emailUpperEdit = form.Email.Trim().ToUpperInvariant();
+
                 bool duplicateEmail = await db.CasellePosta
                     .AsNoTracking()
-                    .AnyAsync(c => c.Id != editingId.Value &&
-                                   c.Email.ToUpper() == form.Email.ToUpper());
+                    .Where(c => c.Attiva == "Y" &&
+                                c.Id != editingId.Value &&
+                                c.Email.ToUpper() == emailUpperEdit)
+                    .Select(c => c.Id)
+                    .FirstOrDefaultAsync() != 0;
 
                 if (duplicateEmail)
                 {
@@ -405,13 +412,10 @@
                 existing.Email = form.Email;
                 existing.Password = form.Password;
                 existing.Provider = form.Provider;
-                existing.ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
-                    ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
-                        ? "imaps.pec.aruba.it"
-                        : "imap.aruba.it")
-                    : "imap.gmail.com";
-                existing.ImapPort = 993;
-                existing.UseSsl = "Y";
+                var imapEdit = ResolveImapSettings(form.Provider, form.Email);
+                existing.ImapHost = imapEdit.Host;
+                existing.ImapPort = imapEdit.Port;
+                existing.UseSsl = imapEdit.UseSsl;
 
                 await db.SaveChangesAsync();
 
@@ -443,28 +447,30 @@
                 return;
             }
 
+            var emailUpper = form.Email.Trim().ToUpperInvariant();
+
             bool exists = await db.CasellePosta
                 .AsNoTracking()
-                .AnyAsync(c => c.Email.ToUpper() == form.Email.ToUpper());
+                .Where(c => c.Attiva == "Y" &&
+                            c.Email.ToUpper() == emailUpper)
+                .Select(c => c.Id)
+                .FirstOrDefaultAsync() != 0;
 
             if (exists)
             {
                 Snackbar.Add($"La casella '{form.Email}' esiste già.", Severity.Warning);
                 return;
             }
+            var imapNew = ResolveImapSettings(form.Provider, form.Email);
 
             var entity = new CasellaPosta
             {
                 Email = form.Email,
                 Password = form.Password,
                 Provider = form.Provider,
-                ImapHost = form.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
-                    ? (form.Email.Contains("pec", StringComparison.OrdinalIgnoreCase)
-                        ? "imaps.pec.aruba.it"
-                        : "imap.aruba.it")
-                    : "imap.gmail.com",
-                ImapPort = 993,
-                UseSsl = "Y",
+                ImapHost = imapNew.Host,
+                ImapPort = imapNew.Port,
+                UseSsl = imapNew.UseSsl,
                 CreatedAt = DateTime.Now
             };
 
@@ -598,5 +604,31 @@
     public void Dispose()
     {
         _refreshTimer?.Dispose();
+    }
+
+    private static (string Host, int Port, string UseSsl) ResolveImapSettings(string provider, string email)
+    {
+        provider = (provider ?? "").Trim();
+        email = (email ?? "").Trim().ToLowerInvariant();
+
+        if (provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
+            return ("imap.gmail.com", 993, "Y");
+
+        if (provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase))
+        {
+            var host = email.Contains("pec", StringComparison.OrdinalIgnoreCase)
+                ? "imaps.pec.aruba.it"
+                : "imap.aruba.it";
+
+            return (host, 993, "Y");
+        }
+
+        if (provider.Equals("Legalmail", StringComparison.OrdinalIgnoreCase))
+            return ("mbox.cert.legalmail.it", 993, "Y");
+
+        if (provider.Equals("InterfreePEC", StringComparison.OrdinalIgnoreCase))
+            return ("mail.postacert.it.net", 993, "Y");
+
+        return ("imap.gmail.com", 993, "Y");
     }
 }

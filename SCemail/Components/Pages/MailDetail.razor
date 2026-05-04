@@ -546,8 +546,7 @@
 
     private async Task AssignThread()
     {
-        var last = GetThreadLast();
-        if (last == null) return;
+        var emailIdToAssign = Id;
 
         try
         {
@@ -580,47 +579,41 @@
                 return;
             }
 
+            int? commentId = null;
+
+            if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+            {
+                commentId = await MailSvc.AddCommentAsync(
+                    emailId: emailIdToAssign,
+                    autore: _utente!,
+                    testo: fr.MentionsComment
+                );
+
+                await MailSvc.MarkEmailSeguiteAsUnreadAsync(
+                    emailId: emailIdToAssign,
+                    commentId: commentId.Value,
+                    autore: _utente!
+                );
+            }
+
             await MailSvc1.AssignEmailAsync(
-                last.Id,
-                fr.User,
+                emailId: emailIdToAssign,
+                utente: fr.User,
                 soloInvio: false,
                 commento: fr.AssignedComment,
                 eseguitoDa: _utente,
                 keepExecutorUnarchived: fr.FollowMe
             );
 
-            int? commentId = null;
-
-            if (!string.IsNullOrWhiteSpace(fr.MentionsComment))
+            foreach (var u in fr.MentionedUsers
+                         .Where(u => !string.IsNullOrWhiteSpace(u))
+                         .Select(u => u.Trim().ToLowerInvariant())
+                         .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                commentId = await MailSvc.AddCommentAsync(
-                    emailId: last.Id,
-                    autore: _utente!,
-                    testo: fr.MentionsComment
-                );
-
-                await MailSvc.MarkEmailSeguiteAsUnreadAsync(
-                    emailId: last.Id,
-                    commentId: commentId.Value,
-                    autore: _utente!
-                );
-            }
-
-            var mentionedUsers = fr.MentionedUsers
-                .Where(u => !string.IsNullOrWhiteSpace(u))
-                .Select(u => u.Trim().ToLowerInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            if (commentId.HasValue)
-            {
-                foreach (var u in mentionedUsers)
+                if (commentId.HasValue && !u.Equals(_utente, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (u.Equals(_utente, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
                     await MailSvc.RegistraEventoChatAsync(
-                        emailId: last.Id,
+                        emailId: emailIdToAssign,
                         utente: u,
                         isMention: true,
                         commentoId: commentId.Value,
@@ -629,25 +622,32 @@
                 }
             }
 
-            if (fr.FollowMe)
+            Snackbar.Add(
+       fr.FollowMe
+           ? $"Email assegnata a {fr.User} e aggiunta ai seguiti ✅"
+           : $"Email assegnata a {fr.User} ✅",
+       Severity.Success
+   );
+
+            _navIds = _navIds.Where(x => x != emailIdToAssign).ToList();
+
+            int? nextId = null;
+
+            if (_currentNavIndex >= 0)
             {
-                await MailSvc.EnsureEmailSeguitaAsync(
-                    last.Id,
-                    _utente!,
-                    commentId
-                );
+                if (_currentNavIndex < _navIds.Count)
+                    nextId = _navIds[_currentNavIndex];
+                else if (_navIds.Count > 0)
+                    nextId = _navIds.Last();
             }
 
-            Snackbar.Add(
-                fr.FollowMe
-                    ? $"Email assegnata a {fr.User} e aggiunta ai tuoi seguiti ✅"
-                    : $"Email assegnata a {fr.User} ✅",
-                Severity.Success
-            );
+            if (nextId.HasValue)
+                NavigateToMail(nextId.Value);
+            else
+                GoBack();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"❌ Errore in AssignThread: {ex.Message}");
             Snackbar.Add($"Errore nell'assegnazione: {ex.Message}", Severity.Error);
         }
     }
@@ -935,6 +935,12 @@
         return body.Trim();
     }
 
+    private async Task LoadCommentsAsync(int emailId)
+    {
+        _comments = await MailSvc.GetCommentsByEmailAsync(emailId);
+        StateHasChanged();
+    }
+
     private async Task OnSpostaInChanged(long? idSezione)
     {
         if (_email == null || string.IsNullOrWhiteSpace(_utente) || idSezione == null)
@@ -1030,10 +1036,7 @@
 
         if (q.TryGetValue("fromSection", out var s))
             _fromSection = s.ToString();
-        _assegnatoA = null;
-
-        if (q.TryGetValue("assegnatoA", out var ass))
-            _assegnatoA = ass.ToString();
+        _assegnatoA = await MailSvc1.GetAssegnatariEmailAsync(Id);
 
         if (q.TryGetValue("ids", out var idsRaw))
         {
