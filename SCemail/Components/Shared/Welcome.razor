@@ -273,6 +273,11 @@
         : $"/rubrica?cp={Uri.EscapeDataString(_cp)}";
 
 
+    private string AdminDashboardHref =>
+        string.IsNullOrWhiteSpace(_cp)
+            ? "/admin-dashboard"
+            : $"/admin-dashboard?cp={Uri.EscapeDataString(_cp)}";
+
     private string RegoleHref =>
 string.IsNullOrWhiteSpace(_cp)
     ? "/regole"
@@ -350,6 +355,13 @@ string.IsNullOrWhiteSpace(_cp)
 
             @if (IsAdmin)
             {
+                <MudButton Color="Color.Primary"
+                           Variant="Variant.Outlined"
+                           Href="@AdminDashboardHref"
+                           StartIcon="@Icons.Material.Filled.Dashboard">
+                    Console admin
+                </MudButton>
+
                 <MudButton Color="Color.Info"
                            Variant="Variant.Outlined"
                            Href="@RubricaHref"

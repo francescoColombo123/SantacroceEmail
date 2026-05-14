@@ -12,10 +12,11 @@ namespace SCemail.Components.Data
         public string NomeFile { get; init; } = string.Empty;
         public string? MimeType { get; init; }
 
-        // ✅ Costruttore vuoto
+        public bool IsEmailEml { get; set; }
+        public int? EmailEmlId { get; set; }
+
         public AllegatoItem_NEW() { }
 
-        // ✅ Costruttore parametrico
         public AllegatoItem_NEW(int id, string nomeFile, string? mimeType)
         {
             Id = id;

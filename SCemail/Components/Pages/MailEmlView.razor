@@ -1,0 +1,454 @@
+﻿@page "/mail-eml-view/{id:int}/{cp?}"
+@using Microsoft.JSInterop
+@using SCemail.Components.Data
+@inject MailService_NEW MailSvc1
+@inject IJSRuntime JS
+
+<div class="eml-page">
+    @if (_loading)
+    {
+        <div class="eml-loading">Caricamento email allegata...</div>
+    }
+    else if (_email == null)
+    {
+        <div class="eml-empty">Email allegata non trovata.</div>
+    }
+    else
+    {
+        <div class="eml-card">
+            <div class="eml-topbar">
+                <div>
+                    <div class="eml-badge">Email allegata</div>
+                    <h2>@(_email.Oggetto ?? "(Senza oggetto)")</h2>
+                </div>
+
+                <button class="eml-close" @onclick="GoBack">
+                    Indietro
+                </button>
+            </div>
+
+            <div class="eml-meta-card">
+                <div>
+                    <span>Da</span>
+                    <strong>@_email.Mittente</strong>
+                </div>
+
+                <div>
+                    <span>A</span>
+                    <strong>@_email.Destinatari</strong>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_email.Cc))
+                {
+                    <div>
+                        <span>CC</span>
+                        <strong>@_email.Cc</strong>
+                    </div>
+                }
+
+                <div>
+                    <span>Data</span>
+                    <strong>@_email.Data?.ToString("dd/MM/yyyy HH:mm")</strong>
+                </div>
+            </div>
+
+            <div class="eml-body">
+                @if (!string.IsNullOrWhiteSpace(_email.CorpoHtml))
+                {
+                    var safe = StripActiveContent(_email.CorpoHtml);
+                    <iframe class="eml-iframe" sandbox="" srcdoc="@safe"></iframe>
+                }
+                else
+                {
+                    <pre>@(_email.CorpoTesto ?? "")</pre>
+                }
+            </div>
+
+            @if (_email.Allegati?.Any() == true)
+            {
+                <div class="eml-attachments">
+                    <div class="eml-attachments-title">Allegati</div>
+
+                    <div class="eml-attach-grid">
+                        @foreach (var a in _email.Allegati)
+                        {
+                            var mime = NormalizeMime(a.MimeType, a.NomeFile);
+
+                            <a class="eml-attach"
+                               href="#"
+                               title="Apri allegato"
+                               @onclick="@(async () => await OpenAttachmentOrEmailAsync(a, mime, _email.Allegati.Select(x => x.Id).ToList()))"
+                               @onclick:preventDefault="true">
+
+                                <span class="eml-attach-icon">
+                                    @(a.IsEmailEml ? "✉️" : "📎")
+                                </span>
+
+                                <span class="eml-attach-name">@a.NomeFile</span>
+
+                                <span class="eml-attach-action">
+                                    @(a.IsEmailEml ? "Apri email" : IsPreviewableMime(mime) ? "Anteprima" : "Scarica")
+                                </span>
+                            </a>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@if (_showAttachmentViewer)
+{
+    <AttachmentViewerOverlay Id="@_attachmentViewerId"
+                             Src="@_attachmentViewerSrc"
+                             Ids="@_attachmentViewerIds"
+                             OnClose="@CloseAttachmentViewer" />
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [Parameter] public string? Cp { get; set; }
+
+    private EmailDetail_NEW? _email;
+    private bool _loading = true;
+
+    private bool _showAttachmentViewer;
+    private int _attachmentViewerId;
+    private string? _attachmentViewerSrc;
+    private List<int> _attachmentViewerIds = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+
+        try
+        {
+            _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task GoBack()
+    {
+        await JS.InvokeVoidAsync("history.back");
+    }
+
+    private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
+    {
+        if (a.IsEmailEml && a.EmailEmlId.HasValue)
+        {
+            var url = string.IsNullOrWhiteSpace(Cp)
+                ? $"/mail-eml-view/{a.EmailEmlId.Value}"
+                : $"/mail-eml-view/{a.EmailEmlId.Value}/{Cp}";
+
+            await JS.InvokeVoidAsync("openNewTab", url);
+            return;
+        }
+
+        await OpenAttachmentAsync(a.Id, mimeType, ids);
+    }
+
+    private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
+    {
+        var mime = NormalizeMime(mimeType, null);
+
+        if (!IsPreviewableMime(mime))
+        {
+            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{attachmentId}/download");
+            return;
+        }
+
+        _attachmentViewerId = attachmentId;
+        _attachmentViewerSrc = null;
+        _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
+        _showAttachmentViewer = true;
+
+        StateHasChanged();
+    }
+
+    private Task CloseAttachmentViewer()
+    {
+        _showAttachmentViewer = false;
+        return Task.CompletedTask;
+    }
+
+    private static bool IsPreviewableMime(string? mime)
+    {
+        if (string.IsNullOrWhiteSpace(mime))
+            return false;
+
+        return mime.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase)
+            || mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            || mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            || mime.Equals("text/html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeMime(string? mime, string? filename)
+    {
+        if (!string.IsNullOrWhiteSpace(mime) &&
+            !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
+            return mime;
+
+        var ext = Path.GetExtension(filename ?? "").ToLowerInvariant();
+
+        return ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".eml" => "message/rfc822",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => mime ?? "application/octet-stream"
+        };
+    }
+
+    private static string StripActiveContent(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return html;
+
+        html = System.Text.RegularExpressions.Regex.Replace(
+            html,
+            @"<\s*script\b[^>]*>.*?<\s*/\s*script\s*>",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        html = System.Text.RegularExpressions.Regex.Replace(
+            html,
+            @"\son\w+\s*=\s*(""[^""]*""|'[^']*'|[^\s>]+)",
+            "",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        return html;
+    }
+}
+
+<style>
+    .eml-page {
+        min-height: 100vh;
+        background: linear-gradient(180deg, #f5f8ff 0%, #eef4ff 100%);
+        padding: 28px;
+    }
+
+    .eml-card {
+        max-width: 1180px;
+        margin: 0 auto;
+        background: #ffffff;
+        border-radius: 18px;
+        padding: 24px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, .08);
+        border: 1px solid #e2e8f0;
+    }
+
+    .eml-topbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        border-bottom: 1px solid #eef2f7;
+        padding-bottom: 16px;
+        margin-bottom: 16px;
+    }
+
+    .eml-badge {
+        display: inline-flex;
+        width: fit-content;
+        padding: 5px 10px;
+        border-radius: 999px;
+        background: #dbeafe;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 800;
+        margin-bottom: 8px;
+    }
+
+    .eml-topbar h2 {
+        margin: 0;
+        color: #0f172a;
+        font-size: 25px;
+        line-height: 1.25;
+    }
+
+    .eml-close {
+        border: 1px solid #dbeafe;
+        background: #f8fbff;
+        color: #1d4ed8;
+        border-radius: 12px;
+        padding: 9px 14px;
+        font-weight: 700;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+        .eml-close:hover {
+            background: #eef4ff;
+        }
+
+    .eml-meta-card {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+        background: #f8fafc;
+        border: 1px solid #e5edf8;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 18px;
+    }
+
+        .eml-meta-card div {
+            display: grid;
+            grid-template-columns: 70px 1fr;
+            gap: 10px;
+            font-size: 14px;
+        }
+
+        .eml-meta-card span {
+            color: #64748b;
+            font-weight: 700;
+        }
+
+        .eml-meta-card strong {
+            color: #1e293b;
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+    .eml-body {
+        border: 1px solid #e5edf8;
+        border-radius: 16px;
+        padding: 12px;
+        background: #ffffff;
+        min-height: 420px;
+    }
+
+        .eml-body pre {
+            margin: 0;
+            white-space: pre-wrap;
+            font-family: inherit;
+            color: #1f2937;
+        }
+
+    .eml-iframe {
+        width: 100%;
+        min-height: 620px;
+        border: 0;
+        display: block;
+        border-radius: 12px;
+        background: white;
+    }
+
+    .eml-attachments {
+        margin-top: 18px;
+        padding-top: 16px;
+        border-top: 1px solid #eef2f7;
+    }
+
+    .eml-attachments-title {
+        font-size: 14px;
+        font-weight: 800;
+        color: #334155;
+        margin-bottom: 10px;
+    }
+
+    .eml-attach-grid {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+
+    .eml-attach {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        max-width: 420px;
+        padding: 9px 12px;
+        border-radius: 14px;
+        background: #eef4ff;
+        border: 1px solid #d6e6ff;
+        color: #0b3a82;
+        text-decoration: none;
+        transition: .18s ease;
+    }
+
+        .eml-attach:hover {
+            background: #e0ecff;
+            transform: translateY(-1px);
+        }
+
+    .eml-attach-icon {
+        flex: 0 0 auto;
+    }
+
+    .eml-attach-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .eml-attach-action {
+        margin-left: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #dbeafe;
+        color: #1d4ed8;
+        font-size: 11px;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .eml-loading,
+    .eml-empty {
+        max-width: 600px;
+        margin: 80px auto;
+        background: white;
+        border: 1px solid #e5edf8;
+        border-radius: 16px;
+        padding: 24px;
+        text-align: center;
+        color: #64748b;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, .06);
+    }
+
+    @@media (max-width: 700px) {
+        .eml-page {
+            padding: 14px;
+        }
+
+        .eml-card {
+            padding: 16px;
+            border-radius: 14px;
+        }
+
+        .eml-topbar {
+            flex-direction: column;
+        }
+
+            .eml-topbar h2 {
+                font-size: 20px;
+            }
+
+        .eml-close {
+            width: 100%;
+        }
+
+        .eml-meta-card div {
+            grid-template-columns: 1fr;
+            gap: 2px;
+        }
+
+        .eml-iframe {
+            min-height: 480px;
+        }
+    }
+</style>

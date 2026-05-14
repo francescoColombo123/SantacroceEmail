@@ -67,4 +67,12 @@ window.navigateNamed = (name, url) => {
     return true; // ✅ boolean (opzionale)
 };
 
+window.openPopupWindow = (url) => {
+    window.open(
+        url,
+        "_blank",
+        "width=1500,height=900,left=80,top=60,resizable=yes,scrollbars=yes"
+    );
+};
+
 console.log("✅ openNamed loaded:", typeof window.openNamed);

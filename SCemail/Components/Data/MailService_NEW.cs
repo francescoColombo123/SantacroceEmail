@@ -972,16 +972,17 @@ ORDER BY DATA";
             }
 
 
-            // 3️⃣ Recupera allegati per ogni messaggio
             const string attachSqlRicevute = @"
-        SELECT ID, NOME_FILE, MIME_TYPE
-        FROM SGAPP.EMAIL_ALLEGATI
-        WHERE EMAIL_ID = :id_email";
+SELECT ID, NOME_FILE, MIME_TYPE, IS_EMAIL_EML, EMAIL_EML_ID
+FROM SGAPP.EMAIL_ALLEGATI
+WHERE EMAIL_ID = :id_email";
 
             const string attachSqlInviate = @"
-        SELECT ID, NOME_FILE, MIME_TYPE
-        FROM SGAPP.INVIATA_ALLEGATI
-        WHERE EMAIL_ID = :id_email";
+SELECT ID, NOME_FILE, MIME_TYPE,
+       'N' AS IS_EMAIL_EML,
+       CAST(NULL AS NUMBER) AS EMAIL_EML_ID
+FROM SGAPP.INVIATA_ALLEGATI
+WHERE EMAIL_ID = :id_email";
 
             foreach (var mail in list)
             {
@@ -1001,7 +1002,10 @@ ORDER BY DATA";
                     {
                         Id = aReader.GetInt32(0),
                         NomeFile = aReader.IsDBNull(1) ? "" : aReader.GetString(1),
-                        MimeType = aReader.IsDBNull(2) ? null : aReader.GetString(2)
+                        MimeType = aReader.IsDBNull(2) ? null : aReader.GetString(2),
+                        IsEmailEml = !aReader.IsDBNull(3)
+                            && string.Equals(aReader.GetString(3), "Y", StringComparison.OrdinalIgnoreCase),
+                        EmailEmlId = aReader.IsDBNull(4) ? null : aReader.GetInt32(4)
                     });
                 }
             }
@@ -2663,10 +2667,158 @@ WHERE RN = 1";
             public List<AllegatoItem_NEW> Allegati { get; set; } = new();
         }
 
+        public sealed class AdminUserSectionCountDto
+        {
+            public long Id { get; set; }
+            public string Codice { get; set; } = "";
+            public string Nome { get; set; } = "";
+            public int Count { get; set; }
+        }
 
+        public async Task<List<AdminUserSectionCountDto>> GetAdminSectionsForUserAsync(string utente)
+        {
+            const string sql = @"
+SELECT 
+    s.ID,
+    s.CODICE,
+    s.NOME,
+    COUNT(DISTINCT NVL(e.THREAD_KEY, TO_CHAR(e.ID))) AS CNT
+FROM SGAPP.EMAIL_INBOX_SEZIONI s
+JOIN SGAPP.EMAIL_INBOX_SEZIONE_MAP m 
+    ON m.ID_SEZIONE = s.ID
+JOIN SGAPP.EMAIL_RICEVUTE e 
+    ON e.ID = m.ID_EMAIL
+WHERE s.ATTIVA = 'Y'
+  AND LOWER(m.UTENTE) = LOWER(:p_utente)
+  AND NVL(e.ELIMINATO, 'N') <> 'Y'
+  AND NVL(e.BLACKLIST, 'N') <> 'Y'
+  AND NOT EXISTS (
+        SELECT 1
+        FROM SGAPP.EMAIL_ARCHIVIO ar
+        WHERE ar.ID_EMAIL = e.ID
+          AND LOWER(ar.UTENTE) = LOWER(:p_utente)
+  )
+GROUP BY s.ID, s.CODICE, s.NOME, s.ORDINE
+ORDER BY s.ORDINE, s.NOME";
 
+            var result = new List<AdminUserSectionCountDto>();
 
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
 
+            await using var cmd = new OracleCommand(sql, conn)
+            {
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente;
+
+            await using var rd = await cmd.ExecuteReaderAsync();
+
+            while (await rd.ReadAsync())
+            {
+                result.Add(new AdminUserSectionCountDto
+                {
+                    Id = rd.GetInt64(0),
+                    Codice = rd.IsDBNull(1) ? "" : rd.GetString(1),
+                    Nome = rd.IsDBNull(2) ? "" : rd.GetString(2),
+                    Count = Convert.ToInt32(rd.GetDecimal(3))
+                });
+            }
+
+            return result;
+        }
+        public sealed class HomeSectionCountDto
+        {
+            public long Id { get; set; }
+            public string Codice { get; set; } = "";
+            public string Nome { get; set; } = "";
+            public int Count { get; set; }
+        }
+
+        public async Task<string?> GetLatestCpByUserAsync(string utente)
+        {
+            const string sql = @"
+SELECT ID
+FROM (
+    SELECT ID
+    FROM SGAPP.ACCESSI
+    WHERE LOWER(UTENTE) = LOWER(:p_utente)
+    ORDER BY DATAIN DESC
+)
+WHERE ROWNUM = 1";
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente;
+
+            var result = await cmd.ExecuteScalarAsync();
+            return result == null || result == DBNull.Value ? null : result.ToString();
+        }
+
+        public async Task<int> GetUnreadMentionsCountAsync(string utente)
+        {
+            const string sql = @"
+SELECT COUNT(DISTINCT NVL(e.THREAD_KEY, TO_CHAR(e.ID)))
+FROM SGAPP.EMAIL_MENZIONI m
+JOIN SGAPP.EMAIL_RICEVUTE e ON e.ID = m.EMAIL_ID
+WHERE LOWER(m.UTENTE) = LOWER(:p_utente)
+  AND m.VISTO = 'N'
+  AND NVL(e.ELIMINATO, 'N') <> 'Y'";
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente;
+
+            return Convert.ToInt32(await cmd.ExecuteScalarAsync());
+        }
+
+        public async Task<List<HomeSectionCountDto>> GetHomeSectionsForUserAsync(string utente)
+        {
+            const string sql = @"
+SELECT 
+    s.ID,
+    s.CODICE,
+    s.NOME,
+    COUNT(DISTINCT NVL(e.THREAD_KEY, TO_CHAR(e.ID))) AS CNT
+FROM SGAPP.EMAIL_INBOX_SEZIONI s
+LEFT JOIN SGAPP.EMAIL_INBOX_SEZIONE_MAP m
+       ON m.ID_SEZIONE = s.ID
+      AND LOWER(m.UTENTE) = LOWER(:p_utente)
+LEFT JOIN SGAPP.EMAIL_RICEVUTE e
+       ON e.ID = m.EMAIL_ID
+      AND NVL(e.ELIMINATO, 'N') <> 'Y'
+WHERE s.ATTIVA = 'Y'
+GROUP BY s.ID, s.CODICE, s.NOME, s.ORDINE
+ORDER BY s.ORDINE, s.NOME";
+
+            var result = new List<HomeSectionCountDto>();
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente;
+
+            await using var r = await cmd.ExecuteReaderAsync();
+
+            while (await r.ReadAsync())
+            {
+                result.Add(new HomeSectionCountDto
+                {
+                    Id = r.GetInt64(0),
+                    Codice = r.IsDBNull(1) ? "" : r.GetString(1),
+                    Nome = r.IsDBNull(2) ? "" : r.GetString(2),
+                    Count = Convert.ToInt32(r.GetValue(3))
+                });
+            }
+
+            return result;
+        }
 
         /* ================== DETTAGLIO & CONVERSAZIONE ================== */
 
@@ -2717,8 +2869,15 @@ WHERE RN = 1";
                     e.ReferencesHdr,     // 🟢 nome del campo nel DB
                     e.ThreadKey,         // 🟢 nome del campo nel DB
                     Allegati = e.Allegati
-                        .Select(a => new AllegatoItem_NEW(a.Id, a.NomeFile, a.MimeType))
-                        .ToList()
+                    .Select(a => new
+                    {
+                        a.Id,
+                        a.NomeFile,
+                        a.MimeType,
+                        a.IsEmailEml,
+                        a.EmailEmlId
+                    })
+                    .ToList()
                 }).FirstOrDefaultAsync(ct);
 
                 if (dto == null) return null;
@@ -2732,7 +2891,14 @@ WHERE RN = 1";
                     Data = dto.DataRicezione,
                     CorpoHtml = dto.CorpoHtml,
                     CorpoTesto = dto.CorpoTesto,
-                    Allegati = dto.Allegati,
+                    Allegati = dto.Allegati.Select(a => new AllegatoItem_NEW
+                    {
+                        Id = a.Id,
+                        NomeFile = a.NomeFile,
+                        MimeType = a.MimeType,
+                        IsEmailEml = string.Equals(a.IsEmailEml, "Y", StringComparison.OrdinalIgnoreCase),
+                        EmailEmlId = a.EmailEmlId
+                    }).ToList(),
                     Aperto = dto.Aperto,
                     MessageId = dto.MessageId,
                     InReplyTo = dto.InReplyTo,
@@ -5149,6 +5315,70 @@ FETCH FIRST 1 ROWS ONLY";
                     Cc = r.IsDBNull(2) ? null : r.GetString(2),
                     Bcc = r.IsDBNull(3) ? null : r.GetString(3),
                 };
+            }
+        }
+
+        public async Task<bool> CanDeleteEmailAsync(int emailId, string utente)
+        {
+            const string sql = @"
+SELECT COUNT(*)
+FROM SGAPP.EMAIL_RICEVUTE e
+JOIN SGAPP.CASELLA_ABILITAZIONI ca 
+  ON ca.CASELLA_ID = e.CASELLA_ID
+WHERE e.ID = :p_email_id
+  AND LOWER(TRIM(ca.USERNAME)) = LOWER(TRIM(:p_utente))
+  AND NVL(ca.IS_ADMIN, 0) = 1";
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+            cmd.Parameters.Add("p_email_id", OracleDbType.Int32).Value = emailId;
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2, 255).Value = utente.Trim();
+
+            var count = Convert.ToInt32(await cmd.ExecuteScalarAsync());
+            return count > 0;
+        }
+
+        public async Task DeleteEmailDeepAsync(int emailId, string utente)
+        {
+            if (!await CanDeleteEmailAsync(emailId, utente))
+                throw new UnauthorizedAccessException("Non sei admin della casella di questa email.");
+
+            await using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            await using var tx = conn.BeginTransaction();
+
+            try
+            {
+                async Task Exec(string sql)
+                {
+                    await using var cmd = new OracleCommand(sql, conn)
+                    {
+                        BindByName = true,
+                        Transaction = tx
+                    };
+
+                    cmd.Parameters.Add("p_email_id", OracleDbType.Int32).Value = emailId;
+                    await cmd.ExecuteNonQueryAsync();
+                }
+
+                await Exec("DELETE FROM SGAPP.EMAIL_LETTURE_UTENTE WHERE EMAIL_ID = :p_email_id");
+                await Exec("DELETE FROM SGAPP.EMAIL_ASSEGNAZIONI WHERE EMAIL_ID = :p_email_id");
+                await Exec("DELETE FROM SGAPP.EMAIL_THREAD_WATCH WHERE EMAIL_ID = :p_email_id");
+                await Exec("DELETE FROM SGAPP.EMAIL_MENZIONI WHERE EMAIL_ID = :p_email_id");
+                await Exec("DELETE FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP WHERE ID_EMAIL = :p_email_id");
+                await Exec("DELETE FROM SGAPP.COMMENTI_EMAIL WHERE EMAIL_ID = :p_email_id");
+                await Exec("DELETE FROM SGAPP.EMAIL_ALLEGATI WHERE EMAIL_ID = :p_email_id");
+
+                await Exec("DELETE FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :p_email_id");
+                await tx.CommitAsync();
+            }
+            catch
+            {
+                await tx.RollbackAsync();
+                throw;
             }
         }
     }

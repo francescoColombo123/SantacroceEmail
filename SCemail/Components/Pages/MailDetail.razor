@@ -69,7 +69,14 @@
                             <span>@_assegnatoA</span>
                         </div>
                     }
-
+                    @if (_canDeleteEmail)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Title="Elimina definitivamente email"
+                                       Color="Color.Error"
+                                       Class="head-action-btn"
+                                       OnClick="@DeleteCurrentEmail" />
+                    }
                     <MudIconButton Icon="@Icons.Material.Filled.Report"
                                    Title="Metti mittente in blacklist"
                                    Color="Color.Error"
@@ -202,13 +209,25 @@
                                     {
                                         var mime = NormalizeMime(a.MimeType, a.NomeFile);
 
-                                        <a class="attach-chip"
-                                           href="#"
-                                           @onclick="@(async () => await OpenAttachmentAsync(a.Id, mime, mail.Allegati.Select(x => x.Id).ToList()))"
-                                           @onclick:preventDefault="true"
+                                        <a class="attach-chip @(a.IsEmailEml ? "attach-chip-eml" : "")"
+                                           href="javascript:void(0)"
+                                           title="@a.NomeFile"
+                                           @onclick="@(async () => await OpenAttachmentOrEmailAsync(a, mime, mail.Allegati.Select(x => x.Id).ToList()))"
                                            @onclick:stopPropagation="true">
-                                            <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
-                                            <span>@a.NomeFile</span>
+
+                                            <MudIcon Icon="@(a.IsEmailEml? Icons.Material.Filled.Email : GetAttachmentIcon(a.NomeFile))"
+                                                     Size="Size.Small"
+                                                     Class="attach-icon" />
+
+                                            <span class="attach-name">@a.NomeFile</span>
+
+                                            @if (a.IsEmailEml)
+                                            {
+                                                <span class="eml-badge">Apri email</span>
+                                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew"
+                                                         Size="Size.Small"
+                                                         Class="attach-open-icon" />
+                                            }
                                         </a>
                                     }
                                 </div>
@@ -359,6 +378,7 @@
     private List<CommentoEmail>? _comments;
     private bool _loading = true;
     private string? _utente;
+    private string? _utenteSele;
 
     private string? _newComment;
     private List<IBrowserFile> _selectedFiles = new();
@@ -372,7 +392,7 @@
     private long? _sezioneSelezionata;
     private bool _moving = false;
     private string? _assegnatoA;
-
+    private bool _canDeleteEmail;
     public class EmailReplyInfo
     {
         public string CasellaMittente { get; set; } = "";
@@ -1052,8 +1072,12 @@
         }
 
         _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
+
         _sezioni = await MailSvc1.GetSezioniInboxAsync(soloAttive: true);
 
+        _canDeleteEmail = _email != null
+                && !string.IsNullOrWhiteSpace(_utente)
+                && await MailSvc1.CanDeleteEmailAsync(_email.Id, _utente);
         await MarkCurrentMailAsReadAsync();
 
         if (_email != null)
@@ -1139,6 +1163,27 @@
         StateHasChanged();
     }
 
+    private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
+    {
+        if (a.IsEmailEml && a.EmailEmlId.HasValue)
+        {
+            var url = string.IsNullOrWhiteSpace(Cp)
+                ? $"/mail-eml-view/{a.EmailEmlId.Value}"
+                : $"/mail-eml-view/{a.EmailEmlId.Value}/{Cp}";
+
+            await JS.InvokeVoidAsync(
+                "open",
+                url,
+                "_blank",
+                "width=1500,height=900,left=80,top=60,resizable=yes,scrollbars=yes"
+            );
+
+            return;
+        }
+
+        await OpenAttachmentAsync(a.Id, mimeType, ids);
+    }
+
     private Task CloseAttachmentViewer()
     {
         _showAttachmentViewer = false;
@@ -1157,6 +1202,61 @@
         return "";
     }
 
+    private async Task DeleteCurrentEmail()
+    {
+        if (_email == null || string.IsNullOrWhiteSpace(_utente))
+            return;
+
+        var confirm = await DialogService.ShowMessageBox(
+            "Conferma eliminazione",
+            (MarkupString)$"Vuoi eliminare definitivamente questa email e tutti i dati collegati?<br><br><b>{System.Net.WebUtility.HtmlEncode(_email.Oggetto)}</b>",
+            yesText: "Elimina",
+            noText: "Annulla");
+
+        if (confirm != true)
+            return;
+
+        try
+        {
+            var deletedId = _email.Id;
+
+            int? nextId = null;
+            int? previousId = null;
+
+            if (_navIds.Count > 0 && _currentNavIndex >= 0)
+            {
+                if (_currentNavIndex < _navIds.Count - 1)
+                    nextId = _navIds[_currentNavIndex + 1];
+
+                if (_currentNavIndex > 0)
+                    previousId = _navIds[_currentNavIndex - 1];
+            }
+
+            await MailSvc1.DeleteEmailDeepAsync(deletedId, _utente);
+
+            Snackbar.Add("Email eliminata correttamente ✅", Severity.Success);
+
+            _navIds = _navIds.Where(x => x != deletedId).ToList();
+
+            if (nextId.HasValue)
+            {
+                NavigateToMail(nextId.Value);
+                return;
+            }
+
+            if (previousId.HasValue)
+            {
+                NavigateToMail(previousId.Value);
+                return;
+            }
+
+            GoBack();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore eliminazione: {ex.Message}", Severity.Error);
+        }
+    }
     private string GetBodyHtmlVisible(EmailDetail_NEW mail)
     {
         var body = mail.CorpoHtml ?? mail.CorpoTesto ?? "";
@@ -2235,6 +2335,9 @@
         margin-left: 6px;
     }
 
+    .attach-chip * {
+        pointer-events: none;
+    }
     .email-thread {
         display: flex;
         flex-direction: column;
@@ -2506,8 +2609,22 @@
         transition: background .2s;
     }
 
-    .attach-chip:hover {
-        background: #e6f0ff;
+    .attach-name {
+        max-width: 360px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .attach-chip:hover .attach-name {
+        max-width: none;
+        overflow: visible;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    .attach-chip {
+        max-width: 520px;
     }
 
     .attach-chip span {
@@ -2664,5 +2781,15 @@
 
     .head-actions {
         align-items: center;
+    }
+
+    .eml-badge {
+        margin-left: 4px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: #dbeafe;
+        color: #1d4ed8;
+        font-size: 11px;
+        font-weight: 700;
     }
 </style>

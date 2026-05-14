@@ -835,7 +835,12 @@ RETURNING ID INTO :p_id";
 
             var isInline = string.Equals(disp, "inline", StringComparison.OrdinalIgnoreCase);
 
+            var isEml =
+                mime.Equals("message/rfc822", StringComparison.OrdinalIgnoreCase) ||
+                fileName?.EndsWith(".eml", StringComparison.OrdinalIgnoreCase) == true;
+
             var isAttachment =
+                isEml ||
                 !string.IsNullOrWhiteSpace(fileName) ||
                 string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase) ||
                 (!isInline && !mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase));
@@ -843,7 +848,9 @@ RETURNING ID INTO :p_id";
             if (isAttachment && !string.IsNullOrWhiteSpace(basic.PartSpecifier))
             {
                 acc.Add((
-                    string.IsNullOrWhiteSpace(fileName) ? "allegato" : fileName,
+                    string.IsNullOrWhiteSpace(fileName)
+                        ? isEml ? "email_allegata.eml" : "allegato"
+                        : fileName,
                     mime,
                     basic.PartSpecifier
                 ));
@@ -856,6 +863,114 @@ RETURNING ID INTO :p_id";
                 CollectAttachmentParts(child, acc);
         }
     }
+
+    private async Task<int> SaveEmbeddedEmailAsync(
+    OracleConnection conn,
+    int casellaId,
+    int parentEmailId,
+    int parentAllegatoId,
+    MimeMessage embedded,
+    CancellationToken ct)
+    {
+        var messageId = NormalizeMessageId(embedded.MessageId);
+
+        if (string.IsNullOrWhiteSpace(messageId))
+            messageId = BuildStableFallbackMessageId(embedded);
+
+        var existing = await GetExistingEmailIdByMessageId(conn, casellaId, messageId, ct);
+        if (existing.HasValue)
+            return existing.Value;
+
+        var dataRicezione = TimeZoneInfo.ConvertTime(embedded.Date, RomeTz).DateTime;
+
+        var subject = embedded.Subject?.Trim();
+        if (string.IsNullOrWhiteSpace(subject))
+            subject = $"(Email allegata) - {dataRicezione:yyyy-MM-dd HH:mm}";
+
+        if (subject.Length > 1000)
+            subject = subject[..1000];
+
+        var threadKey = messageId;
+
+        const string sql = @"
+INSERT INTO SGAPP.EMAIL_RICEVUTE
+    (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, CC, CCN,
+     OGGETTO, CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO,
+     FOLDER_PATH, MESSAGE_UID, IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY,
+     BLACKLIST, IS_EML_IMPORTATA, PARENT_EMAIL_ID, PARENT_ALLEGATO_ID)
+VALUES
+    (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_cc, :p_ccn,
+     :p_subj, :p_html, :p_text, 'N', 'N',
+     :p_fp, NULL, :p_inreply, :p_refs, :p_thread,
+     'N', 'Y', :p_parent_email_id, :p_parent_allegato_id)
+RETURNING ID INTO :p_id";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
+        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
+        cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = messageId;
+        cmd.Parameters.Add("p_dt", OracleDbType.Date).Value = dataRicezione;
+        cmd.Parameters.Add("p_from", OracleDbType.Varchar2, 500).Value = embedded.From?.ToString() ?? "";
+        cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = embedded.To?.ToString() ?? "";
+        cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = embedded.Cc?.ToString() ?? "";
+        cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = embedded.Bcc?.ToString() ?? "";
+        cmd.Parameters.Add("p_subj", OracleDbType.Varchar2, 1000).Value = subject;
+        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value = (object?)embedded.HtmlBody ?? DBNull.Value;
+        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value = (object?)embedded.TextBody ?? DBNull.Value;
+
+        cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value =
+            $"EML_ATTACHMENT:{parentEmailId}:{parentAllegatoId}";
+
+        cmd.Parameters.Add("p_inreply", OracleDbType.Varchar2, 500).Value =
+            !string.IsNullOrWhiteSpace(embedded.InReplyTo)
+                ? NormalizeMessageId(embedded.InReplyTo)
+                : DBNull.Value;
+
+        cmd.Parameters.Add("p_refs", OracleDbType.Clob).Value =
+            embedded.References != null && embedded.References.Any()
+                ? string.Join(" ", embedded.References.Select(NormalizeMessageId))
+                : DBNull.Value;
+
+        cmd.Parameters.Add("p_thread", OracleDbType.Varchar2, 500).Value = threadKey;
+
+        cmd.Parameters.Add("p_parent_email_id", OracleDbType.Int32).Value = parentEmailId;
+        cmd.Parameters.Add("p_parent_allegato_id", OracleDbType.Int32).Value = parentAllegatoId;
+
+        var outId = new OracleParameter("p_id", OracleDbType.Int32)
+        {
+            Direction = ParameterDirection.Output
+        };
+
+        cmd.Parameters.Add(outId);
+
+        await cmd.ExecuteNonQueryAsync(ct);
+
+        if (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od)
+            return od.ToInt32();
+
+        return Convert.ToInt32(outId.Value?.ToString());
+    }
+
+    private static async Task MarkAttachmentAsEmailAsync(
+    OracleConnection conn,
+    int allegatoId,
+    int embeddedEmailId,
+    CancellationToken ct)
+    {
+        const string sql = @"
+        UPDATE SGAPP.EMAIL_ALLEGATI
+           SET IS_EMAIL_EML = 'Y',
+               EMAIL_EML_ID = :p_email_id
+         WHERE ID = :p_id";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+
+        cmd.Parameters.Add("p_email_id", OracleDbType.Int32).Value = embeddedEmailId;
+        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task ApplyRulesAsync(
     OracleConnection conn,
     int emailId,
@@ -976,16 +1091,41 @@ SELECT ID
                             var fallbackEntity = allAtts[idx];
 
                             long fallbackSize;
-                            await using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                            await using (var fs = new FileStream(
+                                        filePath,
+                                        FileMode.Create,
+                                        FileAccess.ReadWrite,
+                                        FileShare.None,
+                                        81920,
+                                        useAsync: true))
                             {
                                 if (fallbackEntity is MimePart fallbackMp)
+                                {
                                     await fallbackMp.Content.DecodeToAsync(fs, ct);
+                                }
                                 else if (fallbackEntity is MessagePart fallbackMsgPart)
+                                {
                                     await fallbackMsgPart.Message.WriteToAsync(fs, ct);
+                                }
                                 else
+                                {
                                     await fallbackEntity.WriteToAsync(fs, ct);
+                                }
 
                                 await fs.FlushAsync(ct);
+
+                                await TryImportEmlAttachmentAsync(
+                                    conn,
+                                    casellaId,
+                                    emailId,
+                                    a.AllegatoId,
+                                    a.FileName,
+                                    a.Mime,
+                                    fallbackEntity,
+                                    fs,
+                                    ct
+                                );
+
                                 fallbackSize = fs.Length;
                             }
 
@@ -1019,16 +1159,41 @@ SELECT ID
                 }
 
                 long size;
-                await using (var fs = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                await using (var fs = new FileStream(
+                    filePath,
+                    FileMode.Create,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    81920,
+                    useAsync: true))
                 {
                     if (imapEntity is MimePart mp)
+                    {
                         await mp.Content.DecodeToAsync(fs, ct);
+                    }
                     else if (imapEntity is MessagePart msgPart)
+                    {
                         await msgPart.Message.WriteToAsync(fs, ct);
+                    }
                     else
+                    {
                         await imapEntity.WriteToAsync(fs, ct);
+                    }
 
                     await fs.FlushAsync(ct);
+
+                    await TryImportEmlAttachmentAsync(
+                        conn,
+                        casellaId,
+                        emailId,
+                        a.AllegatoId,
+                        a.FileName,
+                        a.Mime,
+                        imapEntity,
+                        fs,
+                        ct
+                    );
+
                     size = fs.Length;
                 }
 
@@ -1516,13 +1681,35 @@ WHEN NOT MATCHED THEN
             var entity = await folder.GetBodyPartAsync(uid, bp, ct);
 
             long size;
-            await using (var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            await using (var fs = new FileStream(
+                         filePath,
+                         FileMode.CreateNew,
+                         FileAccess.ReadWrite,
+                         FileShare.None,
+                         81920,
+                         useAsync: true))
             {
-                if (entity is MimePart mp) await mp.Content.DecodeToAsync(fs, ct);
-                else if (entity is MessagePart msgPart) await msgPart.Message.WriteToAsync(fs, ct);
-                else await entity.WriteToAsync(fs, ct);
+                if (entity is MimePart mp)
+                    await mp.Content.DecodeToAsync(fs, ct);
+                else if (entity is MessagePart msgPart)
+                    await msgPart.Message.WriteToAsync(fs, ct);
+                else
+                    await entity.WriteToAsync(fs, ct);
 
                 await fs.FlushAsync(ct);
+
+                await TryImportEmlAttachmentAsync(
+                    conn,
+                    casellaId,
+                    emailId,
+                    allegatoId,
+                    fileName,
+                    mime,
+                    entity,
+                    fs,
+                    ct
+                );
+
                 size = fs.Length;
             }
 
@@ -2038,13 +2225,35 @@ SELECT a.ID AS ALLEGATO_ID,
             throw new InvalidOperationException("GetBodyPartAsync ha restituito NULL.");
 
         long size;
-        await using (var fs = new FileStream(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+        await using (var fs = new FileStream(
+    filePath,
+    FileMode.CreateNew,
+    FileAccess.ReadWrite,
+    FileShare.None,
+    81920,
+    useAsync: true))
         {
-            if (entity is MimePart mp) await mp.Content.DecodeToAsync(fs, ct);
-            else if (entity is MessagePart msgPart) await msgPart.Message.WriteToAsync(fs, ct);
-            else await entity.WriteToAsync(fs, ct);
+            if (entity is MimePart mp)
+                await mp.Content.DecodeToAsync(fs, ct);
+            else if (entity is MessagePart msgPart)
+                await msgPart.Message.WriteToAsync(fs, ct);
+            else
+                await entity.WriteToAsync(fs, ct);
 
             await fs.FlushAsync(ct);
+
+            await TryImportEmlAttachmentAsync(
+                conn,
+                info.CasellaId,
+                info.EmailId,
+                info.AllegatoId,
+                info.FileName,
+                info.Mime,
+                entity,
+                fs,
+                ct
+            );
+
             size = fs.Length;
         }
 
@@ -2647,6 +2856,65 @@ SELECT a.ID AS ALLEGATO_ID,
         }
     }
 
+    private async Task TryImportEmlAttachmentAsync(
+    OracleConnection conn,
+    int casellaId,
+    int emailId,
+    int allegatoId,
+    string fileName,
+    string mime,
+    MimeEntity entity,
+    Stream fs,
+    CancellationToken ct)
+    {
+        MimeMessage? embeddedMessage = null;
+
+        if (entity is MessagePart msgPart)
+        {
+            embeddedMessage = msgPart.Message;
+        }
+        else
+        {
+            var isEml =
+                mime.Equals("message/rfc822", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".eml", StringComparison.OrdinalIgnoreCase);
+
+            if (!isEml)
+                return;
+
+            fs.Position = 0;
+            embeddedMessage = await MimeMessage.LoadAsync(fs, ct);
+        }
+
+        var embeddedEmailId = await SaveEmbeddedEmailAsync(
+            conn,
+            casellaId,
+            emailId,
+            allegatoId,
+            embeddedMessage,
+            ct
+        );
+
+        // salva metadata allegati della mail embedded
+        var embeddedAttachments = await SaveAttachmentsMetadata(
+       conn,
+       embeddedEmailId,
+       null,
+       embeddedMessage,
+       ct
+   );
+
+        await DownloadEmbeddedAttachmentsAsync(
+            conn,
+            casellaId,
+            embeddedEmailId,
+            embeddedAttachments,
+            embeddedMessage,
+            ct
+        );
+        await MarkAttachmentAsEmailAsync(conn, allegatoId, embeddedEmailId, ct);
+    }
+
     private async Task AddSenderToBlacklistAsync(
     OracleConnection conn,
     string? sender,
@@ -2687,6 +2955,120 @@ UPDATE SGAPP.EMAIL_RICEVUTE
         {
             cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId;
             await cmd.ExecuteNonQueryAsync(ct);
+        }
+    }
+
+    private async Task DownloadEmbeddedAttachmentsAsync(
+    OracleConnection conn,
+    int casellaId,
+    int emailId,
+    List<(int AllegatoId, string FileName, string Mime, string PartSpec)> attachments,
+    MimeMessage embeddedMessage,
+    CancellationToken ct)
+    {
+        if (attachments == null || attachments.Count == 0)
+            return;
+
+        var emailDir = Path.Combine(
+            _attachmentsBasePath,
+            casellaId.ToString(),
+            emailId.ToString()
+        );
+
+        Directory.CreateDirectory(emailDir);
+
+        var allAttachments = embeddedMessage.Attachments.ToList();
+
+        for (int i = 0; i < attachments.Count; i++)
+        {
+            var a = attachments[i];
+
+            if (i >= allAttachments.Count)
+                continue;
+
+            var entity = allAttachments[i];
+
+            var safeName = SanitizeFileName(
+                string.IsNullOrWhiteSpace(a.FileName)
+                    ? "allegato"
+                    : a.FileName
+            );
+
+            var filePath = Path.Combine(
+                emailDir,
+                $"{a.AllegatoId}_{safeName}"
+            );
+
+            var relPath = Path.Combine(
+                casellaId.ToString(),
+                emailId.ToString(),
+                $"{a.AllegatoId}_{safeName}"
+            );
+
+            long size;
+
+            await using (var fs = new FileStream(
+                filePath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                useAsync: true))
+            {
+                if (entity is MimePart mp)
+                {
+                    await mp.Content.DecodeToAsync(fs, ct);
+                }
+                else if (entity is MessagePart msgPart)
+                {
+                    await msgPart.Message.WriteToAsync(fs, ct);
+                }
+                else
+                {
+                    await entity.WriteToAsync(fs, ct);
+                }
+
+                await fs.FlushAsync(ct);
+
+                size = fs.Length;
+            }
+
+            await UpdateAttachmentPathAsync(
+                conn,
+                a.AllegatoId,
+                relPath,
+                size,
+                true,
+                ct
+            );
+
+            var isNestedEml =
+     string.Equals(a.Mime, "message/rfc822", StringComparison.OrdinalIgnoreCase) ||
+     (a.FileName?.EndsWith(".eml", StringComparison.OrdinalIgnoreCase) == true) ||
+     entity is MessagePart;
+            if (isNestedEml)
+            {
+                try
+                {
+                    await using var readFs = File.OpenRead(filePath);
+
+                    await TryImportEmlAttachmentAsync(
+                        conn,
+                        casellaId,
+                        emailId,
+                        a.AllegatoId,
+                        a.FileName,
+                        a.Mime,
+                        entity,
+                        readFs,
+                        ct
+                    );
+                }
+                catch
+                {
+                    // ignore nested parse errors
+                }
+            }
         }
     }
 }

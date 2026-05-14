@@ -473,7 +473,11 @@ namespace SCemail.Components.Data
                 e.Property(x => x.NomeFile).HasColumnName("NOME_FILE");
                 e.Property(x => x.MimeType).HasColumnName("MIME_TYPE");
                 e.Property(x => x.PartSpec).HasColumnName("PART_SPEC");
+                e.Property(e => e.IsEmailEml)
+        .HasColumnName("IS_EMAIL_EML");
 
+                e.Property(e => e.EmailEmlId)
+                    .HasColumnName("EMAIL_EML_ID");
                 e.HasOne(x => x.Email)
                  .WithMany(m => m.Allegati)
                  .HasForeignKey(x => x.EmailId);
