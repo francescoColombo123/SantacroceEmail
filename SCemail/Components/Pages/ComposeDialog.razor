@@ -825,6 +825,7 @@
     </style>
 
 @code {
+
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public string Utente { get; set; } = default!;
     [Parameter] public string? Destinatari { get; set; }
@@ -886,7 +887,7 @@
         public CancellationTokenSource Cts { get; } = new();
         public bool CloseOnExecute { get; init; } = true;
     }
-    
+
     protected override async Task OnInitializedAsync()
     {
         _draftId = DraftId;
@@ -1174,19 +1175,25 @@
 
         _dotnetRef ??= DotNetObjectReference.Create(this);
 
+
+
         var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
+
      ? ""
+
      : $@"
 <br><br>
 <div class=""firma-mail"">
-    {_firmaHtml}
+    {FixFirmaHtml(_firmaHtml)}
 </div>";
 
         var separator = string.IsNullOrWhiteSpace(quoteNow)
-            ? ""
-            : @"
+      ? ""
+      : @"
 <br><br>
-<div style=""border-top:1px solid #999;margin:14px 0 12px 0;height:1px;""></div>
+<div style=""font-family:'Courier New',Courier,monospace;color:#666;margin:14px 0 12px 0;"">
+------------------------------
+</div>
 <br>";
 
         var initialBody = $@"
@@ -1290,12 +1297,7 @@
                     ? ""
                     : $@"<br><br><div style=""font-family:'Courier New',Courier,monospace;"">{_firmaHtml}</div>";
 
-                var corpoHtml = $@"
-                <div style=""background:#ffffff;color:#222;
-                            font-family:'Courier New',Courier,monospace;
-                            font-size:14px;line-height:1.5;"">
-                  {_bodyHtml}
-                </div>";
+                var corpoHtml = FixFirmaHtml(_bodyHtml ?? "");
                 await MailSvc.SendEmailAsync(
                     usernameOrEmail: Utente,
                     to: string.Join(";", ChipsToEmails(_toList)),
@@ -1374,41 +1376,33 @@
     private long? _draftId;
     private static string RemoveQuoteGarbage(string? input)
     {
-        if (string.IsNullOrWhiteSpace(input)) return "";
+        if (string.IsNullOrWhiteSpace(input))
+            return "";
 
-        // 1) decode HTML entities (&lt;div&gt; ecc)
-        var s = WebUtility.HtmlDecode(input);
+        var s = WebUtility.HtmlDecode(input).Replace("\r\n", "\n");
 
-        // 2) normalizza newline
-        s = s.Replace("\r\n", "\n");
-
-        // 3) se è testo “plain”, trasformalo in html leggibile
-        // (se già contiene tag html, non tocchiamo troppo)
         bool looksHtml = Regex.IsMatch(s, @"</?\w+[^>]*>", RegexOptions.IgnoreCase);
+
         if (!looksHtml)
             s = WebUtility.HtmlEncode(s).Replace("\n", "<br>");
-
-        // 4) elimina wrapper div style brutto (se presenti)
-        s = Regex.Replace(s, @"<div\s+style\s*=\s*""[\s\S]*?""\s*>", "", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"</div\s*>", "", RegexOptions.IgnoreCase);
-
-        // 5) taglia eventuale “doppione” incollato (capita quando ci sono quote ripetute)
-        //    se trovi un secondo "Il giorno ... ha scritto:" troppo avanti, taglia.
-        var m = Regex.Match(s, @"Il giorno[\s\S]{0,400}?ha scritto:", RegexOptions.IgnoreCase);
-        if (m.Success)
-        {
-            // se ne trovi un'altra dopo, taglia dalla seconda in poi
-            var m2 = Regex.Match(s.Substring(m.Index + m.Length), @"Il giorno[\s\S]{0,400}?ha scritto:", RegexOptions.IgnoreCase);
-            if (m2.Success)
-            {
-                var cutIndex = m.Index + m.Length + m2.Index;
-                s = s.Substring(0, cutIndex).Trim();
-            }
-        }
 
         return s.Trim();
     }
 
+    private static string FixFirmaHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return html;
+
+        html = Regex.Replace(
+            html,
+            @"GRUPPO\s+SANTACROCE",
+            @"<span style=""color:#1a73e8;font-weight:700;font-style:italic;"">GRUPPO SANTACROCE</span>",
+            RegexOptions.IgnoreCase
+        );
+
+        return html;
+    }
 
     private async Task SaveDraft()
     {

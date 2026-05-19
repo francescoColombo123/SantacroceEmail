@@ -142,22 +142,14 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             }
         }
     }
-    private static string NormalizeMessageId(string? messageId)
+    private static string? NormalizeMessageId(string? value)
     {
-        if (string.IsNullOrWhiteSpace(messageId))
-            return "";
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
 
-        var s = messageId.Trim();
-
-        if (s.StartsWith("<")) s = s[1..];
-        if (s.EndsWith(">")) s = s[..^1];
-
-        s = s.Trim().ToLowerInvariant();
-
-        if (s.Length > 500)
-            s = s[..500];
-
-        return s;
+        return value
+            .Trim()
+            .Trim('<', '>', ' ', '\t', '\r', '\n');
     }
     private async Task FetchEmailsForAccount(
      int casellaId, string email, string password, string host, int port, bool useSsl,

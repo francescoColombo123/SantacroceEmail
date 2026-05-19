@@ -465,8 +465,13 @@
             });
 
         var result = await dialog.Result;
-        if (result.Data is true)
+
+        if (!result.Canceled && result.Data?.ToString() == "sent")
+        {
             Snackbar.Add("Risposta inviata ✅", Severity.Success);
+            await Task.Delay(600);
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
     }
 
 
@@ -778,8 +783,13 @@
              });
 
         var result = await dialog.Result;
-        if (result.Data is true)
+
+        if (!result.Canceled && result.Data?.ToString() == "sent")
+        {
             Snackbar.Add("Risposta a tutti inviata ✅", Severity.Success);
+            await Task.Delay(600);
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
     }
 
 

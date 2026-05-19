@@ -3357,6 +3357,13 @@ ORDER BY s.ORDINE, s.NOME";
 
             // 3️⃣ Messaggio
             var message = new MimeMessage();
+            var senderDomain = casella.Email.Split('@').LastOrDefault();
+
+            message.MessageId = MimeKit.Utils.MimeUtils.GenerateMessageId(
+                string.IsNullOrWhiteSpace(senderDomain)
+                    ? "grupposantacroce.com"
+                    : senderDomain
+            );
             message.From.Add(new MailboxAddress(nomeMittente, casella.Email));
 
             // Supporta più destinatari separati da ; o ,
@@ -3401,24 +3408,61 @@ ORDER BY s.ORDINE, s.NOME";
 
             message.Body = builder.ToMessageBody();
 
-            // ✅ 4️⃣ Header di threading (fondamentale)
-            if (!string.IsNullOrWhiteSpace(inReplyTo))
+            // ✅ 4️⃣ Header di threading Gmail
+            static string CleanMsgId(string? value)
             {
-                var clean = inReplyTo.Trim('<', '>', ' ', '\t', '\r', '\n');
-                message.InReplyTo = $"<{clean}>";
+                return (value ?? "")
+                    .Trim()
+                    .Trim('<', '>', ' ', '\t', '\r', '\n');
             }
+
+            static string AngleMsgId(string? value)
+            {
+                var clean = CleanMsgId(value);
+                return string.IsNullOrWhiteSpace(clean) ? "" : $"<{clean}>";
+            }
+
+            var cleanInReplyTo = CleanMsgId(inReplyTo);
+
+            var refs = new List<string>();
+
             if (!string.IsNullOrWhiteSpace(referencesHdr))
             {
-                var refs = referencesHdr
-                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(r => $"<{r.Trim('<', '>', ' ', '\t', '\r', '\n')}>")
-                    .Distinct()
-                    .ToList();
+                refs.AddRange(
+                    referencesHdr
+                        .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(CleanMsgId)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                );
+            }
 
-                if (!string.IsNullOrWhiteSpace(message.InReplyTo) && !refs.Contains(message.InReplyTo))
-                    refs.Add(message.InReplyTo);
+            if (!string.IsNullOrWhiteSpace(cleanInReplyTo))
+                refs.Add(cleanInReplyTo);
 
-                foreach (var r in refs) message.References.Add(r);
+            refs = refs
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (!string.IsNullOrWhiteSpace(cleanInReplyTo))
+            {
+                message.InReplyTo = cleanInReplyTo;
+                message.Headers.RemoveAll(HeaderId.InReplyTo);
+                message.Headers.Add(HeaderId.InReplyTo, AngleMsgId(cleanInReplyTo));
+            }
+
+            message.References.Clear();
+
+            foreach (var r in refs)
+                message.References.Add(r);
+
+            message.Headers.RemoveAll(HeaderId.References);
+
+            if (refs.Any())
+            {
+                message.Headers.Add(
+                    HeaderId.References,
+                    string.Join(" ", refs.Select(AngleMsgId))
+                );
             }
 
             var messageIdClean = (message.MessageId ?? "").Trim('<', '>', ' ', '\t', '\r', '\n');
@@ -3457,8 +3501,9 @@ ORDER BY s.ORDINE, s.NOME";
                 _logger.LogInformation("🆕 Nuovo thread creato: {Key}", threadKeyClean);
             }
 
-            var inReplyToClean = string.IsNullOrWhiteSpace(message.InReplyTo) ? null
-                                : message.InReplyTo.Trim('<', '>', ' ', '\t', '\r', '\n');
+            var inReplyToClean = string.IsNullOrWhiteSpace(cleanInReplyTo)
+    ? null
+    : cleanInReplyTo;
 
             var corpoTesto = Regex.Replace(bodyHtml ?? "", "<.*?>", string.Empty);
 
@@ -3482,7 +3527,7 @@ ORDER BY s.ORDINE, s.NOME";
                 ),
                 MessageId = messageIdClean,
                 InReplyTo = inReplyToClean,
-                ReferencesHdr = string.Join(" ", message.References.Select(r => r.Trim('<', '>', ' ', '\t', '\r', '\n'))),
+                ReferencesHdr = string.Join(" ", refs),
                 ThreadKey = threadKeyClean
             };
 
@@ -3561,6 +3606,25 @@ ORDER BY s.ORDINE, s.NOME";
             using var client = new SmtpClient { Timeout = 10000 };
             await client.ConnectAsync(smtpHost, smtpPort, socketOptions, ct);
             await client.AuthenticateAsync(casella.Email, casella.Password, ct);
+
+            message.Headers.RemoveAll(HeaderId.InReplyTo);
+            message.Headers.RemoveAll(HeaderId.References);
+
+            if (!string.IsNullOrWhiteSpace(cleanInReplyTo))
+            {
+                message.Headers.Add(HeaderId.InReplyTo, $"<{cleanInReplyTo}>");
+            }
+
+            if (refs.Any())
+            {
+                message.Headers.Add(
+                    HeaderId.References,
+                    string.Join(" ", refs.Select(x => $"<{x}>"))
+                );
+            }
+
+            _logger.LogWarning("SMTP FINAL In-Reply-To = {Header}", message.Headers["In-Reply-To"]);
+            _logger.LogWarning("SMTP FINAL References = {Header}", message.Headers["References"]);
             await client.SendAsync(message, ct);
             await client.DisconnectAsync(true, ct);
 
