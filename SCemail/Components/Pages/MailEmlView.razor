@@ -1,6 +1,8 @@
 ﻿@page "/mail-eml-view/{id:int}/{cp?}"
 @using Microsoft.JSInterop
 @using SCemail.Components.Data
+@using System.Net.Http.Json
+@inject HttpClient Http
 @inject MailService_NEW MailSvc1
 @inject IJSRuntime JS
 
@@ -77,7 +79,7 @@
                             <a class="eml-attach"
                                href="#"
                                title="Apri allegato"
-                               @onclick="@(async () => await OpenAttachmentOrEmailAsync(a, mime, _email.Allegati.Select(x => x.Id).ToList()))"
+                               @onclick="@(async () => await OpenEmlPartAsync(a.Index, mime, a.IsEmailEml))"
                                @onclick:preventDefault="true">
 
                                 <span class="eml-attach-icon">
@@ -100,18 +102,35 @@
 
 @if (_showAttachmentViewer)
 {
-    <AttachmentViewerOverlay Id="@_attachmentViewerId"
+    <AttachmentViewerOverlay Id="0"
                              Src="@_attachmentViewerSrc"
-                             Ids="@_attachmentViewerIds"
+                             Ids="@(new List<int>())"
                              OnClose="@CloseAttachmentViewer" />
 }
-
 @code {
     [Parameter] public int Id { get; set; }
     [Parameter] public string? Cp { get; set; }
 
-    private EmailDetail_NEW? _email;
-    private bool _loading = true;
+    private EmlViewDto? _email;
+
+    private sealed record EmlViewDto(
+        string? Oggetto,
+        string? Mittente,
+        string? Destinatari,
+        string? Cc,
+        DateTime? Data,
+        string? CorpoHtml,
+        string? CorpoTesto,
+        List<EmlPartDto> Allegati
+    );
+
+    private sealed record EmlPartDto(
+        int Index,
+        string NomeFile,
+        string MimeType,
+        long Size,
+        bool IsEmailEml
+    ); private bool _loading = true;
 
     private bool _showAttachmentViewer;
     private int _attachmentViewerId;
@@ -124,7 +143,8 @@
 
         try
         {
-            _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
+            _email = await Http.GetFromJsonAsync<EmlViewDto>(
+                $"/api/attachments/{Id}/eml-view-data");
         }
         finally
         {
@@ -136,40 +156,6 @@
     {
         await JS.InvokeVoidAsync("history.back");
     }
-
-    private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
-    {
-        if (a.IsEmailEml && a.EmailEmlId.HasValue)
-        {
-            var url = string.IsNullOrWhiteSpace(Cp)
-                ? $"/mail-eml-view/{a.EmailEmlId.Value}"
-                : $"/mail-eml-view/{a.EmailEmlId.Value}/{Cp}";
-
-            await JS.InvokeVoidAsync("openNewTab", url);
-            return;
-        }
-
-        await OpenAttachmentAsync(a.Id, mimeType, ids);
-    }
-
-    private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
-    {
-        var mime = NormalizeMime(mimeType, null);
-
-        if (!IsPreviewableMime(mime))
-        {
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{attachmentId}/download");
-            return;
-        }
-
-        _attachmentViewerId = attachmentId;
-        _attachmentViewerSrc = null;
-        _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
-        _showAttachmentViewer = true;
-
-        StateHasChanged();
-    }
-
     private Task CloseAttachmentViewer()
     {
         _showAttachmentViewer = false;
@@ -187,6 +173,30 @@
             || mime.Equals("text/html", StringComparison.OrdinalIgnoreCase);
     }
 
+    private Task OpenEmlPartAsync(int index, string? mimeType, bool isEmailEml)
+    {
+        var mime = NormalizeMime(mimeType, null);
+
+        if (isEmailEml)
+        {
+            return JS.InvokeVoidAsync(
+                "openNewTab",
+                $"/api/attachments/{Id}/eml-part/{index}/download"
+            ).AsTask();
+        }
+
+        if (IsPreviewableMime(mime))
+        {
+            _attachmentViewerSrc = $"/api/attachments/{Id}/eml-part/{index}/inline";
+            _showAttachmentViewer = true;
+            return Task.CompletedTask;
+        }
+
+        return JS.InvokeVoidAsync(
+            "openNewTab",
+            $"/api/attachments/{Id}/eml-part/{index}/download"
+        ).AsTask();
+    }
     private static string NormalizeMime(string? mime, string? filename)
     {
         if (!string.IsNullOrWhiteSpace(mime) &&
@@ -419,7 +429,6 @@
         color: #64748b;
         box-shadow: 0 10px 25px rgba(15, 23, 42, .06);
     }
-
     @@media (max-width: 700px) {
         .eml-page {
             padding: 14px;
@@ -450,5 +459,76 @@
         .eml-iframe {
             min-height: 480px;
         }
+    }
+
+    .preview-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .65);
+        z-index: 9999;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+    }
+
+    .preview-box {
+        width: 92vw;
+        height: 90vh;
+        background: white;
+        border-radius: 14px;
+        overflow: hidden;
+        position: relative;
+    }
+
+        .preview-box iframe {
+            width: 100%;
+            height: 100%;
+            border: 0;
+        }
+
+    .preview-close {
+        position: absolute;
+        top: 10px;
+        right: 14px;
+        z-index: 2;
+    }
+
+    .eml-preview-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, .65);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .eml-preview-modal {
+        width: 92vw;
+        height: 90vh;
+        background: white;
+        border-radius: 16px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .eml-preview-close {
+        position: absolute;
+        top: 10px;
+        right: 14px;
+        z-index: 2;
+        border: 0;
+        background: #0f172a;
+        color: white;
+        border-radius: 8px;
+        padding: 6px 11px;
+        cursor: pointer;
+    }
+
+    .eml-preview-frame {
+        width: 100%;
+        height: 100%;
+        border: 0;
     }
 </style>

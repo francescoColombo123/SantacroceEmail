@@ -205,14 +205,7 @@
             <div id="editor"></div>
         </div>
 
-        <!-- Firma -->
-        @if (!string.IsNullOrEmpty(_firmaHtml))
-        {
-            <div class="firma-container" style="margin-top:10px; font-size:13px; color:#666;">
-                <hr style="border:none;border-top:1px solid #ccc;margin:8px 0;" />
-                <div>@((MarkupString)_firmaHtml)</div>
-            </div>
-        }
+        
         </div>
 
         <aside class="compose-side">
@@ -1181,7 +1174,35 @@
 
         _dotnetRef ??= DotNetObjectReference.Create(this);
 
-        await JSRuntime.InvokeVoidAsync("initQuill", "editor", _dotnetRef, bodyNow, quoteNow);
+        var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
+     ? ""
+     : $@"
+<br><br>
+<div class=""firma-mail"">
+    {_firmaHtml}
+</div>";
+
+        var separator = string.IsNullOrWhiteSpace(quoteNow)
+            ? ""
+            : @"
+<br><br>
+<div style=""border-top:1px solid #999;margin:14px 0 12px 0;height:1px;""></div>
+<br>";
+
+        var initialBody = $@"
+{bodyNow}
+{firmaPart}
+{separator}
+{quoteNow}
+";
+
+        await JSRuntime.InvokeVoidAsync(
+            "initQuill",
+            "editor",
+            _dotnetRef,
+            initialBody,
+            ""
+        );
 
         _lastInitBody = bodyNow;
         _lastInitQuote = quoteNow;
@@ -1270,13 +1291,11 @@
                     : $@"<br><br><div style=""font-family:'Courier New',Courier,monospace;"">{_firmaHtml}</div>";
 
                 var corpoHtml = $@"
-<div style=""background:#ffffff;color:#222;
-            font-family:'Courier New',Courier,monospace;
-            font-size:14px;line-height:1.5;"">
-  {userHtml}
-  {firmaPart}
-</div>";
-
+                <div style=""background:#ffffff;color:#222;
+                            font-family:'Courier New',Courier,monospace;
+                            font-size:14px;line-height:1.5;"">
+                  {_bodyHtml}
+                </div>";
                 await MailSvc.SendEmailAsync(
                     usernameOrEmail: Utente,
                     to: string.Join(";", ChipsToEmails(_toList)),

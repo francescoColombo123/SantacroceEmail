@@ -279,9 +279,10 @@
         await using var db = DbFactory.CreateDbContext();
 
         _caselle = await db.CasellePosta
-            .AsNoTracking()
-            .OrderBy(c => c.Email)
-            .ToListAsync();
+    .AsNoTracking()
+    .Where(c => c.Attiva == "Y")
+    .OrderBy(c => c.Email)
+    .ToListAsync();
 
         _abilitazioni = await db.CasellaAbilitazioni
             .AsNoTracking()

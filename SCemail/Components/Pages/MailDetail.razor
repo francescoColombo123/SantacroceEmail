@@ -1124,6 +1124,7 @@
             ".gif" => "image/gif",
             ".txt" => "text/plain",
             ".html" or ".htm" => "text/html",
+            ".eml" => "message/rfc822",
             ".doc" => "application/msword",
             ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".xls" => "application/vnd.ms-excel",
@@ -1165,12 +1166,17 @@
 
     private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
     {
-        if (a.IsEmailEml && a.EmailEmlId.HasValue)
-        {
-            var url = string.IsNullOrWhiteSpace(Cp)
-                ? $"/mail-eml-view/{a.EmailEmlId.Value}"
-                : $"/mail-eml-view/{a.EmailEmlId.Value}/{Cp}";
+        var nome = a.NomeFile ?? "";
+        var mime = NormalizeMime(mimeType, nome);
 
+        var isEml =
+            a.IsEmailEml ||
+            nome.EndsWith(".eml", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mime, "message/rfc822", StringComparison.OrdinalIgnoreCase);
+
+        if (isEml)
+        {
+            var url = $"/mail-eml-view/{a.Id}";
             await JS.InvokeVoidAsync(
                 "open",
                 url,
@@ -1181,9 +1187,8 @@
             return;
         }
 
-        await OpenAttachmentAsync(a.Id, mimeType, ids);
+        await OpenAttachmentAsync(a.Id, mime, ids);
     }
-
     private Task CloseAttachmentViewer()
     {
         _showAttachmentViewer = false;

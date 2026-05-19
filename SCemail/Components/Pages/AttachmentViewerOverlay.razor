@@ -348,17 +348,23 @@
         }
     }
 
-    private string _inlineUrl => _currentMeta is null
-        ? ""
-        : _isSent
-            ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
-            : $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
+    private string _inlineUrl =>
+    !string.IsNullOrWhiteSpace(Src) && Id == 0
+        ? Src
+        : _currentMeta is null
+            ? ""
+            : _isSent
+                ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
+                : $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
 
-    private string _downloadUrl => _currentMeta is null
-        ? ""
-        : _isSent
-            ? $"/api/attachments/{_currentMeta.Id}/downloadInternal{_querySuffix}"
-            : $"/api/attachments/{_currentMeta.Id}/download{_querySuffix}";
+    private string _downloadUrl =>
+     !string.IsNullOrWhiteSpace(Src) && Id == 0
+         ? Src
+         : _currentMeta is null
+             ? ""
+             : _isSent
+                 ? $"/api/attachments/{_currentMeta.Id}/downloadInternal{_querySuffix}"
+                 : $"/api/attachments/{_currentMeta.Id}/download{_querySuffix}";
 
     protected override async Task OnParametersSetAsync()
     {
@@ -377,6 +383,22 @@
 
     private async Task LoadContextAsync(int attachmentId)
     {
+        if (!string.IsNullOrWhiteSpace(Src) && Id == 0)
+        {
+            _attachments = new()
+            {
+                new AttachmentMetaDto(
+                    0,
+                    "Anteprima allegato",
+                    GuessMimeFromSrc(Src)
+                )
+            };
+
+            _currentIndex = 0;
+            _currentMeta = _attachments[0];
+            _loading = false;
+            return;
+        }
         _loading = true;
         _error = null;
         _attachments = new();
@@ -413,6 +435,25 @@
         {
             _loading = false;
         }
+    }
+
+    private static string GuessMimeFromSrc(string src)
+    {
+        src = src.ToLowerInvariant();
+
+        if (src.Contains(".pdf") || src.Contains("/inline"))
+            return "application/pdf";
+
+        if (src.Contains(".png"))
+            return "image/png";
+
+        if (src.Contains(".jpg") || src.Contains(".jpeg"))
+            return "image/jpeg";
+
+        if (src.Contains(".gif"))
+            return "image/gif";
+
+        return "application/octet-stream";
     }
 
     private async Task GoPrevious()

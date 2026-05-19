@@ -67,6 +67,13 @@ namespace SCemail.Components.Data
         string? Aperto
     );
 
+    public class AttachmentFileResult
+    {
+        public int Id { get; set; }
+        public string NomeFile { get; set; } = "";
+        public string FullPath { get; set; } = "";
+        public string MimeType { get; set; } = "";
+    }
     public class MailService
     {
         private readonly HttpClient _http;

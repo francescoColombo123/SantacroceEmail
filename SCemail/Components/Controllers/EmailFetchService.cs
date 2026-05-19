@@ -648,8 +648,13 @@ RETURNING ID INTO :p_id";
         if (subject.Length > 1000) subject = subject[..1000];
 
         cmd.Parameters.Add("p_subj", OracleDbType.Varchar2, 1000).Value = subject;
-        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value = (object?)message.HtmlBody ?? DBNull.Value;
-        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value = (object?)message.TextBody ?? DBNull.Value;
+
+        var effectiveBody = ExtractEffectiveBody(message);
+        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value =
+    (object?)effectiveBody.Html ?? DBNull.Value;
+
+        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value =
+            (object?)effectiveBody.Text ?? DBNull.Value;
         cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value = fp;
         cmd.Parameters.Add("p_uid", OracleDbType.Int64).Value = (object?)messageUid ?? DBNull.Value;
 
@@ -915,8 +920,21 @@ RETURNING ID INTO :p_id";
         cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = embedded.Cc?.ToString() ?? "";
         cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = embedded.Bcc?.ToString() ?? "";
         cmd.Parameters.Add("p_subj", OracleDbType.Varchar2, 1000).Value = subject;
-        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value = (object?)embedded.HtmlBody ?? DBNull.Value;
-        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value = (object?)embedded.TextBody ?? DBNull.Value;
+        string? htmlBody = embedded.HtmlBody;
+        string? textBody = embedded.TextBody;
+
+        // fallback solo se entrambi null
+        if (string.IsNullOrWhiteSpace(htmlBody) &&
+            string.IsNullOrWhiteSpace(textBody))
+        {
+            textBody = embedded.Body?.ToString();
+        }
+
+        cmd.Parameters.Add("p_html", OracleDbType.Clob).Value =
+            (object?)htmlBody ?? DBNull.Value;
+
+        cmd.Parameters.Add("p_text", OracleDbType.Clob).Value =
+            (object?)textBody ?? DBNull.Value;
 
         cmd.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value =
             $"EML_ATTACHMENT:{parentEmailId}:{parentAllegatoId}";
@@ -2867,6 +2885,11 @@ SELECT a.ID AS ALLEGATO_ID,
     Stream fs,
     CancellationToken ct)
     {
+        // se questa email è già una .eml importata, non importare altri .eml dentro
+        // così eviti il loop infinito
+        if (await IsImportedEmlAsync(conn, emailId, ct))
+            return;
+
         MimeMessage? embeddedMessage = null;
 
         if (entity is MessagePart msgPart)
@@ -2886,6 +2909,20 @@ SELECT a.ID AS ALLEGATO_ID,
             embeddedMessage = await MimeMessage.LoadAsync(fs, ct);
         }
 
+        if (embeddedMessage == null)
+            return;
+
+        // evita caso in cui l'eml interno sia uguale alla mail padre
+        var parentMid = await GetEmailMessageIdAsync(conn, emailId, ct);
+        var embeddedMid = NormalizeMessageId(embeddedMessage.MessageId);
+
+        if (!string.IsNullOrWhiteSpace(parentMid) &&
+            !string.IsNullOrWhiteSpace(embeddedMid) &&
+            string.Equals(parentMid, embeddedMid, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         var embeddedEmailId = await SaveEmbeddedEmailAsync(
             conn,
             casellaId,
@@ -2895,14 +2932,13 @@ SELECT a.ID AS ALLEGATO_ID,
             ct
         );
 
-        // salva metadata allegati della mail embedded
         var embeddedAttachments = await SaveAttachmentsMetadata(
-       conn,
-       embeddedEmailId,
-       null,
-       embeddedMessage,
-       ct
-   );
+            conn,
+            embeddedEmailId,
+            null,
+            embeddedMessage,
+            ct
+        );
 
         await DownloadEmbeddedAttachmentsAsync(
             conn,
@@ -2912,6 +2948,7 @@ SELECT a.ID AS ALLEGATO_ID,
             embeddedMessage,
             ct
         );
+
         await MarkAttachmentAsEmailAsync(conn, allegatoId, embeddedEmailId, ct);
     }
 
@@ -3070,5 +3107,116 @@ UPDATE SGAPP.EMAIL_RICEVUTE
                 }
             }
         }
+    }
+
+    private static (string? Html, string? Text) ExtractEffectiveBody(MimeMessage message)
+    {
+        var html = message.HtmlBody;
+        var text = message.TextBody;
+
+        // HTML
+        if (!string.IsNullOrWhiteSpace(html))
+        {
+            html = CleanPecWrapper(html);
+
+            if (!string.IsNullOrWhiteSpace(html))
+                return (html, null);
+        }
+
+        // TESTO
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            text = CleanPecWrapper(text);
+
+            if (!string.IsNullOrWhiteSpace(text))
+                return (null, text);
+        }
+
+        return (html, text);
+    }
+
+    private static string CleanPecWrapper(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return body;
+
+        var markers = new[]
+        {
+        "Messaggio di posta certificata",
+        "Certified mail message"
+    };
+
+        foreach (var marker in markers)
+        {
+            var idx = body.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+
+            if (idx >= 0)
+            {
+                // cerca il vero contenuto dopo il wrapper PEC
+                var fromIdx = body.IndexOf("From:", idx, StringComparison.OrdinalIgnoreCase);
+
+                if (fromIdx < 0)
+                    fromIdx = body.IndexOf("Da:", idx, StringComparison.OrdinalIgnoreCase);
+
+                if (fromIdx >= 0)
+                {
+                    return body.Substring(fromIdx).Trim();
+                }
+            }
+        }
+
+        return body;
+    }
+
+    private static bool IsPecWrapperBody(string? html, string? text)
+    {
+        var body = ((html ?? "") + " " + (text ?? "")).Trim();
+
+        if (string.IsNullOrWhiteSpace(body))
+            return false;
+
+        return body.Contains("Messaggio di posta certificata", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("Certified mail message", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("Il messaggio originale è incluso in allegato", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("The original message is included as an attachment", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("postacert.eml", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("daticert.xml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<bool> IsImportedEmlAsync(
+    OracleConnection conn,
+    int emailId,
+    CancellationToken ct)
+    {
+        const string sql = @"
+SELECT NVL(IS_EML_IMPORTATA, 'N')
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE ID = :p_id";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId;
+
+        var obj = await cmd.ExecuteScalarAsync(ct);
+
+        return obj != null &&
+               obj != DBNull.Value &&
+               obj.ToString() == "Y";
+    }
+
+    private static async Task<string?> GetEmailMessageIdAsync(
+        OracleConnection conn,
+        int emailId,
+        CancellationToken ct)
+    {
+        const string sql = @"
+SELECT LOWER(MESSAGE_ID)
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE ID = :p_id";
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId;
+
+        var obj = await cmd.ExecuteScalarAsync(ct);
+        return obj == null || obj == DBNull.Value ? null : obj.ToString();
     }
 }

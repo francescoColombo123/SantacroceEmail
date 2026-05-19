@@ -31,6 +31,7 @@ namespace SCemail.Components.Data
         private readonly string _connectionString;
         private readonly IConfiguration _config;
         private readonly IOptions<AttachmentsOptions> _attachmentsOpt;
+        private readonly string _attachmentsBasePath;
         public MailService_NEW(
             IDbContextFactory<MailDbContext> dbFactory,
             ILogger<MailService_NEW> logger,
@@ -47,6 +48,9 @@ namespace SCemail.Components.Data
                 ?? throw new InvalidOperationException("Connection string 'OracleDb' mancante nel file di configurazione.");
             _accessiService = accessiService;
             _attachmentsOpt = attachmentsOpt;
+            _attachmentsBasePath = _config.GetValue<string>("Attachments:BasePath")
+        ?? Path.Combine(AppContext.BaseDirectory, "attachments");
+
         }
 
         public async Task<List<string>> GetEmailAddressesByIdsAsync(List<int> ids)
@@ -3893,6 +3897,7 @@ ORDER BY s.ORDINE, s.NOME";
             await db.SaveChangesAsync();
         }
 
+        
         public async Task SegnaNotificheVisteAsync(int emailId, string utente)
         {
             using var db = await _dbFactory.CreateDbContextAsync();
