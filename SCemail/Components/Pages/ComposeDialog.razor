@@ -259,7 +259,39 @@
                 }
             </div>
         }
-            </aside>
+
+        @if (_forwardedAttachments.Any())
+        {
+            <div class="gmail-attachments-list">
+                @foreach (var f in _forwardedAttachments)
+                {
+                    <div class="gmail-attachment-row">
+                        <div class="gmail-attachment-left">
+                            <div class="gmail-attachment-icon">
+                                <MudIcon Icon="@GetAttachmentIcon(f.FileName)" Size="Size.Medium" />
+                            </div>
+
+                            <div class="gmail-attachment-info">
+                                <div class="gmail-attachment-name" title="@f.FileName">
+                                    @f.FileName
+                                </div>
+                                <div class="gmail-attachment-size">
+                                    Allegato originale
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="gmail-attachment-actions">
+                            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                            Color="Color.Default"
+                                            Size="Size.Small"
+                                            OnClick="@(() => RemoveForwardedAttachment(f))" />
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        </aside>
         </div>
 
         @if (_pending is not null)
@@ -322,8 +354,8 @@
         </MudButton>
 
         <MudButton OnClick="CloseAndSaveDraft"
-                Variant="Variant.Text"
-                   Disabled="_uploadingAttachments">
+                   Variant="Variant.Text"
+                   Disabled="IsBusy">
             Chiudi
         </MudButton>
         @if (DraftId.HasValue)
@@ -826,6 +858,8 @@
 
 @code {
 
+
+
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
     [Parameter] public string Utente { get; set; } = default!;
     [Parameter] public string? Destinatari { get; set; }
@@ -837,9 +871,12 @@
     [Parameter] public string? ThreadKey { get; set; }
     [Parameter] public string? Cc { get; set; }
     [Parameter] public string? Bcc { get; set; }
-    [Parameter] public long? DraftId { get; set; }   // ✅ ID bozza se esistente
+    [Parameter] public long? DraftId { get; set; }   
+    [Parameter] public bool IsForward { get; set; }
+    [Parameter] public List<MailService_NEW.OutgoingAttachment_NEW>? ForwardAttachments { get; set; }
     private bool _showCc;
     private bool _showBcc;
+    private string? _lastInitFirma = "";
     private async Task FocusBackToField(string id)
     {
         // Chiamata diretta JS: focus su un input specifico
@@ -864,7 +901,7 @@
 
     private readonly List<IBrowserFile> _attachments = new();
     private readonly List<MailService_NEW.OutgoingAttachment_NEW> _outgoing = new();
-
+    private readonly List<MailService_NEW.OutgoingAttachment_NEW> _forwardedAttachments = new();
     private ElementReference _dropZoneRef;
     private DotNetObjectReference<ComposeDialog>? _dotnetRef;
     private bool _uploadingAttachments = false;
@@ -925,30 +962,33 @@
         _showBcc = _bccList.Any();
         _composeSubject = Oggetto ?? string.Empty;
 
-        if (!string.IsNullOrWhiteSpace(_selectedCasella))
+        await LoadFirmaAsync();
+        _pendingQuillInit = true;
+        _quillInitialized = false;
+        if (IsForward && ForwardAttachments is not null && ForwardAttachments.Any())
         {
-            try
+            foreach (var a in ForwardAttachments)
             {
-                _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Errore caricamento firma iniziale per {Utente} e casella {Casella}", Utente, _selectedCasella);
-                _firmaHtml = null;
+                if (!_outgoing.Any(x => x.FileName.Equals(a.FileName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _outgoing.Add(a);
+                    _forwardedAttachments.Add(a);
+                }
             }
         }
-        else
-        {
-            _firmaHtml = null;
-        }
-
         if (DraftId.HasValue)
         {
             _bodyHtml = CorpoIniziale ?? "";
             _quoteHtml = "";
         }
+        else if (IsForward)
+        {
+            _bodyHtml = "";
+            _quoteHtml = FormatForwardQuoteHtml(CorpoIniziale);
+        }
         else
         {
+            _bodyHtml = "";
             _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
         }
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
@@ -962,7 +1002,41 @@
     private string? _toInput;
     private string? _ccInput;
     private string? _bccInput;
+    private static string FormatForwardQuoteHtml(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return "";
 
+        var s = WebUtility.HtmlDecode(input)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("&nbsp;", " ");
+
+        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*div\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<[^>]+>", "");
+
+        s = Regex.Replace(
+            s,
+            @"[-]{5,}\s*Messaggio inoltrato\s*[-]{5,}",
+            "---------- Messaggio inoltrato ----------",
+            RegexOptions.IgnoreCase
+        );
+
+        s = Regex.Replace(s, @"(?i)(?<!\p{L})(Da|Data|Oggetto|A|Cc)\s*:", "\n$1: ");
+
+        s = Regex.Replace(s, @"[ \t]+", " ");
+        s = Regex.Replace(s, @" *\n *", "\n");
+        s = Regex.Replace(s, @"\n{3,}", "\n\n");
+
+        return WebUtility.HtmlEncode(s.Trim())
+            .Replace("\n\n", "<br><br>")
+            .Replace("\n", "<br>");
+    }
     private void RemoveRecipient(List<RecipientChip> list, RecipientChip chip)
     {
         if (list.Contains(chip))
@@ -971,30 +1045,49 @@
             StateHasChanged();
         }
     }
+    
     private async Task OnCasellaChanged(string? value)
     {
         _selectedCasella = value;
 
+        await LoadFirmaAsync();
+
+        _pendingQuillInit = true;
+        _quillInitialized = false;
+
+        await InvokeAsync(StateHasChanged);
+    }
+    private async Task LoadFirmaAsync()
+    {
+        _firmaHtml = "";
+
         if (string.IsNullOrWhiteSpace(_selectedCasella))
-        {
-            _firmaHtml = null;
-            StateHasChanged();
             return;
-        }
 
         try
         {
             _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+            Logger.LogWarning("FIRMA DEBUG: [{Firma}]", _firmaHtml);
+            Logger.LogInformation(
+                "Firma caricata: Utente={Utente}, Casella={Casella}, Lunghezza={Length}",
+                Utente,
+                _selectedCasella,
+                _firmaHtml?.Length ?? 0
+            );
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Errore caricamento firma per {Utente} e casella {Casella}", Utente, _selectedCasella);
-            _firmaHtml = null;
-            Snackbar.Add("Errore nel caricamento della firma.", Severity.Warning);
-        }
+            Logger.LogError(
+                ex,
+                "Errore caricamento firma: Utente={Utente}, Casella={Casella}",
+                Utente,
+                _selectedCasella
+            );
 
-        StateHasChanged();
+            _firmaHtml = "";
+        }
     }
+
     private async Task StartUndoableAction(
      PendingActionKind kind,
      string label,
@@ -1149,7 +1242,6 @@
                      .Take(10);
     }
 
-
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -1157,66 +1249,88 @@
             await JSRuntime.InvokeVoidAsync("initFileDropZone", _dropZoneRef);
 
             _dotnetRef ??= DotNetObjectReference.Create(this);
-            await JSRuntime.InvokeVoidAsync("registerComposeAutoSaveClose", _dotnetRef);
+
+            await JSRuntime.InvokeVoidAsync(
+                "registerComposeAutoSaveClose",
+                _dotnetRef
+            );
         }
 
         if (!_pendingQuillInit)
             return;
 
-        var bodyNow = _bodyHtml ?? "";
-        var quoteNow = _quoteHtml ?? "";
+        var bodyNow = DraftId.HasValue
+            ? (_bodyHtml ?? "")
+            : "<p><br></p>";
 
-        // ✅ NON saltare l’inizializzazione la prima volta
-        if (_quillInitialized && bodyNow == _lastInitBody && quoteNow == _lastInitQuote)
+        var quoteNow = !string.IsNullOrWhiteSpace(_quoteHtml)
+            ? _quoteHtml
+            : RemoveQuoteGarbage(CorpoIniziale ?? "");
+
+        var firmaText = _firmaHtml ?? "";
+
+        if (string.IsNullOrWhiteSpace(firmaText) &&
+            !string.IsNullOrWhiteSpace(_selectedCasella))
         {
-            _pendingQuillInit = false;
-            return;
+            await LoadFirmaAsync();
+            firmaText = _firmaHtml ?? "";
+        }
+        if (string.IsNullOrWhiteSpace(firmaText) &&
+            !string.IsNullOrWhiteSpace(_selectedCasella))
+        {
+            firmaText = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+            _firmaHtml = firmaText;
+
+            Logger.LogWarning(
+                "FIRMA FORZATA IN ON_AFTER_RENDER: [{Firma}]",
+                firmaText
+            );
         }
 
+        Logger.LogWarning(
+            "INIT QUILL DEBUG - BodyLen={BodyLen}, FirmaLen={FirmaLen}, QuoteLen={QuoteLen}, Firma=[{Firma}]",
+            bodyNow?.Length ?? 0,
+            firmaText?.Length ?? 0,
+            quoteNow?.Length ?? 0,
+            firmaText
+        );
+
         _dotnetRef ??= DotNetObjectReference.Create(this);
-
-
-
-        var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
-
-     ? ""
-
-     : $@"
-<br><br>
-<div class=""firma-mail"">
-    {FixFirmaHtml(_firmaHtml)}
-</div>";
-
-        var separator = string.IsNullOrWhiteSpace(quoteNow)
-      ? ""
-      : @"
-<br><br>
-<div style=""font-family:'Courier New',Courier,monospace;color:#666;margin:14px 0 12px 0;"">
-------------------------------
-</div>
-<br>";
-
-        var initialBody = $@"
-{bodyNow}
-{firmaPart}
-{separator}
-{quoteNow}
-";
 
         await JSRuntime.InvokeVoidAsync(
             "initQuill",
             "editor",
             _dotnetRef,
-            initialBody,
-            ""
+            bodyNow,
+            firmaText,
+            quoteNow
         );
 
         _lastInitBody = bodyNow;
         _lastInitQuote = quoteNow;
-        _quillInitialized = true;      // ✅ segnalo che ormai esiste
+        _lastInitFirma = firmaText;
+
+        _quillInitialized = true;
         _pendingQuillInit = false;
     }
+    
+    private static string NormalizeFirmaHtml(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
 
+        var s = html.Trim();
+
+        s = Regex.Replace(s, @"<\s*hr[^>]*>", "<br>------------------------------<br>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<\s*/?\s*small[^>]*>", "", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<\s*div[^>]*>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<\s*/\s*div\s*>", "<br>", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
+
+        return s.Trim();
+    }
 
     [JSInvokable]
     public void UpdateBodyHtml(string html) => _bodyHtml = html;
@@ -1291,12 +1405,6 @@
 
                 var fromAddress = _selectedCasella ?? await MailSvc.GetEmailAddressByUsernameAsync(Utente);
 
-                var userHtml = _bodyHtml ?? "";
-
-                var firmaPart = string.IsNullOrWhiteSpace(_firmaHtml)
-                    ? ""
-                    : $@"<br><br><div style=""font-family:'Courier New',Courier,monospace;"">{_firmaHtml}</div>";
-
                 var corpoHtml = FixFirmaHtml(_bodyHtml ?? "");
                 await MailSvc.SendEmailAsync(
                     usernameOrEmail: Utente,
@@ -1353,9 +1461,6 @@
             await SafeDestroyEditor();
 
             MudDialog.Close(DialogResult.Ok("draft"));
-
-            await Task.Delay(200);
-            Nav.NavigateTo(Nav.Uri, forceLoad: true);
         }
         catch (Exception ex)
         {
@@ -1374,34 +1479,113 @@
         return ParseAddressToChip(raw);
     }
     private long? _draftId;
+
+
+
     private static string RemoveQuoteGarbage(string? input)
+
     {
+
         if (string.IsNullOrWhiteSpace(input))
+
             return "";
 
-        var s = WebUtility.HtmlDecode(input).Replace("\r\n", "\n");
 
-        bool looksHtml = Regex.IsMatch(s, @"</?\w+[^>]*>", RegexOptions.IgnoreCase);
 
-        if (!looksHtml)
-            s = WebUtility.HtmlEncode(s).Replace("\n", "<br>");
+        var s = WebUtility.HtmlDecode(input)
 
-        return s.Trim();
+            .Replace("\r\n", "\n")
+
+            .Replace("\r", "\n")
+
+            .Replace("&nbsp;", " ");
+
+
+
+        // tag che diventano righe
+
+        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"</\s*div\s*>", "\n", RegexOptions.IgnoreCase);
+
+
+
+        // elimina blocchi tecnici
+
+        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<img\b[^>]*>", "", RegexOptions.IgnoreCase);
+
+
+
+        // elimina tutti i tag rimasti
+
+        s = Regex.Replace(s, @"<[^>]+>", "");
+
+
+
+        // elimina CSS Outlook/Word visibile
+
+        s = Regex.Replace(s, @"(?im)^\s*v\\?:\*\s*\{[^}]*\}\s*$", "");
+
+        s = Regex.Replace(s, @"(?im)^\s*o\\?:\*\s*\{[^}]*\}\s*$", "");
+
+        s = Regex.Replace(s, @"(?im)^\s*w\\?:\*\s*\{[^}]*\}\s*$", "");
+
+        s = Regex.Replace(s, @"(?im)^\s*\.shape\s*\{[^}]*\}\s*$", "");
+
+
+
+        // elimina descrizioni automatiche e residui
+
+        s = Regex.Replace(s, @"(?i)Immagine che contiene.*", "");
+
+        s = Regex.Replace(s, @"(?i)Descrizione generata automaticamente.*", "");
+
+        s = s.Replace("\">", "");
+
+
+
+        // pulizia spazi
+
+        s = Regex.Replace(s, @"[ \t]+", " ");
+
+        s = Regex.Replace(s, @" *\n *", "\n");
+
+        s = Regex.Replace(s, @"\n{3,}", "\n\n");
+
+
+
+        s = s.Trim();
+
+
+
+        // ricrea HTML pulito
+
+        return WebUtility.HtmlEncode(s)
+
+            .Replace("\n\n", "<br><br>")
+
+            .Replace("\n", "<br>");
+
     }
-
     private static string FixFirmaHtml(string html)
     {
         if (string.IsNullOrWhiteSpace(html))
             return html;
 
-        html = Regex.Replace(
+        return Regex.Replace(
             html,
-            @"GRUPPO\s+SANTACROCE",
-            @"<span style=""color:#1a73e8;font-weight:700;font-style:italic;"">GRUPPO SANTACROCE</span>",
+            @"\b(GRUPPO\s+SANTACROCE|EUROCEREALI\s+SRL)\b",
+            @"<span style=""color:#003366;font-weight:700;font-style:italic;"">$1</span>",
             RegexOptions.IgnoreCase
         );
-
-        return html;
     }
 
     private async Task SaveDraft()
@@ -1509,6 +1693,16 @@
         StateHasChanged();
     }
 
+    private void RemoveForwardedAttachment(MailService_NEW.OutgoingAttachment_NEW file)
+    {
+        _forwardedAttachments.Remove(file);
+
+        _outgoing.RemoveAll(x =>
+            string.Equals(x.FileName, file.FileName, StringComparison.OrdinalIgnoreCase));
+
+        Snackbar.Add($"Rimosso {file.FileName}", Severity.Info);
+        StateHasChanged();
+    }
     public record RecipientChip(string Email, string? Name)
     {
         public string NameOrEmail => string.IsNullOrWhiteSpace(Name) ? Email : Name;
@@ -1797,14 +1991,22 @@
             _bodyHtml = CorpoIniziale ?? "";
             _quoteHtml = "";
         }
+        else if (IsForward)
+        {
+            _bodyHtml = "";
+            _quoteHtml = FormatForwardQuoteHtml(CorpoIniziale);
+        }
         else
         {
-            _bodyHtml ??= "";
+            _bodyHtml = "";
             _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
         }
 
-        _pendingQuillInit = true;
+        if (!_quillInitialized)
+            _pendingQuillInit = true;
     }
+
+
     private static string NormalizeEmailValue(string? value)
     {
         return (value ?? "").Trim();

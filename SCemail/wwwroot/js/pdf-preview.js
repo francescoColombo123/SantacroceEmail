@@ -1,6 +1,5 @@
 ﻿window.pdfPreview = {
-    render: async function (canvasId, url) {
-        // qui ora DEVE esistere
+    renderAllPages: async function (containerId, url) {
         if (typeof pdfjsLib === "undefined") {
             console.error("pdfjsLib undefined: legacy build not loaded");
             return;
@@ -8,21 +7,40 @@
 
         pdfjsLib.GlobalWorkerOptions.workerSrc = window.pdfjsWorkerSrc;
 
-        const canvas = document.getElementById(canvasId);
-        if (!canvas) return;
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        container.innerHTML = "";
 
         const pdf = await pdfjsLib.getDocument(url).promise;
-        const page = await pdf.getPage(1);
 
-        const viewport = page.getViewport({ scale: 1.4 });
-        const ctx = canvas.getContext("2d");
+        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+            const page = await pdf.getPage(pageNumber);
 
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
+            const viewport = page.getViewport({ scale: 1.4 });
 
-        await page.render({ canvasContext: ctx, viewport }).promise;
+            const canvas = document.createElement("canvas");
+            const ctx = canvas.getContext("2d");
+
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            canvas.style.maxWidth = "100%";
+            canvas.style.height = "auto";
+            canvas.style.background = "#fff";
+            canvas.style.boxShadow = "0 4px 12px rgba(15,23,42,.12)";
+            canvas.style.borderRadius = "10px";
+
+            container.appendChild(canvas);
+
+            await page.render({
+                canvasContext: ctx,
+                viewport: viewport
+            }).promise;
+        }
     }
 };
+
 window.attachmentViewer = {
     _handler: null,
 

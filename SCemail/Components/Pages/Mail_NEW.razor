@@ -77,14 +77,14 @@ else
 
                         </li>
 
-                        <li @onclick="@(() => ChangeFolder("mailfollowed"))"
-                            class="@IsActive("mailfollowed")">
-                            <MudTooltip Text="Mail seguite" Placement="Placement.Right">
-                                <MudIcon Icon="@Icons.Material.Filled.Visibility" />
-                            </MudTooltip>
-                        </li>
+                        
                     }
-
+                    <li @onclick="@(() => ChangeFolder("mailfollowed"))"
+                        class="@IsActive("mailfollowed")">
+                        <MudTooltip Text="Mail seguite" Placement="Placement.Right">
+                            <MudIcon Icon="@Icons.Material.Filled.Visibility" />
+                        </MudTooltip>
+                    </li>
                     @foreach (var f in _folders)
                     {
                         <li @onclick="@(() => ChangeFolder(f.UiName))"

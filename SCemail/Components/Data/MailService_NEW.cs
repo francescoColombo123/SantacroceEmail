@@ -1208,6 +1208,14 @@ WHERE NOT EXISTS (
 
                 foreach (var vecchioUtente in vecchiUtenti)
                 {
+                    // Se ho scelto "Segui", NON archivio chi sta eseguendo l’assegnazione
+                    if (keepExecutorUnarchived &&
+                        !string.IsNullOrWhiteSpace(eseguitoDa) &&
+                        vecchioUtente.Equals(eseguitoDa, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     await using var cmdArch = new OracleCommand(sqlInsertArchivio, conn)
                     {
                         BindByName = true,
@@ -1225,9 +1233,6 @@ WHERE NOT EXISTS (
                 if (keepExecutorUnarchived && !string.IsNullOrWhiteSpace(eseguitoDa))
                 {
                     await EnsureEmailSeguitaTxAsync(conn, tx, emailId, eseguitoDa, ct);
-
-                    foreach (var oldUser in vecchiUtenti)
-                        await EnsureEmailSeguitaTxAsync(conn, tx, emailId, oldUser, ct);
                 }
 
                 const string sqlDeleteOldAssignments = @"
@@ -3239,60 +3244,60 @@ ORDER BY s.ORDINE, s.NOME";
             }
         }
 
-        public async Task<string> GetFirmaUtenteAsync(string username, string emailCasella, CancellationToken ct = default)
+        public async Task<string> GetFirmaUtenteAsync(
+    string username,
+    string emailCasella,
+    CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
 
+            var emailNorm = (emailCasella ?? "").Trim().ToLower();
+            var usernameNorm = (username ?? "").Trim().ToLower();
+
             var casella = await db.CasellePosta
                 .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Email == emailCasella, ct);
+                .FirstOrDefaultAsync(c => c.Email.ToLower() == emailNorm, ct);
 
             if (casella == null)
-                throw new Exception($"Nessuna casella trovata con email {emailCasella}.");
+                return "";
 
             var abilitazione = await db.CasellaAbilitazioni
                 .AsNoTracking()
-                .FirstOrDefaultAsync(a => a.Username == username && a.CasellaId == casella.Id, ct);
+                .FirstOrDefaultAsync(a =>
+                    a.Username.ToLower() == usernameNorm &&
+                    a.CasellaId == casella.Id, ct);
 
             if (abilitazione == null)
-                throw new Exception($"L'utente {username} non è abilitato sulla casella {emailCasella}.");
+                return "";
 
-            var nome = abilitazione.Nome?.Trim() ?? "";
-            var titolo = abilitazione.Titolo?.Trim() ?? "";
-            var recapito = abilitazione.Recapito?.Trim() ?? "";
+            var nome = abilitazione.Nome?.Trim();
+            var titolo = abilitazione.Titolo?.Trim();
+            var recapito = abilitazione.Recapito?.Trim();
+            var firmaDefault = casella.FirmaDefault?.Trim();
 
-            var styleBase = "font-family:'Segoe UI', Arial, sans-serif; font-size:13px; color:#000000;";
-            var smallStyle = "font-size:12px; color:#333333;";
-            var corporateStyle = "font-size:13px; font-style:italic; color:#004080;";
+            var righe = new List<string>
+                {
+                    "",
+                    "Cordiali saluti."
+                };
 
-            var firma = $@"
-            <div style='{styleBase}'>
-            <br/>
-            Cordiali saluti.<br/>
-            <b>{System.Net.WebUtility.HtmlEncode(nome)}</b><br/>
-            {(string.IsNullOrWhiteSpace(titolo) ? "" : $"{System.Net.WebUtility.HtmlEncode(titolo)}<br/>")}
-            {(string.IsNullOrWhiteSpace(recapito) ? "" : $"<small style='{smallStyle}'>{System.Net.WebUtility.HtmlEncode(recapito)}</small><br/>")}
-            ";
+            if (!string.IsNullOrWhiteSpace(nome))
+                righe.Add(nome);
 
-            if (!string.IsNullOrWhiteSpace(casella.FirmaDefault))
+            if (!string.IsNullOrWhiteSpace(titolo))
+                righe.Add(titolo);
+
+            if (!string.IsNullOrWhiteSpace(recapito))
+                righe.Add(recapito);
+
+            if (!string.IsNullOrWhiteSpace(firmaDefault))
             {
-                var firmaDefaultHtml = System.Net.WebUtility.HtmlEncode(casella.FirmaDefault)
-                    .Replace("\r\n", "<br/>")
-                    .Replace("\n", "<br/>")
-                    .Replace("\r", "<br/>");
-
-                firma += $@"
-<br/>
-<div style='{corporateStyle}'>
-    {firmaDefaultHtml}
-</div>";
+                righe.Add("");
+                righe.Add($@"<span style=""color:#004080;font-weight:bold;"">{firmaDefault}</span>");
             }
 
-            firma += "<br/><hr style='border:none; border-top:1px solid #cccccc; margin-top:6px;'/></div>";
-
-            return firma;
+            return string.Join("\n", righe);
         }
-
 
         private async Task<CasellaPosta?> GetCasellaAsync(int casellaId, CancellationToken ct = default)
         {
@@ -4321,7 +4326,10 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
         {
             using var conn = new OracleConnection(_connectionString);
             await conn.OpenAsync();
-
+            if (casellaIds == null || casellaIds.Count == 0)
+            {
+                return (new List<EmailListItem_NEW>(), 0);
+            }
             var w = (word ?? "").Trim();
             var a = (address ?? "").Trim();
 
@@ -5450,7 +5458,11 @@ WHERE e.ID = :p_email_id
                 throw;
             }
         }
+
+      
+
     }
+
 
 
 

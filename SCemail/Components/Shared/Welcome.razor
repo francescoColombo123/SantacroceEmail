@@ -21,6 +21,7 @@
     private int _nuoveDaLeggereCount;
 
     private int _seguiteCount;
+    private int _seguiteDaLeggereCount;
     private int _mentionsCount;
     private int _taskApertiCount;
 
@@ -231,11 +232,21 @@
             );
 
             _seguiteCount = totalSeguite;
+            _seguiteDaLeggereCount = await db.EmailSeguite
+                .AsNoTracking()
+                .Where(s =>
+                    s.Utente != null &&
+                    s.Utente.ToLower() == utenteNorm &&
+                    s.Letto == "N")
+                .Select(s => s.EmailId)
+                .Distinct()
+                .CountAsync();
         }
         catch
         {
             _seguiteCount = 0;
         }
+
 
         // =========================================================
         // MENZIONI - STESSA LOGICA DELLA PAGINA
@@ -462,8 +473,21 @@ string.IsNullOrWhiteSpace(_cp)
                 <div class="summary-label">E-mail seguite</div>
                 <div class="summary-value">@_seguiteCount</div>
             </div>
+
             <div class="summary-right single">
-                monitoraggio conversazioni seguite
+                @if (_seguiteDaLeggereCount > 0)
+                {
+                    <span class="new-badge">
+                        <span class="new-dot"></span>
+                        <span>@_seguiteDaLeggereCount seguite da leggere</span>
+                    </span>
+                }
+                else
+                {
+                    <span class="new-badge muted">
+                        nessuna seguita da leggere
+                    </span>
+                }
             </div>
         </div>
 

@@ -89,7 +89,7 @@
                     else if (_isPdf)
                     {
                         <div class="attov-preview-wrap attov-pdf-wrap">
-                            <canvas id="pdfCanvasOverlay" class="attov-pdf-canvas"></canvas>
+                            <div id="pdfPagesContainerOverlay" class="attov-pdf-pages"></div>
                         </div>
                     }
                     else
@@ -247,6 +247,22 @@
         padding: 16px;
     }
 
+    .attov-pdf-pages {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+    }
+
+    .attov-pdf-pages canvas {
+        max-width: 100%;
+        height: auto;
+        background: #fff;
+        box-shadow: 0 4px 12px rgba(15,23,42,.12);
+        border-radius: 10px;
+    }
+
     .attov-pdf-canvas {
         max-width: 100%;
         background: #fff;
@@ -377,7 +393,7 @@
         if (_currentMeta is not null && _isPdf && _lastRenderedPdfId != _currentMeta.Id)
         {
             _lastRenderedPdfId = _currentMeta.Id;
-            await JS.InvokeVoidAsync("pdfPreview.render", "pdfCanvasOverlay", _inlineUrl);
+            await JS.InvokeVoidAsync("pdfPreview.renderAllPages", "pdfPagesContainerOverlay", _inlineUrl);
         }
     }
 

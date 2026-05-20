@@ -184,8 +184,7 @@
                         <div class="gmail-body">
                             @if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
                             {
-                                var safe = StripActiveContent(mail.CorpoHtml);
-
+                                var safe = PrepareHtmlForDisplay(mail);
                                 <div class="mail-body-frame-wrap">
                                     <iframe class="mail-iframe" sandbox="" srcdoc="@safe"></iframe>
                                 </div>
@@ -473,7 +472,41 @@
             Nav.NavigateTo(Nav.Uri, forceLoad: true);
         }
     }
+    private string PrepareHtmlForDisplay(EmailDetail_NEW mail)
+    {
+        var html = StripActiveContent(mail.CorpoHtml ?? "");
 
+        if (mail.Allegati == null || !mail.Allegati.Any())
+            return RemoveUnresolvedCidImages(html);
+
+        foreach (var a in mail.Allegati)
+        {
+            var nome = a.NomeFile ?? "";
+            if (string.IsNullOrWhiteSpace(nome))
+                continue;
+
+            var url = $"/api/attachments/{a.Id}/download";
+
+            html = Regex.Replace(
+                html,
+                $@"cid:{Regex.Escape(nome)}",
+                url,
+                RegexOptions.IgnoreCase
+            );
+        }
+
+        return RemoveUnresolvedCidImages(html);
+    }
+
+    private static string RemoveUnresolvedCidImages(string html)
+    {
+        return Regex.Replace(
+            html,
+            @"<img\b[^>]*src\s*=\s*[""']?cid:[^>]*>",
+            "",
+            RegexOptions.IgnoreCase
+        );
+    }
 
 
     private EmailDetail_NEW? GetThreadLast()
@@ -747,7 +780,6 @@
         //    Così vedi SEMPRE il contenuto del messaggio a cui stai rispondendo.
         var quoteText = BuildGmailReplyAsText(msg);     // usa il body di msg (ora caricato)
         var quoteHtml = ToQuoteHtmlForQuill(quoteText);
-
         // 4) ✅ Reply headers: stai rispondendo a QUESTO msg
         var parameters = new DialogParameters
         {
@@ -1427,18 +1459,25 @@
         }
 
         // testo Gmail-like
-        var forwardText = BuildForwardChainAsText(msg);
+        var forwardHtml = BuildForwardHtml(msg);
+        var forwardAttachments = await BuildForwardAttachmentsAsync(msg);
 
-        // lo impacchetto in <pre> così NON ti si impasta mai
-        var forwardHtml = ToForwardHtmlForQuill(forwardText);
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
-            ["Oggetto"] = (msg.Oggetto?.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase) == true)
+            ["Oggetto"] = msg.Oggetto?.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase) == true
                 ? msg.Oggetto
                 : "Fwd: " + (msg.Oggetto ?? ""),
+
             ["CorpoIniziale"] = forwardHtml,
-            ["Destinatari"] = ""
+            ["Destinatari"] = "",
+
+            ["IsForward"] = true,
+            ["ForwardAttachments"] = forwardAttachments,
+
+            ["ReplyToMessageId"] = null,
+            ["References"] = null,
+            ["ThreadKey"] = null
         };
 
         var dialog = DialogService.Show<ComposeDialog>(
@@ -1453,11 +1492,18 @@
             });
 
         var result = await dialog.Result;
-        if (result.Data is true)
+
+        if (!result.Canceled && result.Data?.ToString() == "sent")
+        {
             Snackbar.Add("Inoltro esterno inviato ✅", Severity.Success);
+
+            await Task.Delay(600);
+
+            Nav.NavigateTo(Nav.Uri, forceLoad: true);
+        }
     }
 
-   
+
 
     private static string BuildReferencesChain(EmailDetail_NEW msg)
     {
@@ -1584,6 +1630,42 @@
 
         return normalized.Trim();
     }
+
+
+    private async Task<List<MailService_NEW.OutgoingAttachment_NEW>> BuildForwardAttachmentsAsync(EmailDetail_NEW msg)
+{
+    var result = new List<MailService_NEW.OutgoingAttachment_NEW>();
+
+    if (msg.Allegati == null || !msg.Allegati.Any())
+        return result;
+
+    foreach (var a in msg.Allegati)
+    {
+        if (a.IsEmailEml)
+            continue;
+
+        try
+        {
+            var bytes = await Http.GetByteArrayAsync($"/api/attachments/{a.Id}/download");
+
+            if (bytes == null || bytes.Length == 0)
+                continue;
+
+            result.Add(new MailService_NEW.OutgoingAttachment_NEW(
+                a.NomeFile,
+                NormalizeMime(a.MimeType, a.NomeFile),
+                bytes
+            ));
+        }
+        catch
+        {
+            Snackbar.Add($"Impossibile allegare automaticamente: {a.NomeFile}", Severity.Warning);
+        }
+    }
+
+    return result;
+}
+
     private static string ToPreHtml(string text)
     {
         return $"<pre style='white-space:pre-wrap;font-family:inherit;margin:0;line-height:1.5'>{Html(text)}</pre>";
@@ -1998,7 +2080,47 @@
     }
 
 
+    private string BuildForwardHtml(EmailDetail_NEW selected)
+    {
+        var body = GetBodyVisibleAsText(selected);
+        var from = ExtractEmailOnly(selected.Mittente);
+        var to = ExtractEmailOnly(selected.Destinatari);
 
+        var bodyHtml = Html(body)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+
+        return $@"
+<div style=""font-family:Arial,sans-serif;font-size:14px;color:#202124;line-height:1.45;"">
+    <div style=""margin:16px 0 10px 0;color:#5f6368;font-size:13px;"">
+        ---------- Messaggio inoltrato ----------
+    </div>
+
+    <table style=""font-size:13px;color:#3c4043;margin-bottom:14px;"">
+        <tr>
+            <td style=""font-weight:700;padding-right:8px;"">Da:</td>
+            <td>{Html(from)}</td>
+        </tr>
+        <tr>
+            <td style=""font-weight:700;padding-right:8px;"">Data:</td>
+            <td>{Html(FormatDateLikeGmail(selected.Data))}</td>
+        </tr>
+        <tr>
+            <td style=""font-weight:700;padding-right:8px;"">Oggetto:</td>
+            <td>{Html(selected.Oggetto)}</td>
+        </tr>
+        <tr>
+            <td style=""font-weight:700;padding-right:8px;"">A:</td>
+            <td>{Html(to)}</td>
+        </tr>
+    </table>
+
+    <div style=""border-left:2px solid #dadce0;padding-left:12px;color:#444;"">
+        {bodyHtml}
+    </div>
+</div>";
+    }
 
     private static readonly Regex _mentionRegex =
         new(@"@([a-z]\.[a-z0-9]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);

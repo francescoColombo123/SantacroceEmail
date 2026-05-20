@@ -139,9 +139,9 @@
                         else if (_isPdf)
                         {
                             <div style="display:flex; justify-content:center; align-items:flex-start; min-height:420px; background:#f8fafc; border-radius:12px; padding:16px; overflow:auto;">
-                                <canvas id="pdfCanvas"
-                                        style="max-width:100%; background:#fff; box-shadow:0 4px 12px rgba(15,23,42,.12); border-radius:10px;">
-                                </canvas>
+                                <div id="pdfPagesContainer"
+                                     style="width:100%; display:flex; flex-direction:column; align-items:center; gap:22px;">
+                                </div>
                             </div>
                         }
                         else
@@ -261,7 +261,7 @@
         if (_currentMeta is not null && _isPdf && _lastRenderedPdfId != _currentMeta.Id)
         {
             _lastRenderedPdfId = _currentMeta.Id;
-            await JS.InvokeVoidAsync("pdfPreview.render", "pdfCanvas", _pdfInlineUrl);
+            await JS.InvokeVoidAsync("pdfPreview.renderAllPages", "pdfPagesContainer", _pdfInlineUrl);
         }
     }
 

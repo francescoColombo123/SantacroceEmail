@@ -1,31 +1,26 @@
 ﻿window.destroyQuill = (editorId) => {
-    const el = document.getElementById(editorId);
-    if (!el) return;
+    const current = document.getElementById(editorId);
+    if (!current) return;
 
-    const q = el.__quill;
-    const handler = el.__quillHandler;
+    const parent = current.parentNode;
+    if (!parent) return;
+
+    const q = current.__quill;
+    const handler = current.__quillHandler;
 
     if (q) {
         try { if (handler) q.off("text-change", handler); } catch (e) { }
         try { q.disable(); } catch (e) { }
     }
 
-    // ✅ rimuovi toolbar + container che Quill ha creato (evita doppie toolbar)
-    const parent = el.parentNode;
-    if (parent) {
-        // Se #editor è già diventato .ql-container, la toolbar è tipicamente sibling
-        parent.querySelectorAll(".ql-toolbar").forEach(n => n.remove());
-        parent.querySelectorAll(".ql-container").forEach(n => n.remove());
+    parent.querySelectorAll(".ql-toolbar").forEach(n => n.remove());
+    parent.querySelectorAll(".ql-container").forEach(n => n.remove());
 
-        // ricrea un editor pulito
-        const fresh = document.createElement("div");
-        fresh.id = editorId;
-        fresh.style.cssText = el.style.cssText;
-        parent.appendChild(fresh);
-    }
-    window.__composeAutoSaveRegistered = false;
-    try { el.__quill = null; } catch (e) { }
-    try { el.__quillHandler = null; } catch (e) { }
+    parent.querySelectorAll(`#${editorId}`).forEach(n => n.remove());
+
+    const fresh = document.createElement("div");
+    fresh.id = editorId;
+    parent.appendChild(fresh);
 };
 
 window.initFileDropZone = (element) => {
@@ -62,107 +57,103 @@ const encodeHtml = (s) =>
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;");
 
+
 const normalizeQuoteHtml = (quoteHtmlOrText) => {
     if (!quoteHtmlOrText) return "";
 
-    let s = (quoteHtmlOrText || "").replace(/\r\n/g, "\n").trim();
+    let s = (quoteHtmlOrText || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .trim();
 
-    // se NON sembra html → encoda e metti <br>
     const looksHtml = /<\/?\w+[^>]*>/i.test(s) || /&lt;\/?\w+/i.test(s);
+
     if (!looksHtml) {
         s = encodeHtml(s).replace(/\n/g, "<br>");
     } else {
-        // se è escaped tipo &lt;div&gt; → lascialo com’è (tu già fai HtmlDecode in C#)
-        // qui facciamo solo una normalizzazione soft di newline → <br> se mancano
-        // (non tocchiamo troppo per non rompere tag)
+        s = s
+            .replace(/\n{2,}/g, "<br><br>")
+            .replace(/\n/g, "<br>");
     }
 
-    // ✅ forza a capo “Gmail-like” per header comuni (IT/EN)
-    // Inserisce <br> PRIMA delle etichette se sono attaccate
-    const labels = [
-        "Da:", "A:", "Cc:", "CC:", "Ccn:", "CCN:",
-        "Oggetto:", "Inviato:", "Data:", "Date:", "Subject:", "To:", "From:"
-    ];
-
-    for (const lab of labels) {
-        // aggiunge <br> prima dell'etichetta se non è già a inizio riga o preceduta da <br>
-        const re = new RegExp(`(?!^)(?<!<br>)(?<!\\n)\\s*(${lab.replace(":", "\\:")})`, "g");
-        s = s.replace(re, "<br>$1");
-    }
-
-    // un minimo di respiro all’inizio
-    if (!s.startsWith("<br>")) s = "<br>" + s;
+    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
 
     return s;
 };
-
-window.initQuill = (editorId, dotnetRef, bodyHtml, quoteHtml) => {
+window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => {
     window.destroyQuill(editorId);
 
     const host = document.getElementById(editorId);
     if (!host) return;
 
-    const toolbarOptions = [
-        ["bold", "italic", "underline"],
-        [{ list: "ordered" }, { list: "bullet" }],
-        ["link"],
-        ["clean"],
-    ];
-
     const quill = new Quill(host, {
         theme: "snow",
-        modules: { toolbar: toolbarOptions },
+        modules: {
+            toolbar: [
+                ["bold", "italic", "underline"],
+                [{ list: "ordered" }, { list: "bullet" }],
+                ["link"],
+                ["clean"]
+            ]
+        }
     });
 
     host.__quill = quill;
 
     const body = (bodyHtml || "").trim();
+    const firma = (signatureText || "").trim();
     const quote = (quoteHtml || "").trim();
 
-    // 1) BODY
-    quill.clipboard.dangerouslyPasteHTML(0, body ? body : "<p><br></p>", "api");
-
-    // 2) QUOTE (se presente) con separatore + blockquote
-    if (quote) {
-        const sepIndex = quill.getLength() - 1;
-
-        const normalized = normalizeQuoteHtml(quote);
-
-        // separatore + marker per ritrovarlo dopo
-        const html = `
-          <p><br></p>
-          <p>----------------------------------------------------------------------</p>
-          <p><br></p>
-          <blockquote>
-            <div>${normalized}</div>
-          </blockquote>
-        `;
-
-
-        quill.clipboard.dangerouslyPasteHTML(sepIndex, html, "api");
-
-        // cursore: subito prima del separatore
-        quill.setSelection(sepIndex, 0, "api");
-
-        setTimeout(() => quill.focus(), 0);
+    if (body && body !== "<p><br></p>") {
+        quill.clipboard.dangerouslyPasteHTML(0, body, "api");
     } else {
-        quill.setSelection(0, 0, "api");
-        setTimeout(() => quill.focus(), 0);
+        quill.setText("\n", "api");
     }
 
-    // 3) sync verso C# (INVIO/BOZZA)
-    // (per ora manda tutto; se vuoi solo body, vedi nota più sotto)
+    let index = quill.getLength() - 1;
+
+    if (firma) {
+        const firmaHtml = firma
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n")
+            .split("\n")
+            .map(riga => riga.trim())
+            .map(riga => riga === "" ? "<br>" : riga)
+            .join("<br>");
+
+        quill.clipboard.dangerouslyPasteHTML(
+            index,
+            "<div style='margin-top:12px; line-height:1.5;'>" + firmaHtml + "</div><br>",
+            "api"
+        );
+
+        index = quill.getLength() - 1;
+    }
+    if (quote) {
+        quill.insertText(index, "\n----------------------------------------------------------------------\n\n", "api");
+        index = quill.getLength() - 1;
+
+        quill.clipboard.dangerouslyPasteHTML(
+            index,
+            "<blockquote>" + quote + "</blockquote>",
+            "api"
+        );
+    }
+
+    quill.setSelection(0, 0, "api");
+
     const handler = () => {
         try {
-            dotnetRef.invokeMethodAsync("UpdateBodyHtml", (quill.root.innerHTML || "").trim());
+            dotnetRef.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
         } catch { }
     };
 
     host.__quillHandler = handler;
     quill.on("text-change", handler);
     handler();
-};
 
+    setTimeout(() => quill.focus(), 0);
+};
 window.registerComposeAutoSaveClose = function (dotnetRef) {
     if (window.__composeAutoSaveRegistered)
         return;
