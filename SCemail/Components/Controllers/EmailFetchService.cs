@@ -751,8 +751,10 @@ UPDATE SGAPP.EMAIL_RICEVUTE
                 if (att is MimePart mp)
                 {
                     var fileName = string.IsNullOrWhiteSpace(mp.FileName) ? $"allegato_{fallbackIndex}" : mp.FileName;
-                    var mime = mp.ContentType?.MimeType ?? "application/octet-stream";
-
+                    var mime = NormalizeAttachmentMime(
+                        mp.ContentType?.MimeType,
+                        fileName
+                    );
                     // partSpec fittizio per avere almeno la riga DB
                     list.Add((fileName, mime, $"fallback-{fallbackIndex}"));
                     fallbackIndex++;
@@ -827,7 +829,10 @@ RETURNING ID INTO :p_id";
         if (part is BodyPartBasic basic)
         {
             var fileName = basic.FileName?.Trim();
-            var mime = basic.ContentType?.MimeType ?? "application/octet-stream";
+            var mime = NormalizeAttachmentMime(
+                basic.ContentType?.MimeType,
+                fileName
+            );
             var disp = basic.ContentDisposition?.Disposition?.Trim();
 
             var isInline = string.Equals(disp, "inline", StringComparison.OrdinalIgnoreCase);
@@ -859,6 +864,51 @@ RETURNING ID INTO :p_id";
             foreach (var child in mp.BodyParts)
                 CollectAttachmentParts(child, acc);
         }
+    }
+
+    private static string NormalizeAttachmentMime(
+    string? mimeType,
+    string? fileName)
+    {
+        var mime = (mimeType ?? "").Trim();
+
+        if (!string.IsNullOrWhiteSpace(mime) &&
+            !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
+        {
+            return mime;
+        }
+
+        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
+
+        return ext switch
+        {
+            ".pdf" => "application/pdf",
+
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+
+            ".eml" => "message/rfc822",
+
+            ".doc" => "application/msword",
+
+            ".docx" =>
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+            ".xls" => "application/vnd.ms-excel",
+
+            ".xlsx" =>
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+
+            _ => string.IsNullOrWhiteSpace(mime)
+                ? "application/octet-stream"
+                : mime
+        };
     }
 
     private async Task<int> SaveEmbeddedEmailAsync(
@@ -2472,8 +2522,10 @@ RETURNING ID INTO :p_id";
                         ? $"allegato_{fallbackIndex}"
                         : mp.FileName;
 
-                    var mime = mp.ContentType?.MimeType ?? "application/octet-stream";
-
+                    var mime = NormalizeAttachmentMime(
+                        mp.ContentType?.MimeType,
+                        fileName
+                    );
                     list.Add((fileName, mime, $"fallback-{fallbackIndex}"));
                     fallbackIndex++;
                 }
