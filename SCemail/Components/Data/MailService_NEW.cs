@@ -1249,46 +1249,34 @@ WHERE EMAIL_ID = :p_eid
                     }
                 }
 
-                const string sqlInsertArchivio = @"
-INSERT INTO SGAPP.EMAIL_ARCHIVIO (ID_EMAIL, UTENTE, DATA_ARCHIVIAZIONE)
-SELECT :p_eid, :p_user, SYSDATE
-FROM DUAL
-WHERE NOT EXISTS (
-    SELECT 1
-    FROM SGAPP.EMAIL_ARCHIVIO
-    WHERE ID_EMAIL = :p_eid_check
-      AND UPPER(UTENTE) = UPPER(:p_user_check)
-)";
-
                 foreach (var vecchioUtente in vecchiUtenti)
                 {
-                    // Se ho scelto "Segui", NON archivio chi sta eseguendo l’assegnazione
-                    if (keepExecutorUnarchived &&
+                    var isExecutor =
                         !string.IsNullOrWhiteSpace(eseguitoDa) &&
-                        vecchioUtente.Equals(eseguitoDa, StringComparison.OrdinalIgnoreCase))
+                        vecchioUtente.Equals(eseguitoDa, StringComparison.OrdinalIgnoreCase);
+
+                    // IO che sto assegnando
+                    if (isExecutor)
                     {
+                        if (keepExecutorUnarchived)
+                        {
+                            // "Assegna e segui"
+                            await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, ct);
+                        }
+                        else
+                        {
+                            // "Assegna"
+                            await EnsureEmailArchiviataTxAsync(conn, tx, emailId, vecchioUtente, ct);
+                        }
+
                         continue;
                     }
 
-                    await using var cmdArch = new OracleCommand(sqlInsertArchivio, conn)
-                    {
-                        BindByName = true,
-                        Transaction = tx
-                    };
-
-                    cmdArch.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
-                    cmdArch.Parameters.Add("p_user", OracleDbType.Varchar2).Value = vecchioUtente;
-                    cmdArch.Parameters.Add("p_eid_check", OracleDbType.Int32).Value = emailId;
-                    cmdArch.Parameters.Add("p_user_check", OracleDbType.Varchar2).Value = vecchioUtente;
-
-                    await cmdArch.ExecuteNonQueryAsync(ct);
+                    // Tutti gli altri vecchi assegnatari -> seguiti
+                    await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, ct);
                 }
 
-                if (keepExecutorUnarchived && !string.IsNullOrWhiteSpace(eseguitoDa))
-                {
-                    await EnsureEmailSeguitaTxAsync(conn, tx, emailId, eseguitoDa, ct);
-                }
-
+               
                 const string sqlDeleteOldAssignments = @"
 DELETE FROM SGAPP.EMAIL_ASSEGNAZIONI
 WHERE EMAIL_ID = :p_eid
@@ -1374,6 +1362,38 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
                 await tx.RollbackAsync(ct);
                 throw;
             }
+        }
+
+        private static async Task EnsureEmailArchiviataTxAsync(
+    OracleConnection conn,
+    OracleTransaction tx,
+    int emailId,
+    string utente,
+    CancellationToken ct = default)
+        {
+            const string sql = @"
+INSERT INTO SGAPP.EMAIL_ARCHIVIO (ID_EMAIL, UTENTE, DATA_ARCHIVIAZIONE)
+SELECT :p_eid, :p_user, SYSDATE
+FROM DUAL
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM SGAPP.EMAIL_ARCHIVIO
+    WHERE ID_EMAIL = :p_eid_check
+      AND UPPER(UTENTE) = UPPER(:p_user_check)
+)";
+
+            await using var cmd = new OracleCommand(sql, conn)
+            {
+                BindByName = true,
+                Transaction = tx
+            };
+
+            cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
+            cmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
+            cmd.Parameters.Add("p_eid_check", OracleDbType.Int32).Value = emailId;
+            cmd.Parameters.Add("p_user_check", OracleDbType.Varchar2).Value = utente;
+
+            await cmd.ExecuteNonQueryAsync(ct);
         }
 
         private static async Task EnsureEmailSeguitaTxAsync(

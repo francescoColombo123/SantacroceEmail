@@ -269,19 +269,14 @@
 
         if (string.IsNullOrEmpty(query))
         {
-            _mentionSuggestions = _allUsers
-                .Take(8)
-                .ToList();
-
-            _mentionOpen = _mentionSuggestions.Count > 0;
-            _selectedMentionIndex = _mentionOpen ? 0 : -1;
-            return;
+            _mentionSuggestions = _allUsers.ToList();
         }
-
-        _mentionSuggestions = _allUsers
-            .Where(u => u.StartsWith(query, StringComparison.OrdinalIgnoreCase))
-            .Take(8)
-            .ToList();
+        else
+        {
+            _mentionSuggestions = _allUsers
+                .Where(u => u.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .ToList(); 
+        }
 
         _mentionOpen = _mentionSuggestions.Count > 0;
         _selectedMentionIndex = _mentionOpen ? 0 : -1;
