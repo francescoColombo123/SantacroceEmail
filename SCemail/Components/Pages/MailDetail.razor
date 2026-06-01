@@ -211,15 +211,17 @@
                                         <a class="attach-chip @(a.IsEmailEml ? "attach-chip-eml" : "")"
                                            href="javascript:void(0)"
                                            title="@a.NomeFile"
-                                           @onclick="@(async () => await OpenAttachmentOrEmailAsync(a, mime, mail.Allegati.Select(x => x.Id).ToList()))"
-                                           @onclick:stopPropagation="true">
+                                           @onclick="@(async () => await OpenAttachmentOrEmailAsync(
+                                                        a,
+                                                       NormalizeMime(a.MimeType, a.NomeFile),
+                                                       mail.Allegati.Select(x => x.Id).ToList()
+                                                   ))" @onclick:stopPropagation="true">
 
                                             <MudIcon Icon="@(a.IsEmailEml? Icons.Material.Filled.Email : GetAttachmentIcon(a.NomeFile))"
                                                      Size="Size.Small"
                                                      Class="attach-icon" />
 
                                             <span class="attach-name">@a.NomeFile</span>
-
                                             @if (a.IsEmailEml)
                                             {
                                                 <span class="eml-badge">Apri email</span>
@@ -517,17 +519,16 @@
 
     private async Task ArchiveThread()
     {
-        var last = GetThreadLast();
-        if (last == null || string.IsNullOrWhiteSpace(_utente))
+        if (_email == null || string.IsNullOrWhiteSpace(_utente))
             return;
 
-        if (_fromFolder == "mentions" && !last.CanArchive)
+        if (_fromFolder == "mentions" && !_email.CanArchive)
         {
             Snackbar.Add("Puoi archiviare questa menzione solo dopo aver risposto.", Severity.Warning);
             return;
         }
 
-        var archivedId = last.Id;
+        var archivedId = _email.Id;
 
         var currentIndex = _currentNavIndex;
         int? nextId = null;
@@ -543,6 +544,7 @@
         }
 
         await MailSvc1.ArchiveEmailAsync(archivedId, _utente);
+
         Snackbar.Add("Conversazione archiviata ✔", Severity.Success);
 
         _navIds = _navIds.Where(x => x != archivedId).ToList();
@@ -1129,9 +1131,15 @@
             _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
 
             _thread = _thread
-                .GroupBy(t => t.MessageId)
-                .Select(g => g.First())
-                .ToList();
+     .GroupBy(t => string.IsNullOrWhiteSpace(t.MessageId)
+         ? $"{t.Tipo}-{t.Id}"
+         : t.MessageId.Trim().ToLowerInvariant())
+     .Select(g => g
+         .OrderByDescending(x => x.Data)
+         .ThenByDescending(x => x.Id)
+         .First())
+     .OrderBy(x => x.Data)
+     .ToList();
         }
         else
         {
@@ -1179,9 +1187,10 @@
     private int _attachmentViewerId;
     private string? _attachmentViewerSrc;
     private List<int> _attachmentViewerIds = new();
-
     private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
     {
+        Console.WriteLine($"CLICK ALLEGATO ID = {attachmentId}");
+
         var mime = NormalizeMime(mimeType, null);
 
         var previewable =
@@ -1199,11 +1208,15 @@
             return;
         }
 
+        _showAttachmentViewer = false;
+        await InvokeAsync(StateHasChanged);
+
         _attachmentViewerId = attachmentId;
         _attachmentViewerSrc = null;
         _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
+
         _showAttachmentViewer = true;
-        StateHasChanged();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
@@ -1247,6 +1260,20 @@
             return CleanQuotedPart(HtmlToText(mail.CorpoHtml));
 
         return "";
+    }
+    private static string BuildThreadUniqueKey(EmailDetail_NEW mail)
+    {
+        var messageId = string.IsNullOrWhiteSpace(mail.MessageId)
+            ? $"{mail.Tipo}-{mail.Id}"
+            : mail.MessageId.Trim().ToLowerInvariant();
+
+        var attachmentSignature = mail.Allegati == null || mail.Allegati.Count == 0
+            ? "noatt"
+            : string.Join("|", mail.Allegati
+                .Select(a => $"{a.Id}:{a.NomeFile}")
+                .OrderBy(x => x));
+
+        return $"{messageId}|{attachmentSignature}";
     }
 
     private async Task DeleteCurrentEmail()
@@ -1613,17 +1640,25 @@
 
     private static string CleanQuotedPart(string body)
     {
-        if (string.IsNullOrWhiteSpace(body)) return body;
+        if (string.IsNullOrWhiteSpace(body))
+            return body;
 
         var normalized = body.Replace("\r", "");
-        string[] markers = { "---- Messaggio originale ----", "Da:", "Inviato:", "Oggetto:" };
 
-        foreach (var marker in markers)
+        var patterns = new[]
         {
-            var idx = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
-            if (idx > 0)
+        @"(?im)^\s*-{2,}\s*Messaggio originale\s*-{2,}\s*$",
+        @"(?im)^\s*Da:\s+.+$",
+        @"(?im)^\s*Inviato:\s+.+$",
+        @"(?im)^\s*Oggetto:\s+.+$"
+    };
+
+        foreach (var pattern in patterns)
+        {
+            var m = Regex.Match(normalized, pattern);
+            if (m.Success && m.Index > 0)
             {
-                normalized = normalized[..idx];
+                normalized = normalized[..m.Index];
                 break;
             }
         }

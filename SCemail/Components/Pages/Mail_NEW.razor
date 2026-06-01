@@ -1499,7 +1499,12 @@ else
             ["Bcc"] = d.Ccn,
             ["Oggetto"] = d.Oggetto,
             ["CorpoIniziale"] = d.CorpoHtml,
-            ["DraftId"] = (long)d.Id
+            ["DraftId"] = (long)d.Id,
+
+            // NUOVI
+            ["CasellaMittente"] = d.CasellaMittente,
+            ["ThreadKey"] = d.ThreadKey,
+            ["ReplyToMessageId"] = d.ReplyToMessageId
         };
 
         var dialog = DialogService.Show<ComposeDialog>(
@@ -4946,15 +4951,15 @@ else
         flex-shrink: 0;
     }
 
-        .ml-icon .mud-icon-button {
-            width: 18px !important;
-            height: 18px !important;
-            padding: 0 !important;
-        }
+    .ml-icon .mud-icon-button {
+        width: 18px !important;
+        height: 18px !important;
+        padding: 0 !important;
+    }
 
-        .ml-icon .mud-icon-root {
-            font-size: 15px !important;
-        }
+    .ml-icon .mud-icon-root {
+        font-size: 15px !important;
+    }
 
     .ml-from {
         font-weight: 700;

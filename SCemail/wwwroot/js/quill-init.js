@@ -66,20 +66,45 @@ const normalizeQuoteHtml = (quoteHtmlOrText) => {
         .replace(/\r/g, "\n")
         .trim();
 
-    const looksHtml = /<\/?\w+[^>]*>/i.test(s) || /&lt;\/?\w+/i.test(s);
+    // pulizia html inutile
+    s = s.replace(/<\/?(html|body)[^>]*>/gi, "");
+    s = s.replace(/<style[\s\S]*?<\/style>/gi, "");
+    s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
+    s = s.replace(/<!--[\s\S]*?-->/g, "");
+
+    // elimina quote vecchie annidate
+    s = s.replace(
+        /<blockquote[^>]*data-sc-quote=["']1["'][^>]*>[\s\S]*?<\/blockquote>/gi,
+        ""
+    );
+
+    // converte div/p in br
+    s = s.replace(/<\/div>/gi, "<br>");
+    s = s.replace(/<\/p>/gi, "<br>");
+    s = s.replace(/<div[^>]*>/gi, "");
+    s = s.replace(/<p[^>]*>/gi, "");
+
+    // elimina spazi enormi
+    s = s.replace(/[ \t]{2,}/g, " ");
+
+    // elimina righe vuote infinite
+    s = s.replace(/\n{3,}/g, "\n\n");
+
+    // elimina <br> multipli
+    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
+
+    // se NON è html => encode
+    const looksHtml = /<\/?\w+[^>]*>/i.test(s);
 
     if (!looksHtml) {
-        s = encodeHtml(s).replace(/\n/g, "<br>");
-    } else {
-        s = s
-            .replace(/\n{2,}/g, "<br><br>")
+        s = encodeHtml(s)
+            .replace(/\n\n/g, "<br><br>")
             .replace(/\n/g, "<br>");
     }
 
-    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
-
-    return s;
+    return s.trim();
 };
+
 window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => {
     window.destroyQuill(editorId);
 
@@ -99,9 +124,9 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => 
     });
 
     host.__quill = quill;
-
+    host.__dotnetRef = dotnetRef;
     const body = (bodyHtml || "").trim();
-    const firma = (signatureText || "").trim();
+    const firma = normalizeSignatureHtml(signatureText || "");
     const quote = (quoteHtml || "").trim();
 
     if (body && body !== "<p><br></p>") {
@@ -113,29 +138,41 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => 
     let index = quill.getLength() - 1;
 
     if (firma) {
-        const firmaHtml = firma
-            .replace(/\r\n/g, "\n")
-            .replace(/\r/g, "\n")
-            .split("\n")
-            .map(riga => riga.trim())
-            .map(riga => riga === "" ? "<br>" : riga)
-            .join("<br>");
-
         quill.clipboard.dangerouslyPasteHTML(
             index,
-            "<div style='margin-top:12px; line-height:1.5;'>" + firmaHtml + "</div><br>",
+            `<br><div data-sc-signature="1" style="margin-top:12px; line-height:1.5;">${firma}</div><br>`,
             "api"
         );
-
         index = quill.getLength() - 1;
     }
+
     if (quote) {
-        quill.insertText(index, "\n----------------------------------------------------------------------\n\n", "api");
-        index = quill.getLength() - 1;
+        const cleanQuote = normalizeQuoteHtml(quote);
 
         quill.clipboard.dangerouslyPasteHTML(
             index,
-            "<blockquote>" + quote + "</blockquote>",
+            `
+        <div data-sc-quote-wrapper="1" style="margin-top:18px;">
+            <hr style="border:none;border-top:1px solid #cfcfcf;margin:14px 0;">
+            <div style="font-size:13px;color:#666;margin-bottom:8px;">
+                Messaggio precedente:
+            </div>
+            <blockquote data-sc-quote="1"
+                style="
+                    margin:0 0 0 8px;
+                    padding-left:12px;
+                    border-left:2px solid #ccc;
+                    color:#222;
+                    font-family:'Courier New',monospace;
+                    font-size:14px;
+                    line-height:1.4;
+                    white-space:normal;
+                    word-break:break-word;
+                ">
+                ${cleanQuote}
+            </blockquote>
+        </div>
+        `,
             "api"
         );
     }
@@ -153,6 +190,75 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => 
     handler();
 
     setTimeout(() => quill.focus(), 0);
+};
+function normalizeSignatureHtml(signatureHtml) {
+    let s = signatureHtml || "";
+
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+    if (!/<br\s*\/?>|<\/div>|<\/p>/i.test(s)) {
+        s = s.replace(/\n/g, "<br>");
+    }
+
+    s = s.replace(/\s*(\d{8,15})\s*/g, "<br>$1<br><br>");
+    s = s.replace(/\s*(EUROCEREALI SRL|GRUPPO SANTACROCE)\s*/gi, "<br><br>$1");
+
+    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
+
+    return s.trim();
+}
+window.composeInterop = window.composeInterop || {};
+
+window.composeInterop.replaceSignature = function (editorId, signatureHtml) {
+    const host = document.getElementById(editorId);
+    const quill = host?.__quill;
+    const dotnetRef = host?.__dotnetRef;
+
+    if (!quill) return;
+
+    const root = quill.root;
+
+    // 1) prendo il blocco quote vero dal DOM, non con regex
+    const quoteNode = root.querySelector('[data-sc-quote-wrapper="1"]');
+    const quoteHtml = quoteNode ? quoteNode.outerHTML : "";
+
+    // 2) rimuovo temporaneamente la quote
+    if (quoteNode) {
+        quoteNode.remove();
+    }
+
+    // 3) rimuovo tutte le firme marcate
+    root.querySelectorAll('[data-sc-signature="1"]').forEach(n => n.remove());
+
+    // 4) fallback: rimuovo firme vecchie non marcate SOLO dal contenuto rimasto
+    let html = root.innerHTML || "";
+
+    html = html.replace(
+        /(<br\s*\/?>\s*)*Cordiali saluti\.[\s\S]*?(EUROCEREALI SRL|GRUPPO SANTACROCE)(<\/[^>]+>|<br\s*\/?>|\s)*/gi,
+        ""
+    );
+
+    html = html.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>").trim();
+
+    const normalizedSignature = normalizeSignatureHtml(signatureHtml || "");
+
+    // 5) ricostruisco SEMPRE: testo utente + firma + quote
+    let newHtml = html;
+
+    if (normalizedSignature) {
+        newHtml += `<br><div data-sc-signature="1" style="margin-top:12px; line-height:1.5;">${normalizedSignature}</div><br>`;
+    }
+
+    if (quoteHtml) {
+        newHtml += `<br>${quoteHtml}`;
+    }
+
+    quill.setText("", "api");
+    quill.clipboard.dangerouslyPasteHTML(0, newHtml, "api");
+
+    if (dotnetRef) {
+        dotnetRef.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
+    }
 };
 window.registerComposeAutoSaveClose = function (dotnetRef) {
     if (window.__composeAutoSaveRegistered)

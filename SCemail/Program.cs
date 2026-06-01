@@ -46,7 +46,7 @@ builder.Services.AddSingleton<EmailFetchService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<EmailFetchService>());
 builder.Services.AddHostedService<ImapHealthCheckService>();
 builder.Services.AddSingleton<RubricaImportService>();
-
+builder.Services.AddSingleton<GmailThreadSyncService>(); 
 builder.Services.AddScoped<IEmailTasksRepository, EmailTasksRepository>();
 builder.Services.AddScoped<TaskHomeBadgeService>();
 // ---------- HttpClient sicuro anche nei controller ----------

@@ -67,12 +67,12 @@ namespace SCemail.Components.Controllers
                 long Size
             );
         public AttachmentsController(
-       MailService mail,
-       IEmailAttachmentsRepository attRepo,
-       IOptions<AttachmentsOptions> opt,
-       ILogger<AttachmentsController> logger,
-       IConfiguration config,
-       EmailFetchService fetch)
+     MailService mail,
+     IEmailAttachmentsRepository attRepo,
+     IOptions<AttachmentsOptions> opt,
+     ILogger<AttachmentsController> logger,
+     IConfiguration config,
+     EmailFetchService fetch)
         {
             _mail = mail;
             _attRepo = attRepo;

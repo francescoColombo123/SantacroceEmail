@@ -35,13 +35,14 @@ public class EmailFetchService : BackgroundService
     );
     private static readonly ConcurrentDictionary<int, SemaphoreSlim> _ensureLocks = new();
 
-
-    public EmailFetchService(IConfiguration config, ILogger<EmailFetchService> logger)
+    public EmailFetchService(
+        IConfiguration config,
+        ILogger<EmailFetchService> logger)
     {
         _config = config;
         _logger = logger;
         _attachmentsBasePath = _config.GetValue<string>("Attachments:BasePath")
-       ?? Path.Combine(AppContext.BaseDirectory, "attachments");
+            ?? Path.Combine(AppContext.BaseDirectory, "attachments");
 
         _attachmentsBasePath = _attachmentsBasePath.Trim();
         Directory.CreateDirectory(_attachmentsBasePath);
@@ -94,14 +95,13 @@ public class EmailFetchService : BackgroundService
                          ?? throw new InvalidOperationException("ConnectionString 'OracleDb' mancante.");
 
         // 1) Carico TUTTE le caselle in memoria e chiudo il reader/connessione
-        var accounts = new List<(int Id, string Email, string Password, string Host, int Port, bool UseSsl)>();
-
+        var accounts = new List<(int Id, string Email, string Password, string Provider, string Host, int Port, bool UseSsl)>();
         await using (var conn = new OracleConnection(connString))
         {
             await conn.OpenAsync(ct);
 
             const string sql = @"
-SELECT ID, EMAIL, PASSWORD, IMAP_HOST, IMAP_PORT, USE_SSL
+SELECT ID, EMAIL, PASSWORD,PROVIDER, IMAP_HOST, IMAP_PORT, USE_SSL
 FROM SGAPP.CASELLEPOSTA
 WHERE NVL(ATTIVA, 'Y') = 'Y'";
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -112,10 +112,12 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                 var id = reader.GetInt32(0);
                 var email = reader.GetString(1);
                 var pwd = reader.GetString(2);
-                var host = reader.GetString(3);
-                var port = reader.GetInt32(4);
-                var useSsl = string.Equals(reader.GetString(5), "Y", StringComparison.OrdinalIgnoreCase);
-                accounts.Add((id, email, pwd, host, port, useSsl));
+                var provider = reader.IsDBNull(3) ? "IMAP" : reader.GetString(3);
+                var host = reader.GetString(4);
+                var port = reader.GetInt32(5);
+                var useSsl = string.Equals(reader.GetString(6), "Y", StringComparison.OrdinalIgnoreCase);
+
+                accounts.Add((id, email, pwd, provider, host, port, useSsl));
             }
         }
 
@@ -132,7 +134,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                 await using var accountConn = new OracleConnection(connString);
                 await accountConn.OpenAsync(ct);
 
-                await FetchEmailsForAccount(a.Id, a.Email, a.Password, a.Host, a.Port, a.UseSsl, accountConn, ct, nightMode);
+                await FetchEmailsForAccount(a.Id, a.Email, a.Password, a.Provider, a.Host, a.Port, a.UseSsl, accountConn, ct, nightMode);
 
                 _logger.LogInformation("=== FINE CASELLA {Email} ===", a.Email);
             }
@@ -152,7 +154,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             .Trim('<', '>', ' ', '\t', '\r', '\n');
     }
     private async Task FetchEmailsForAccount(
-     int casellaId, string email, string password, string host, int port, bool useSsl,
+     int casellaId, string email, string password, string provider, string host, int port, bool useSsl,
      OracleConnection dbConn, CancellationToken ct, bool nightMode)
     {
         if (casellaId <= 0) return;
@@ -190,7 +192,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
             TryAddSpecial(client, SpecialFolder.Sent, foldersToProcess, email);
             TryAddSpecial(client, SpecialFolder.Junk, foldersToProcess, email);
-
+            TryAddGmailAllMail(client, foldersToProcess, email);
             // dedup + noselect
             foldersToProcess = foldersToProcess
                 .Where(f => f != null)
@@ -227,7 +229,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     if (newSummaries.Count > 0)
                         _logger.LogInformation("🆕 '{Folder}': nuove da processare={N}", folder.FullName, newSummaries.Count);
                 }
-                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, seenMessageIds, ct, isSentFolder, isSpamFolder);
+                await ProcessSummariesAsync(folder, newSummaries, dbConn, casellaId, email, provider,seenMessageIds, ct, isSentFolder, isSpamFolder);
                 // ✅ B) BACKFILL SOLO DI NOTTE (UNA VOLTA)
                 if (nightMode)
                 {
@@ -235,7 +237,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     if (backSummaries.Count > 0)
                         _logger.LogInformation("⏪ '{Folder}': backfill da processare={N}", folder.FullName, backSummaries.Count);
 
-                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, seenMessageIds, ct, isSentFolder, isSpamFolder);
+                    await ProcessSummariesAsync(folder, backSummaries, dbConn, casellaId, email, provider, seenMessageIds, ct, isSentFolder, isSpamFolder);
                 }
 
                 await folder.CloseAsync(false, ct);
@@ -331,12 +333,39 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             || name.Contains("posta inviata");
     }
 
+    private void TryAddGmailAllMail(ImapClient client, List<IMailFolder> list, string email)
+    {
+        var names = new[]
+        {
+        "[Gmail]/Tutti i messaggi",
+        "[Gmail]/All Mail",
+        "Tutti i messaggi",
+        "All Mail"
+    };
+
+        foreach (var name in names)
+        {
+            try
+            {
+                var f = client.GetFolder(name);
+                if (f != null)
+                {
+                    list.Add(f);
+                    return;
+                }
+            }
+            catch { }
+        }
+
+        _logger.LogWarning("Cartella All Mail non trovata per {Email}", email);
+    }
     private async Task ProcessSummariesAsync(
   IMailFolder folder,
   List<IMessageSummary> summaries,
   OracleConnection dbConn,
   int casellaId,
   string accountEmail,
+  string provider,
   HashSet<string> seenMessageIds,
   CancellationToken ct,
   bool isSentFolder,
@@ -377,6 +406,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             var full = await folder.GetMessageAsync(s.UniqueId, ct);
 
             var mid = NormalizeMessageId(full.MessageId);
+           
             if (string.IsNullOrWhiteSpace(mid))
                 mid = BuildStableFallbackMessageId(full);
 
@@ -396,7 +426,17 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             var existingId = isSentFolder
                 ? await GetExistingSentEmailIdByMessageId(dbConn, casellaId, mid, ct)
                 : await GetExistingEmailIdByMessageId(dbConn, casellaId, mid, ct);
-
+            if (!isSentFolder)
+            {
+                var existsAsSent = await GetExistingSentEmailIdByMessageId(dbConn, casellaId, mid, ct);
+                if (existsAsSent.HasValue)
+                {
+                    _logger.LogDebug(
+                        "SKIP copia AllMail già presente in EMAIL_INVIATE [{Acc}] {Folder} uid={Uid} mid={Mid}",
+                        accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
+                    continue;
+                }
+            }
             if (existingId.HasValue)
             {
                 if (isSentFolder)
@@ -442,6 +482,10 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             }
             else
             {
+                var gmailThreadKey = s.GMailThreadId.HasValue
+                 ? $"gmail:{s.GMailThreadId.Value}"
+                 : null;
+
                 emailId = await SaveEmail(
                     dbConn,
                     casellaId,
@@ -450,7 +494,8 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     ct,
                     folder.FullName,
                     uid,
-                    emailDateRome
+                    emailDateRome,
+                    gmailThreadKey
                 );
 
                 var isBlacklisted = await IsSenderBlacklistedAsync(dbConn, full.From?.ToString(), ct);
@@ -512,21 +557,21 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
 
     private async Task<int> SaveEmail(
-  OracleConnection conn,
-  int casellaId,
-  string messageId,
-  MimeMessage message,
-  CancellationToken ct,
-  string folderPath,
-  long? messageUid,
-  DateTime? internalDateRome = null)
+    OracleConnection conn,
+    int casellaId,
+    string messageId,
+    MimeMessage message,
+    CancellationToken ct,
+    string folderPath,
+    long? messageUid,
+    DateTime? internalDateRome = null,
+    string? forcedThreadKey = null)
     {
         messageId = NormalizeMessageId(messageId);
         if (string.IsNullOrWhiteSpace(messageId))
             messageId = BuildStableFallbackMessageId(message);
 
-        string? threadKey = null;
-
+        string? threadKey = forcedThreadKey;
         const string sqlFindThreadKey = @"
 SELECT THREAD_KEY
 FROM (
@@ -540,18 +585,7 @@ WHERE MESSAGE_ID = :p_mid
 ORDER BY DATA_REF DESC
 FETCH FIRST 1 ROWS ONLY";
 
-        const string sqlFindThreadKeyLoose = @"
-SELECT THREAD_KEY
-FROM (
-    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_RICEZIONE AS DATA_REF
-    FROM SGAPP.EMAIL_RICEVUTE
-    UNION ALL
-    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_INVIO AS DATA_REF
-    FROM SGAPP.EMAIL_INVIATE
-)
-WHERE MESSAGE_ID LIKE :p_like
-ORDER BY DATA_REF DESC
-FETCH FIRST 1 ROWS ONLY";
+      
 
         async Task<string?> TryResolveThreadKeyAsync(string rawId)
         {
@@ -568,24 +602,10 @@ FETCH FIRST 1 ROWS ONLY";
                     return obj.ToString();
             }
 
-            // 2) match loose
-            var beforeAt = norm.Split('@')[0];
-            var cleaned = new string(beforeAt.Where(char.IsLetterOrDigit).ToArray());
-
-            if (!string.IsNullOrWhiteSpace(cleaned) && cleaned.Length >= 8)
-            {
-                await using var cmd2 = new OracleCommand(sqlFindThreadKeyLoose, conn) { BindByName = true };
-                cmd2.Parameters.Add("p_like", OracleDbType.Varchar2, 500).Value = "%" + cleaned.ToLowerInvariant() + "%";
-
-                var obj2 = await cmd2.ExecuteScalarAsync(ct);
-                if (obj2 != null && obj2 != DBNull.Value)
-                    return obj2.ToString();
-            }
-
             return null;
         }
 
-        if (!string.IsNullOrWhiteSpace(message.InReplyTo))
+        if (string.IsNullOrWhiteSpace(threadKey) && !string.IsNullOrWhiteSpace(message.InReplyTo))
         {
             threadKey = await TryResolveThreadKeyAsync(message.InReplyTo);
         }
@@ -785,8 +805,23 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
                 {
                     var existingId = r.GetInt32(0);
                     var fn = r.IsDBNull(1) ? (a.FileName ?? "allegato") : r.GetString(1);
-                    var mm = r.IsDBNull(2) ? (a.Mime ?? "application/octet-stream") : r.GetString(2);
+                    var mmDb = r.IsDBNull(2) ? null : r.GetString(2);
                     var ps = r.IsDBNull(3) ? (a.PartSpec ?? "") : r.GetString(3);
+
+                    var mm = NormalizeAttachmentMime(mmDb, fn);
+
+                    if (!string.Equals(mmDb, mm, StringComparison.OrdinalIgnoreCase))
+                    {
+                        const string updMime = @"
+                        UPDATE SGAPP.EMAIL_ALLEGATI
+                           SET MIME_TYPE = :p_mime
+                         WHERE ID = :p_id";
+
+                        await using var upd = new OracleCommand(updMime, conn) { BindByName = true };
+                        upd.Parameters.Add("p_mime", OracleDbType.Varchar2, 255).Value = mm;
+                        upd.Parameters.Add("p_id", OracleDbType.Int32).Value = existingId;
+                        await upd.ExecuteNonQueryAsync(ct);
+                    }
 
                     res.Add((existingId, fn, mm, ps));
                     continue;
@@ -1844,9 +1879,11 @@ UPDATE SGAPP.EMAIL_ALLEGATI
         );
         var range = new UniqueIdRange(new UniqueId(start), new UniqueId(end));
 
-        var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope |
-                    MessageSummaryItems.InternalDate | MessageSummaryItems.BodyStructure;
-
+        var items = MessageSummaryItems.UniqueId |
+            MessageSummaryItems.Envelope |
+            MessageSummaryItems.InternalDate |
+            MessageSummaryItems.BodyStructure |
+            MessageSummaryItems.GMailThreadId;
         var summaries = await folder.FetchAsync(range, items, ct);
 
         // aggiorno cursor a "prima del blocco"
@@ -2011,8 +2048,11 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
 
         var range = new UniqueIdRange(new UniqueId(uStart), new UniqueId(uEnd));
 
-        var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope |
-                    MessageSummaryItems.InternalDate | MessageSummaryItems.BodyStructure;
+        var items = MessageSummaryItems.UniqueId |
+            MessageSummaryItems.Envelope |
+            MessageSummaryItems.InternalDate |
+            MessageSummaryItems.BodyStructure |
+            MessageSummaryItems.GMailThreadId;
         _logger.LogInformation(
                 "NEWSCAN cid={Cid} folder='{Folder}' lastSeen={LastSeen} uidNext={UidNext} start={Start} end={End} limitEnd={LimitEnd}",
                 casellaId,
@@ -2103,8 +2143,11 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
                                 .OrderBy(u => u.Id)
                                 .ToList();
 
-        var items = MessageSummaryItems.UniqueId | MessageSummaryItems.Envelope |
-                    MessageSummaryItems.InternalDate | MessageSummaryItems.BodyStructure;
+        var items = MessageSummaryItems.UniqueId |
+            MessageSummaryItems.Envelope |
+            MessageSummaryItems.InternalDate |
+            MessageSummaryItems.BodyStructure |
+            MessageSummaryItems.GMailThreadId;
 
         var sums = await folder.FetchAsync(finalUids, items, ct);
         if (sums == null || sums.Count == 0) return new List<IMessageSummary>();

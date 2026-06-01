@@ -281,7 +281,27 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 .Select(x => x.LastEmailId)
                 .Distinct()
                 .ToList();
+            var assegnazioni = await db.EmailAssegnazione
+                    .AsNoTracking()
+                    .Where(a => lastEmailIds.Contains(a.EmailId)
+                             && (a.SoloInvio == null || a.SoloInvio != "Y"))
+                    .Select(a => new
+                    {
+                        a.EmailId,
+                        a.Utente
+                    })
+                    .ToListAsync();
 
+            var assegnatiMap = assegnazioni
+                .GroupBy(a => a.EmailId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => string.Join("; ", g
+                        .Select(x => x.Utente)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct()
+                        .OrderBy(x => x))
+                );
             // 3) email latest della pagina
             var emails = await (
                 from e in db.EmailRicevute.AsNoTracking()
@@ -379,8 +399,9 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                         CasellaId: e.CasellaId,
                         CasellaEmail: e.CasellaEmail,
                         ThreadKey: string.IsNullOrWhiteSpace(e.ThreadKey) ? null : e.ThreadKey,
-                        AssegnatoA: utente,
-                        Destinatari: e.Destinatari,
+                        AssegnatoA: assegnatiMap.TryGetValue(e.Id, out var ass)
+                            ? ass
+                            : "", Destinatari: e.Destinatari,
                         LettoSeguita: null,
                         LettoSeguitaIl: null,
                         CanArchive: mentionedUserHasReplied,
@@ -881,22 +902,38 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
         {
             await using var conn = await GetOpenConnectionAsync();
 
-            string threadKey;
+            string? threadKey = null;
+            string? gmailThreadId = null;
+
             const string findThreadSql = @"
-SELECT THREAD_KEY FROM (
-    SELECT THREAD_KEY FROM SGAPP.EMAIL_RICEVUTE WHERE ID = :id
-    UNION ALL
-    SELECT THREAD_KEY FROM SGAPP.EMAIL_INVIATE WHERE ID = :id
-) WHERE ROWNUM = 1";
+            SELECT THREAD_KEY, GMAIL_THREAD_ID FROM (
+                SELECT THREAD_KEY, GMAIL_THREAD_ID
+                FROM SGAPP.EMAIL_RICEVUTE
+                WHERE ID = :id
+
+                UNION ALL
+
+                SELECT THREAD_KEY, GMAIL_THREAD_ID
+                FROM SGAPP.EMAIL_INVIATE
+                WHERE ID = :id
+            )
+            WHERE ROWNUM = 1";
 
             await using (var findCmd = new OracleCommand(findThreadSql, conn))
             {
+                findCmd.BindByName = true;
                 findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
-                var result = await findCmd.ExecuteScalarAsync();
-                threadKey = result?.ToString() ?? "";
+
+                await using var r = await findCmd.ExecuteReaderAsync();
+                if (await r.ReadAsync())
+                {
+                    threadKey = r.IsDBNull(0) ? null : r.GetString(0);
+                    gmailThreadId = r.IsDBNull(1) ? null : r.GetString(1);
+                }
             }
 
-            if (string.IsNullOrWhiteSpace(threadKey))
+            if (string.IsNullOrWhiteSpace(threadKey) &&
+                string.IsNullOrWhiteSpace(gmailThreadId))
                 return new();
 
             const string sql = @"
@@ -919,8 +956,11 @@ SELECT
     'R' AS TIPO
 FROM SGAPP.EMAIL_RICEVUTE r
 LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
-WHERE r.THREAD_KEY = :p_thread
-
+WHERE (
+    (:p_gmail_thread IS NOT NULL AND r.GMAIL_THREAD_ID = :p_gmail_thread)
+    OR
+    (:p_gmail_thread IS NULL AND r.THREAD_KEY = :p_thread)
+)
 UNION ALL
 
 SELECT 
@@ -941,13 +981,22 @@ SELECT
     TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
     'I' AS TIPO
 FROM SGAPP.EMAIL_INVIATE i
-WHERE i.THREAD_KEY = :p_thread
+WHERE (
+    (:p_gmail_thread IS NOT NULL AND i.GMAIL_THREAD_ID = :p_gmail_thread)
+    OR
+    (:p_gmail_thread IS NULL AND i.THREAD_KEY = :p_thread)
+)
 
 ORDER BY DATA";
 
             await using var cmd = new OracleCommand(sql, conn);
-            cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+            cmd.BindByName = true;
 
+            cmd.Parameters.Add("p_gmail_thread", OracleDbType.Varchar2).Value =
+                string.IsNullOrWhiteSpace(gmailThreadId) ? DBNull.Value : gmailThreadId;
+
+            cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value =
+                string.IsNullOrWhiteSpace(threadKey) ? DBNull.Value : threadKey;
             var list = new List<EmailDetail_NEW>();
             await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -1002,6 +1051,10 @@ WHERE EMAIL_ID = :id_email";
                 await using var aReader = await aCmd.ExecuteReaderAsync();
                 while (await aReader.ReadAsync())
                 {
+                    var allegatoId = aReader.GetInt32(0);
+
+                    Console.WriteLine(
+                        $"MAIL={mail.Id} ALLEGATO={allegatoId}");
                     mail.Allegati.Add(new AllegatoItem_NEW
                     {
                         Id = aReader.GetInt32(0),
@@ -1015,6 +1068,7 @@ WHERE EMAIL_ID = :id_email";
             }
             if (!string.IsNullOrWhiteSpace(utente) && list.Any())
             {
+
                 var emailIds = list
                     .Where(x => x.Tipo == "R")
                     .Select(x => x.Id)
@@ -1927,8 +1981,30 @@ LEFT JOIN thread_counts tc
             LettoSeguitaIl = x.s.LettoIl
         })
         .ToListAsync();
+            var idsRaw = rawPage.Select(x => x.Id).Distinct().ToList();
 
-    var page = rawPage
+            var assegnazioni = await db.EmailAssegnazione
+                .AsNoTracking()
+                .Where(a => idsRaw.Contains(a.EmailId)
+                         && (a.SoloInvio == null || a.SoloInvio != "Y"))
+                .Select(a => new
+                {
+                    a.EmailId,
+                    a.Utente
+                })
+                .ToListAsync();
+
+            var assegnatiMap = assegnazioni
+                .GroupBy(a => a.EmailId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => string.Join("; ", g
+                        .Select(x => x.Utente)
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct()
+                        .OrderBy(x => x))
+                );
+            var page = rawPage
         .Select(x => new EmailListItem_NEW(
             Id: x.Id,
             Data: x.Data,
@@ -1944,7 +2020,7 @@ LEFT JOIN thread_counts tc
             CasellaId: x.CasellaId,
             CasellaEmail: x.CasellaEmail,
             ThreadKey: x.ThreadKey,
-            AssegnatoA: null,
+            AssegnatoA: assegnatiMap.TryGetValue(x.Id, out var ass) ? ass : "",
             Destinatari: x.Destinatari,
             Cc: null,
             Ccn: null,
@@ -3036,26 +3112,41 @@ ORDER BY s.ORDINE, s.NOME";
             await db.SaveChangesAsync();
         }
         public async Task<long?> SaveDraftAsync(
-     string utente,
-     string to,
-     string cc,
-     string ccn,
-     string? subject,
-     string bodyHtml,
-     long? draftId)
+            string utente,
+            string to,
+            string cc,
+            string ccn,
+            string? subject,
+            string bodyHtml,
+            long? draftId,
+            string? fromAddress,
+            string? threadKey = null,
+            string? replyToMessageId = null)
         {
             using var db = _dbFactory.CreateDbContext();
 
             EmailBozza? bozza = null;
 
-            // 1) Se mi dai un draftId provo a ricaricarla
             if (draftId.HasValue)
             {
                 bozza = await db.EmailBozze
                     .FirstOrDefaultAsync(x => x.Id == draftId.Value && x.Utente == utente);
             }
 
-            // 2) Se non esiste, la creo
+            if (bozza == null && !string.IsNullOrWhiteSpace(replyToMessageId))
+            {
+                bozza = await db.EmailBozze.FirstOrDefaultAsync(x =>
+                    x.Utente == utente &&
+                    x.ReplyToMessageId == replyToMessageId);
+            }
+
+            if (bozza == null && !string.IsNullOrWhiteSpace(threadKey))
+            {
+                bozza = await db.EmailBozze.FirstOrDefaultAsync(x =>
+                    x.Utente == utente &&
+                    x.ThreadKey == threadKey);
+            }
+
             if (bozza == null)
             {
                 bozza = new EmailBozza
@@ -3066,23 +3157,21 @@ ORDER BY s.ORDINE, s.NOME";
                 db.EmailBozze.Add(bozza);
             }
 
-            // 3) Aggiorno i campi
             bozza.Destinatari = to;
             bozza.Cc = cc;
             bozza.Ccn = ccn;
             bozza.Oggetto = subject;
             bozza.CorpoHtml = bodyHtml;
+            bozza.CasellaMittente = fromAddress;
+            bozza.ThreadKey = threadKey;
+            bozza.ReplyToMessageId = replyToMessageId;
             bozza.Letto = false;
-            // ✅ OBBLIGATORIO: colonna NOT NULL in Oracle
             bozza.LastSaved = DateTime.Now;
 
             await db.SaveChangesAsync();
+
             return bozza.Id;
         }
-
-
-
-
         public async Task<List<EmailBozza>> GetDraftsAsync(string utente, CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
@@ -5462,8 +5551,5 @@ WHERE e.ID = :p_email_id
       
 
     }
-
-
-
 
 }

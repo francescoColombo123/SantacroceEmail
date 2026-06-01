@@ -298,6 +298,7 @@ namespace SCemail.Components.Data
                 e.Property(x => x.DataAssegnazione).HasColumnName("DATA_ASSEGNAZIONE");
                 e.Property(x => x.DataCompletamento).HasColumnName("DATA_COMPLETAMENTO");
                 e.Property(x => x.Note).HasColumnName("NOTE");
+                
             });
 
 
@@ -306,18 +307,29 @@ namespace SCemail.Components.Data
             {
                 e.ToTable("EMAIL_BOZZE");
                 e.HasKey(x => x.Id);
+
                 e.Property(x => x.Id).HasColumnName("ID");
                 e.Property(x => x.Utente).HasColumnName("UTENTE");
                 e.Property(x => x.Destinatari).HasColumnName("DESTINATARI");
-                e.Property(x => x.Cc) .HasColumnName("CC").HasColumnType("CLOB");
+                e.Property(x => x.Cc).HasColumnName("CC").HasColumnType("CLOB");
                 e.Property(x => x.Ccn).HasColumnName("CCN").HasColumnType("CLOB");
                 e.Property(x => x.Oggetto).HasColumnName("OGGETTO");
                 e.Property(x => x.CorpoHtml).HasColumnName("CORPO_HTML");
-                e.Property(x => x.LastSaved).HasColumnName("LAST_SAVED"); // tipo DATE/NULL
+                e.Property(x => x.LastSaved).HasColumnName("LAST_SAVED");
+
                 e.Property(x => x.Letto)
-                     .HasColumnName("LETTO")
-                     .HasConversion<int>()     // bool <-> number(1)
-                     .IsRequired();
+                    .HasColumnName("LETTO")
+                    .HasConversion<int>()
+                    .IsRequired();
+
+                e.Property(x => x.CasellaMittente)
+                    .HasColumnName("CASELLA_MITTENTE");
+
+                e.Property(x => x.ThreadKey)
+                    .HasColumnName("THREAD_KEY");
+
+                e.Property(x => x.ReplyToMessageId)
+                    .HasColumnName("REPLY_TO_MESSAGE_ID");
             });
 
             mb.Entity<EmailBlacklist>(entity =>

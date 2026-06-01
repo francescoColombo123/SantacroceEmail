@@ -21,3 +21,44 @@
         document.body.setAttribute("data-mention-open", isOpen ? "1" : "0");
     }
 };
+
+window.mentionsInterop = window.mentionsInterop || {};
+
+window.mentionsInterop.setValue = function (id, value) {
+    const el = document.getElementById(id);
+    if (!el) return;
+
+    el.value = value ?? "";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+};
+
+window.mentionsInterop.scrollActiveIntoView = function () {
+    const active = document.querySelector('.mention-popup [data-active="true"]');
+
+    if (active) {
+        active.scrollIntoView({
+            block: "nearest"
+        });
+    }
+};
+
+window.composeInterop = window.composeInterop || {};
+
+window.composeInterop.replaceSignature = function (editorId, signatureHtml) {
+    const root = document.querySelector("#" + editorId + " .ql-editor");
+    if (!root) return;
+
+    root.querySelectorAll('[data-sc-signature="1"]').forEach(x => x.remove());
+
+    if (!signatureHtml || !signatureHtml.trim()) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-sc-signature", "1");
+    wrapper.innerHTML = signatureHtml;
+
+    root.appendChild(document.createElement("br"));
+    root.appendChild(wrapper);
+
+    root.dispatchEvent(new Event("input", { bubbles: true }));
+};

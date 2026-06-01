@@ -39,6 +39,9 @@ namespace SCemail.Components.Data
         public string? Ccn { get; set; }
         public string? Oggetto { get; set; }
         public string? CorpoHtml { get; set; }
+        public string? CasellaMittente { get; set; }
+        public string? ThreadKey { get; set; }
+        public string? ReplyToMessageId { get; set; }
         public DateTime? LastSaved { get; set; }
         public bool Letto { get; set; }  
 

@@ -826,6 +826,9 @@
         min-height: 420px !important;
     }
 
+        #editor .ql-editor blockquote {
+            white-space: normal !important;
+        }
     .drop-zone {
         margin-top: 0 !important;
         padding: 14px 10px !important;
@@ -981,15 +984,10 @@
             _bodyHtml = CorpoIniziale ?? "";
             _quoteHtml = "";
         }
-        else if (IsForward)
-        {
-            _bodyHtml = "";
-            _quoteHtml = FormatForwardQuoteHtml(CorpoIniziale);
-        }
         else
         {
             _bodyHtml = "";
-            _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
+            _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
         }
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
         _allRecipients = (recenti ?? new List<string>())
@@ -1048,12 +1046,18 @@
     
     private async Task OnCasellaChanged(string? value)
     {
+        if (string.Equals(_selectedCasella, value, StringComparison.OrdinalIgnoreCase))
+            return;
+
         _selectedCasella = value;
 
         await LoadFirmaAsync();
 
-        _pendingQuillInit = true;
-        _quillInitialized = false;
+        await JSRuntime.InvokeVoidAsync(
+            "composeInterop.replaceSignature",
+            "editor",
+            _firmaHtml ?? ""
+        );
 
         await InvokeAsync(StateHasChanged);
     }
@@ -1263,30 +1267,20 @@
             ? (_bodyHtml ?? "")
             : "<p><br></p>";
 
-        var quoteNow = !string.IsNullOrWhiteSpace(_quoteHtml)
-            ? _quoteHtml
-            : RemoveQuoteGarbage(CorpoIniziale ?? "");
+        var quoteNow = _quoteHtml ?? "";
 
-        var firmaText = _firmaHtml ?? "";
-
-        if (string.IsNullOrWhiteSpace(firmaText) &&
-            !string.IsNullOrWhiteSpace(_selectedCasella))
+        var firmaText = "";
+        if (!DraftId.HasValue)
         {
-            await LoadFirmaAsync();
             firmaText = _firmaHtml ?? "";
-        }
-        if (string.IsNullOrWhiteSpace(firmaText) &&
-            !string.IsNullOrWhiteSpace(_selectedCasella))
-        {
-            firmaText = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
-            _firmaHtml = firmaText;
 
-            Logger.LogWarning(
-                "FIRMA FORZATA IN ON_AFTER_RENDER: [{Firma}]",
-                firmaText
-            );
+            if (string.IsNullOrWhiteSpace(firmaText) &&
+                !string.IsNullOrWhiteSpace(_selectedCasella))
+            {
+                await LoadFirmaAsync();
+                firmaText = _firmaHtml ?? "";
+            }
         }
-
         Logger.LogWarning(
             "INIT QUILL DEBUG - BodyLen={BodyLen}, FirmaLen={FirmaLen}, QuoteLen={QuoteLen}, Firma=[{Firma}]",
             bodyNow?.Length ?? 0,
@@ -1405,14 +1399,14 @@
 
                 var fromAddress = _selectedCasella ?? await MailSvc.GetEmailAddressByUsernameAsync(Utente);
 
-                var corpoHtml = FixFirmaHtml(_bodyHtml ?? "");
+                var corpoHtml = _bodyHtml ?? "";
                 await MailSvc.SendEmailAsync(
                     usernameOrEmail: Utente,
                     to: string.Join(";", ChipsToEmails(_toList)),
                     cc: string.Join(";", ChipsToEmails(_ccList)),
                     bcc: string.Join(";", ChipsToEmails(_bccList)),
                     subject: _composeSubject ?? "(nessun oggetto)",
-                    bodyHtml: corpoHtml,
+                    bodyHtml: CleanBeforeSend(_bodyHtml),
                     attachments: _outgoing,
                     fromAddressOverride: fromAddress,
                     inReplyTo: ReplyToMessageId,
@@ -1447,15 +1441,23 @@
             await CancelPendingInternal();
 
             _bodyHtml = _bodyHtml?.Trim() ?? "";
-
+            if (!HasDraftContent())
+            {
+                await SafeDestroyEditor();
+                MudDialog.Close(DialogResult.Ok("draft-empty"));
+                return;
+            }
             _draftId = await MailSvc.SaveDraftAsync(
                 utente: Utente,
                 to: string.Join(";", ChipsToEmails(_toList)),
                 cc: string.Join(";", ChipsToEmails(_ccList)),
                 ccn: string.Join(";", ChipsToEmails(_bccList)),
                 subject: _composeSubject,
-                bodyHtml: _bodyHtml,
-                draftId: _draftId
+                bodyHtml: CleanBeforeSend(_bodyHtml),
+                draftId: _draftId,
+                fromAddress: _selectedCasella,
+                threadKey: ThreadKey,
+                replyToMessageId: ReplyToMessageId
             );
 
             await SafeDestroyEditor();
@@ -1981,9 +1983,14 @@
 
         return s;
     }
-    
+    private bool _composeInitializedOnce = false;
     protected override void OnParametersSet()
     {
+        if (_composeInitializedOnce)
+            return;
+
+        _composeInitializedOnce = true;
+
         _composeSubject = Oggetto ?? string.Empty;
 
         if (DraftId.HasValue)
@@ -1991,22 +1998,28 @@
             _bodyHtml = CorpoIniziale ?? "";
             _quoteHtml = "";
         }
-        else if (IsForward)
-        {
-            _bodyHtml = "";
-            _quoteHtml = FormatForwardQuoteHtml(CorpoIniziale);
-        }
         else
         {
             _bodyHtml = "";
-            _quoteHtml = RemoveQuoteGarbage(CorpoIniziale ?? "");
+            _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
         }
-
         if (!_quillInitialized)
             _pendingQuillInit = true;
     }
 
+    private static string CleanBeforeSend(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
 
+        var s = html.Trim();
+
+        s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"(<p><br></p>\s*){2,}", "<p><br></p>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"\s{3,}", " ");
+
+        return s.Trim();
+    }
     private static string NormalizeEmailValue(string? value)
     {
         return (value ?? "").Trim();
@@ -2080,5 +2093,57 @@
         _ccList = cc;
         _bccList = bcc;
     }
+
+    private bool HasDraftContent()
+    {
+        var cleanHtml = _bodyHtml ?? "";
+
+        cleanHtml = Regex.Replace(
+            cleanHtml,
+            @"<[^>]*data-sc-signature=""1""[^>]*>[\s\S]*?</[^>]+>",
+            "",
+            RegexOptions.IgnoreCase);
+
+        cleanHtml = Regex.Replace(
+            cleanHtml,
+            @"<blockquote[^>]*data-sc-quote=""1""[^>]*>[\s\S]*?</blockquote>",
+            "",
+            RegexOptions.IgnoreCase);
+
+        var bodyPlain = Regex.Replace(cleanHtml, "<.*?>", " ")
+            .Replace("&nbsp;", " ")
+            .Trim();
+
+        bodyPlain = Regex.Replace(bodyPlain, @"\s+", " ");
+
+        return !string.IsNullOrWhiteSpace(bodyPlain)
+               || _outgoing.Any();
+    }
+
+    private static string PrepareQuoteForEditor(string? input)
+{
+    if (string.IsNullOrWhiteSpace(input))
+        return "";
+
+    var s = input.Trim();
+
+    s = Regex.Replace(s, @"<\/?(html|body)[^>]*>", "", RegexOptions.IgnoreCase);
+    s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+    s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+    s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+
+    s = Regex.Replace(
+        s,
+        @"<blockquote[^>]*data-sc-quote=[""']1[""'][^>]*>[\s\S]*?</blockquote>",
+        "",
+        RegexOptions.IgnoreCase
+    );
+
+    s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
+    s = Regex.Replace(s, @"(<p><br></p>\s*){2,}", "<p><br></p>", RegexOptions.IgnoreCase);
+
+    return s.Trim();
+}
+
 
 }

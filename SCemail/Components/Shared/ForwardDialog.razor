@@ -38,18 +38,18 @@
         }
 
         <div class="mention-wrap">
-         <MudTextField T="string"
-              InputId="mentionBox"
-              Label="Altri commenti e menzioni"
-              Placeholder=@("Scrivi un commento. Per menzionare qualcuno digita @ e scegli un utente…")
-              @bind-Value="_mentionsComment"
-              @bind-Value:after="OnMentionsChangedAfter"
-              OnKeyDown="HandleMentionKeyDownMud"
-              Lines="4"
-              Variant="Variant.Outlined"
-              Class="mt-3 mention-textarea"
-              Immediate="true"
-              TextUpdateSuppression="false" />
+            <MudTextField T="string"
+                          InputId="mentionBox"
+                          Label="Altri commenti e menzioni"
+                          Placeholder=@("Scrivi un commento. Per menzionare qualcuno digita @ e scegli un utente…")
+                          Value="_mentionsComment"
+                          ValueChanged="OnMentionsChanged"
+                          OnKeyDown="HandleMentionKeyDownMud"
+                          OnKeyDown:preventDefault="@_preventMentionKey"
+                          Lines="4"
+                          Variant="Variant.Outlined"
+                          Class="mt-3 mention-textarea"
+                          Immediate="true" />
             @if (_loadingUsers)
             {
                 <MudText Typo="Typo.caption" Class="mt-1">
@@ -64,7 +64,10 @@
                         var u = _mentionSuggestions[i];
                         var activeClass = i == _selectedMentionIndex ? "mention-item active" : "mention-item";
 
-                        <div class="@activeClass" @onclick="() => SelectMention(u)">
+                        <div id="@($"mention-item-{i}")"
+                             data-active="@(i == _selectedMentionIndex ? "true" : "false")"
+                             class="@activeClass"
+                             @onclick="() => SelectMention(u)">
                             <div class="mention-avatar">@u.Substring(0, 1).ToUpper()</div>
                             <div class="mention-name">@u</div>
                         </div>
@@ -188,6 +191,7 @@
     private List<string> _allUsers = new();
     private List<string> _mentionedUsers = new();
     private int _selectedMentionIndex = -1;
+    private bool _preventMentionKey;
     public sealed class ForwardResult
     {
         public string User { get; init; } = default!;
@@ -238,17 +242,16 @@
 
     private void Cancel() => MudDialog.Cancel();
 
-    private void OnMentionsChanged(string value)
+    private Task OnMentionsChanged(string value)
     {
         _mentionsComment = value ?? string.Empty;
+
         UpdateMentionSuggestions(_mentionsComment);
         ExtractMentionedUsers();
+
+        return Task.CompletedTask;
     }
-    private void OnMentionsChangedAfter()
-    {
-        UpdateMentionSuggestions(_mentionsComment ?? string.Empty);
-        ExtractMentionedUsers();
-    }
+    
     private void UpdateMentionSuggestions(string text)
     {
         _mentionSuggestions.Clear();
@@ -286,6 +289,11 @@
 
     private async Task HandleMentionKeyDownMud(KeyboardEventArgs e)
     {
+        _preventMentionKey =
+            _mentionOpen &&
+            _mentionSuggestions.Any() &&
+            (e.Key == "Enter" || e.Key == "Tab" || e.Key == "ArrowDown" || e.Key == "ArrowUp");
+
         if (!_mentionOpen || !_mentionSuggestions.Any())
             return;
 
@@ -295,56 +303,58 @@
                 _selectedMentionIndex++;
                 if (_selectedMentionIndex >= _mentionSuggestions.Count)
                     _selectedMentionIndex = 0;
-                await InvokeAsync(StateHasChanged);
+
+                StateHasChanged();
+                await JS.InvokeVoidAsync("mentionsInterop.scrollActiveIntoView");
                 break;
 
             case "ArrowUp":
                 _selectedMentionIndex--;
                 if (_selectedMentionIndex < 0)
                     _selectedMentionIndex = _mentionSuggestions.Count - 1;
-                await InvokeAsync(StateHasChanged);
+
+                StateHasChanged();
+                await JS.InvokeVoidAsync("mentionsInterop.scrollActiveIntoView");
                 break;
 
             case "Enter":
             case "Tab":
                 if (_selectedMentionIndex >= 0 && _selectedMentionIndex < _mentionSuggestions.Count)
-                {
                     await SelectMention(_mentionSuggestions[_selectedMentionIndex]);
-                }
                 break;
 
             case "Escape":
                 _mentionOpen = false;
                 _mentionSuggestions.Clear();
                 _selectedMentionIndex = -1;
-                await InvokeAsync(StateHasChanged);
+                StateHasChanged();
                 break;
         }
     }
 
     private async Task SelectMention(string selectedUser)
-    {
-        if (string.IsNullOrWhiteSpace(_mentionsComment))
-        {
-            _mentionsComment = $"@{selectedUser} ";
-        }
-        else
-        {
-            _mentionsComment = Regex.Replace(
-                _mentionsComment,
-                @"(?:^|\s)@([a-zA-Z0-9._-]*)$",
-                m => $"{(m.Value.StartsWith(" ") ? " " : "")}@{selectedUser} "
-            );
-        }
+{
+    var current = _mentionsComment ?? "";
 
-        _mentionOpen = false;
-        _mentionSuggestions.Clear();
-        _selectedMentionIndex = -1;
+    _mentionsComment = string.IsNullOrWhiteSpace(current)
+        ? $"@{selectedUser} "
+        : Regex.Replace(
+            current,
+            @"(?:^|\s)@([a-zA-Z0-9._-]*)$",
+            m => $"{(m.Value.StartsWith(" ") ? " " : "")}@{selectedUser} "
+        );
 
-        ExtractMentionedUsers();
-        await InvokeAsync(StateHasChanged);
-    }
+    _mentionOpen = false;
+    _mentionSuggestions.Clear();
+    _selectedMentionIndex = -1;
+    _preventMentionKey = false;
 
+    ExtractMentionedUsers();
+
+    await JS.InvokeVoidAsync("mentionsInterop.setValue", "mentionBox", _mentionsComment);
+
+    await InvokeAsync(StateHasChanged);
+}
   
     private void ExtractMentionedUsers()
     {
