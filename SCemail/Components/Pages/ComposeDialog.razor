@@ -1213,7 +1213,7 @@
             _bodyHtml = html;
             _quoteHtml = "";
         }
-
+        _bodyHtml = RemoveTrailingSignatures(_bodyHtml);
         _showQuoteDetails = false;
     }
 
@@ -1653,8 +1653,8 @@
      cc: string.Join(";", ChipsToEmails(_ccList)),
      bcc: string.Join(";", ChipsToEmails(_bccList)),
      subject: _composeSubject ?? "(nessun oggetto)",
-     bodyHtml: BuildBodyForSend(),
-     attachments: _outgoing,
+        bodyHtml: BuildBodyForSend(),
+        attachments: _outgoing,
      fromAddressOverride: fromAddress,
      inReplyTo: ReplyToMessageId,
      referencesHdr: References,
@@ -1668,7 +1668,40 @@
     }
 
     private bool _isClosing;
+    private string BuildBodyForDraft()
+    {
+        var body = CleanBeforeSend(_bodyHtml);
+        body = RemoveTrailingSignatures(body);
 
+        var quote = _quoteHtml ?? "";
+        var result = body;
+
+        if (!string.IsNullOrWhiteSpace(quote))
+        {
+            result += "<br><br><hr><div><b>Messaggio precedente:</b></div>" +
+                      "<blockquote style='border-left:2px solid #ccc;margin-left:8px;padding-left:12px;'>" +
+                      quote +
+                      "</blockquote>";
+        }
+        _showQuoteDetails = false;
+        return result;
+    }
+    private static string RemoveTrailingSignatures(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var s = html.Trim();
+
+        s = Regex.Replace(
+            s,
+            @"(?is)(<p>\s*)?(<br\s*/?>\s*)*Cordiali\s+saluti\.?\s*(<br\s*/?>|\s|</p>)*Carlo\s+Di\s+Iorio\s*(<br\s*/?>|\s|</p>)*3467081608\s*(<br\s*/?>|\s|</p>)*(<span[^>]*>)?\s*EUROCEREALI\s+SRL\s*(</span>)?\s*(<br\s*/?>|\s|</p>)*$",
+            "",
+            RegexOptions.IgnoreCase
+        );
+
+        return s.Trim();
+    }
     private async Task CloseAndSaveDraft()
     {
         if (_isClosing || _isSavingDraft || _isDisposed)
@@ -1702,7 +1735,7 @@
                 cc: string.Join(";", ChipsToEmails(_ccList)),
                 ccn: string.Join(";", ChipsToEmails(_bccList)),
                 subject: _composeSubject,
-                bodyHtml: BuildBodyForSend(),
+               bodyHtml: BuildBodyForDraft(),
                 draftId: _draftId,
                 fromAddress: _selectedCasella,
                 threadKey: ThreadKey,

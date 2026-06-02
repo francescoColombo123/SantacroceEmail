@@ -115,23 +115,25 @@
 <style>
     .mention-wrap {
         position: relative;
+        margin-top: 16px;
     }
 
     .mention-item.active {
         background: #eef3ff;
     }
+
     .mention-popup {
         position: absolute;
-        left: 12px; /* invece di 0 */
-        bottom: 60px; /* sopra la textarea */
-        width: 260px;
-        z-index: 2000;
-        max-height: 240px;
+        left: 0;
+        right: 0;
+        bottom: calc(100% + 6px);
+        z-index: 9999;
+        max-height: 190px;
         overflow-y: auto;
         border-radius: 12px;
         background: white;
         border: 1px solid #d8def5;
-        box-shadow: 0 10px 24px rgba(0,0,0,0.12);
+        box-shadow: 0 10px 24px rgba(0,0,0,0.18);
         padding: 6px;
     }
     .mention-item {
