@@ -2,25 +2,44 @@
     const current = document.getElementById(editorId);
     if (!current) return;
 
-    const parent = current.parentNode;
-    if (!parent) return;
+    const shell = current.closest(".compose-editor-shell");
+    if (!shell) return;
 
     const q = current.__quill;
     const handler = current.__quillHandler;
 
     if (q) {
-        try { if (handler) q.off("text-change", handler); } catch (e) { }
-        try { q.disable(); } catch (e) { }
+        try {
+            if (handler)
+                q.off("text-change", handler);
+        } catch { }
+
+        try {
+            q.disable();
+        } catch { }
     }
 
-    parent.querySelectorAll(".ql-toolbar").forEach(n => n.remove());
-    parent.querySelectorAll(".ql-container").forEach(n => n.remove());
+    shell.querySelectorAll(".ql-container").forEach(n => n.remove());
 
-    parent.querySelectorAll(`#${editorId}`).forEach(n => n.remove());
+    let editor = shell.querySelector(`#${editorId}`);
 
-    const fresh = document.createElement("div");
-    fresh.id = editorId;
-    parent.appendChild(fresh);
+    if (!editor) {
+        editor = document.createElement("div");
+        editor.id = editorId;
+    }
+
+    const toolbar = shell.querySelector("#composeToolbar");
+
+    if (toolbar) {
+        toolbar.insertAdjacentElement("afterend", editor);
+    } else {
+        shell.prepend(editor);
+    }
+
+    editor.innerHTML = "";
+
+    editor.__quill = null;
+    editor.__quillHandler = null;
 };
 
 window.initFileDropZone = (element) => {
@@ -51,56 +70,18 @@ window.initFileDropZone = (element) => {
         }
     });
 };
-const encodeHtml = (s) =>
-    (s ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-
-
 const normalizeQuoteHtml = (quoteHtmlOrText) => {
     if (!quoteHtmlOrText) return "";
 
-    let s = (quoteHtmlOrText || "")
-        .replace(/\r\n/g, "\n")
-        .replace(/\r/g, "\n")
-        .trim();
+    let s = (quoteHtmlOrText || "").trim();
 
-    // pulizia html inutile
-    s = s.replace(/<\/?(html|body)[^>]*>/gi, "");
-    s = s.replace(/<style[\s\S]*?<\/style>/gi, "");
     s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
+    s = s.replace(/<style[\s\S]*?<\/style>/gi, "");
     s = s.replace(/<!--[\s\S]*?-->/g, "");
 
-    // elimina quote vecchie annidate
-    s = s.replace(
-        /<blockquote[^>]*data-sc-quote=["']1["'][^>]*>[\s\S]*?<\/blockquote>/gi,
-        ""
-    );
-
-    // converte div/p in br
-    s = s.replace(/<\/div>/gi, "<br>");
-    s = s.replace(/<\/p>/gi, "<br>");
-    s = s.replace(/<div[^>]*>/gi, "");
-    s = s.replace(/<p[^>]*>/gi, "");
-
-    // elimina spazi enormi
-    s = s.replace(/[ \t]{2,}/g, " ");
-
-    // elimina righe vuote infinite
-    s = s.replace(/\n{3,}/g, "\n\n");
-
-    // elimina <br> multipli
-    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
-
-    // se NON è html => encode
-    const looksHtml = /<\/?\w+[^>]*>/i.test(s);
-
-    if (!looksHtml) {
-        s = encodeHtml(s)
-            .replace(/\n\n/g, "<br><br>")
-            .replace(/\n/g, "<br>");
-    }
+    s = s.replace(/(<br\s*\/?>\s*){4,}/gi, "<br><br>");
+    s = s.replace(/^(\s|<br\s*\/?>|<p><br><\/p>|&nbsp;)+/gi, "");
+    s = s.replace(/(\s|<br\s*\/?>|<p><br><\/p>|&nbsp;)+$/gi, "");
 
     return s.trim();
 };
@@ -114,69 +95,18 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => 
     const quill = new Quill(host, {
         theme: "snow",
         modules: {
-            toolbar: [
-                ["bold", "italic", "underline"],
-                [{ list: "ordered" }, { list: "bullet" }],
-                ["link"],
-                ["clean"]
-            ]
+            toolbar: document.getElementById("composeToolbar")
         }
     });
 
     host.__quill = quill;
     host.__dotnetRef = dotnetRef;
+
     const body = (bodyHtml || "").trim();
     const firma = normalizeSignatureHtml(signatureText || "");
     const quote = (quoteHtml || "").trim();
-
-    if (body && body !== "<p><br></p>") {
-        quill.clipboard.dangerouslyPasteHTML(0, body, "api");
-    } else {
-        quill.setText("\n", "api");
-    }
-
-    let index = quill.getLength() - 1;
-
-    if (firma) {
-        quill.clipboard.dangerouslyPasteHTML(
-            index,
-            `<br><div data-sc-signature="1" style="margin-top:12px; line-height:1.5;">${firma}</div><br>`,
-            "api"
-        );
-        index = quill.getLength() - 1;
-    }
-
-    if (quote) {
-        const cleanQuote = normalizeQuoteHtml(quote);
-
-        quill.clipboard.dangerouslyPasteHTML(
-            index,
-            `
-        <div data-sc-quote-wrapper="1" style="margin-top:18px;">
-            <hr style="border:none;border-top:1px solid #cfcfcf;margin:14px 0;">
-            <div style="font-size:13px;color:#666;margin-bottom:8px;">
-                Messaggio precedente:
-            </div>
-            <blockquote data-sc-quote="1"
-                style="
-                    margin:0 0 0 8px;
-                    padding-left:12px;
-                    border-left:2px solid #ccc;
-                    color:#222;
-                    font-family:'Courier New',monospace;
-                    font-size:14px;
-                    line-height:1.4;
-                    white-space:normal;
-                    word-break:break-word;
-                ">
-                ${cleanQuote}
-            </blockquote>
-        </div>
-        `,
-            "api"
-        );
-    }
-
+    let html = body && body !== "<p><br></p>" ? body : "<p><br></p>";
+    quill.clipboard.dangerouslyPasteHTML(0, html, "api");
     quill.setSelection(0, 0, "api");
 
     const handler = () => {
@@ -194,14 +124,16 @@ window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => 
 function normalizeSignatureHtml(signatureHtml) {
     let s = signatureHtml || "";
 
-    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
-    if (!/<br\s*\/?>|<\/div>|<\/p>/i.test(s)) {
+    s = s.replace(/<\/div>/gi, "<br>");
+    s = s.replace(/<div[^>]*>/gi, "");
+    s = s.replace(/<\/p>/gi, "<br>");
+    s = s.replace(/<p[^>]*>/gi, "");
+
+    if (!/<br\s*\/?>/i.test(s)) {
         s = s.replace(/\n/g, "<br>");
     }
-
-    s = s.replace(/\s*(\d{8,15})\s*/g, "<br>$1<br><br>");
-    s = s.replace(/\s*(EUROCEREALI SRL|GRUPPO SANTACROCE)\s*/gi, "<br><br>$1");
 
     s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
 
@@ -216,67 +148,91 @@ window.composeInterop.replaceSignature = function (editorId, signatureHtml) {
 
     if (!quill) return;
 
-    const root = quill.root;
+    dotnetRef?.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
+};
+function normalizePlain(text) {
+    return (text || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/[ \t]+/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
 
-    // 1) prendo il blocco quote vero dal DOM, non con regex
-    const quoteNode = root.querySelector('[data-sc-quote-wrapper="1"]');
-    const quoteHtml = quoteNode ? quoteNode.outerHTML : "";
+function plainToHtml(text) {
+    const clean = normalizePlain(text);
 
-    // 2) rimuovo temporaneamente la quote
-    if (quoteNode) {
-        quoteNode.remove();
-    }
+    if (!clean) return "<p><br></p>";
 
-    // 3) rimuovo tutte le firme marcate
-    root.querySelectorAll('[data-sc-signature="1"]').forEach(n => n.remove());
+    return clean
+        .split(/\n{2,}/)
+        .map(block => `<p>${encodeHtml(block).replace(/\n/g, "<br>")}</p>`)
+        .join("");
+}
+function signatureToPlain(signatureHtml) {
+    let s = signatureHtml || "";
 
-    // 4) fallback: rimuovo firme vecchie non marcate SOLO dal contenuto rimasto
-    let html = root.innerHTML || "";
+    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-    html = html.replace(
-        /(<br\s*\/?>\s*)*Cordiali saluti\.[\s\S]*?(EUROCEREALI SRL|GRUPPO SANTACROCE)(<\/[^>]+>|<br\s*\/?>|\s)*/gi,
-        ""
-    );
+    s = s.replace(/<\s*br\s*\/?\s*>/gi, "\n");
+    s = s.replace(/<\/\s*p\s*>/gi, "\n");
+    s = s.replace(/<\/\s*div\s*>/gi, "\n");
 
-    html = html.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>").trim();
+    s = s.replace(/<[^>]+>/g, "");
 
-    const normalizedSignature = normalizeSignatureHtml(signatureHtml || "");
+    return normalizePlain(s);
+}
 
-    // 5) ricostruisco SEMPRE: testo utente + firma + quote
-    let newHtml = html;
+const encodeHtml = (s) =>
+    (s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
 
-    if (normalizedSignature) {
-        newHtml += `<br><div data-sc-signature="1" style="margin-top:12px; line-height:1.5;">${normalizedSignature}</div><br>`;
-    }
-
-    if (quoteHtml) {
-        newHtml += `<br>${quoteHtml}`;
-    }
-
-    quill.setText("", "api");
-    quill.clipboard.dangerouslyPasteHTML(0, newHtml, "api");
-
-    if (dotnetRef) {
-        dotnetRef.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
-    }
+window.composeInterop.getEditorHtml = function (editorId) {
+    const host = document.getElementById(editorId);
+    const quill = host?.__quill;
+    return quill?.root?.innerHTML || "";
 };
 window.registerComposeAutoSaveClose = function (dotnetRef) {
     if (window.__composeAutoSaveRegistered)
         return;
 
     window.__composeAutoSaveRegistered = true;
+    window.__composeAutoSaveBusy = false;
+
+    const closeOnce = () => {
+        if (window.__composeAutoSaveBusy) return;
+
+        window.__composeAutoSaveBusy = true;
+
+        dotnetRef.invokeMethodAsync("CloseFromJs")
+            .finally(() => {
+                setTimeout(() => {
+                    window.__composeAutoSaveBusy = false;
+                }, 800);
+            });
+    };
 
     document.addEventListener("keydown", function (e) {
         if (e.key === "Escape") {
-            dotnetRef.invokeMethodAsync("CloseFromJs");
+            closeOnce();
         }
     });
 
     document.addEventListener("mousedown", function (e) {
         const dialog = document.querySelector(".mud-dialog");
 
+        const isMudPopup =
+            e.target.closest(".mud-popover") ||
+            e.target.closest(".mud-list") ||
+            e.target.closest(".mud-menu") ||
+            e.target.closest(".mud-select");
+
+        if (isMudPopup) return;
+
         if (dialog && !dialog.contains(e.target)) {
-            dotnetRef.invokeMethodAsync("CloseFromJs");
+            closeOnce();
         }
     });
 };

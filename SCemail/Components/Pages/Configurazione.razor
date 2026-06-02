@@ -175,6 +175,8 @@
                             <select class="form-select" @onchange="OnProviderChanged">
                                 <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
                                 <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
+                                <option value="Aruba-IMAPS" selected="@("Aruba-IMAPS" == form.Provider)">ARUBA - IMAPS</option>
+
                                 <option value="Legalmail" selected="@("Legalmail" == form.Provider)">Legalmail</option>
                                 <option value="InterfreePEC" selected="@("InterfreePEC" == form.Provider)">Interfree PEC</option>
                             </select>
@@ -613,6 +615,9 @@
 
         if (provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
             return ("imap.gmail.com", 993, "Y");
+
+        if (provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase))
+            return ("imaps.pec.aruba.it", 993, "Y");
 
         if (provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase))
         {

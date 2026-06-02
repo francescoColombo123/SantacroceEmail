@@ -149,9 +149,154 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
         if (string.IsNullOrWhiteSpace(value))
             return null;
 
-        return value
-            .Trim()
-            .Trim('<', '>', ' ', '\t', '\r', '\n');
+        var v = value.Trim();
+
+        if (v.StartsWith("<") && v.EndsWith(">") && v.Length > 2)
+            v = v[1..^1];
+
+        v = v.Trim('<', '>', ' ', '\t', '\r', '\n');
+
+        return string.IsNullOrWhiteSpace(v)
+            ? null
+            : v.Trim();
+    }
+
+    private static List<string> ExtractMessageIdsFromReferences(string? refs)
+    {
+        if (string.IsNullOrWhiteSpace(refs))
+            return new();
+
+        var result = new List<string>();
+
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(refs, @"<([^>]+)>"))
+        {
+            var id = NormalizeMessageId(m.Groups[1].Value);
+            if (!string.IsNullOrWhiteSpace(id))
+                result.Add(id);
+        }
+
+        if (result.Count == 0)
+        {
+            result = refs
+                .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(NormalizeMessageId)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!)
+                .ToList();
+        }
+
+        return result
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static List<string> GetThreadCandidateMessageIds(MimeMessage message)
+    {
+        var ids = new List<string>();
+
+        var inReplyTo = NormalizeMessageId(message.InReplyTo);
+        if (!string.IsNullOrWhiteSpace(inReplyTo))
+            ids.Add(inReplyTo);
+
+        if (message.References != null && message.References.Any())
+        {
+            ids.AddRange(
+                message.References
+                    .Select(NormalizeMessageId)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))!
+            );
+        }
+
+        return ids
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Reverse()
+            .ToList();
+    }
+    private sealed class ThreadResolveResult
+    {
+        public string ThreadKey { get; init; } = "";
+        public string? GmailThreadKey { get; init; }
+    }
+
+    private async Task<ThreadResolveResult> ResolveThreadKeyAsync(
+    OracleConnection conn,
+    int casellaId,
+    string currentMessageId,
+    MimeMessage message,
+    string? providerThreadKey,
+    CancellationToken ct)
+    {
+        currentMessageId = NormalizeMessageId(currentMessageId) ?? currentMessageId;
+
+        const string sqlFindByMessageId = @"
+SELECT THREAD_KEY, GMAIL_THREAD_ID
+FROM (
+    SELECT MESSAGE_ID,
+           THREAD_KEY,
+           GMAIL_THREAD_ID,
+           DATA_RICEZIONE AS DATA_REF
+      FROM SGAPP.EMAIL_RICEVUTE
+     WHERE CASELLA_ID = :p_cid
+       AND LOWER(MESSAGE_ID) = :p_mid
+
+    UNION ALL
+
+    SELECT MESSAGE_ID,
+           THREAD_KEY,
+           GMAIL_THREAD_ID,
+           DATA_INVIO AS DATA_REF
+      FROM SGAPP.EMAIL_INVIATE
+     WHERE CASELLA_ID = :p_cid
+       AND LOWER(MESSAGE_ID) = :p_mid
+)
+ORDER BY DATA_REF DESC
+FETCH FIRST 1 ROWS ONLY";
+
+        async Task<ThreadResolveResult?> FindParentAsync(string? rawMessageId)
+        {
+            var mid = NormalizeMessageId(rawMessageId);
+            if (string.IsNullOrWhiteSpace(mid))
+                return null;
+
+            await using var cmd = new OracleCommand(sqlFindByMessageId, conn)
+            {
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
+            cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = mid.ToLowerInvariant();
+
+            await using var r = await cmd.ExecuteReaderAsync(ct);
+
+            if (!await r.ReadAsync(ct))
+                return null;
+
+            var parentThreadKey = r.IsDBNull(0) ? null : r.GetString(0);
+            var parentGmailThreadId = r.IsDBNull(1) ? null : r.GetString(1);
+
+            if (string.IsNullOrWhiteSpace(parentThreadKey))
+                parentThreadKey = mid;
+
+            return new ThreadResolveResult
+            {
+                ThreadKey = parentThreadKey,
+                GmailThreadKey = parentGmailThreadId
+            };
+        }
+
+        foreach (var candidate in GetThreadCandidateMessageIds(message))
+        {
+            var found = await FindParentAsync(candidate);
+            if (found != null)
+                return found;
+        }
+
+        return new ThreadResolveResult
+        {
+            ThreadKey = currentMessageId,
+            GmailThreadKey = providerThreadKey
+        };
     }
     private async Task FetchEmailsForAccount(
      int casellaId, string email, string password, string provider, string host, int port, bool useSsl,
@@ -195,12 +340,13 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             TryAddGmailAllMail(client, foldersToProcess, email);
             // dedup + noselect
             foldersToProcess = foldersToProcess
-                .Where(f => f != null)
-                .Where(f => !string.IsNullOrWhiteSpace(f.FullName))
-                .Where(f => (f.Attributes & FolderAttributes.NoSelect) == 0)
-                .GroupBy(f => NormalizeFolderPath(f.FullName!))
-                .Select(g => g.First())
-                .ToList();
+                 .Where(f => f != null)
+                 .Where(f => !string.IsNullOrWhiteSpace(f.FullName))
+                 .Where(f => (f.Attributes & FolderAttributes.NoSelect) == 0)
+                 .Where(f => !IsDraftFolder(f)) // ✅ NON leggere bozze
+                 .GroupBy(f => NormalizeFolderPath(f.FullName!))
+                 .Select(g => g.First())
+                 .ToList();
 
             _logger.LogInformation("Cartelle selezionate per {Email}: {Folders}",
                 email, string.Join(" | ", foldersToProcess.Select(f => f.FullName)));
@@ -467,6 +613,10 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
             int emailId;
 
+            var providerThreadKey = s.GMailThreadId.HasValue
+                 ? $"gmail:{s.GMailThreadId.Value}"
+                 : null;
+
             if (isSentFolder)
             {
                 emailId = forcedExistingSentId ?? await SaveSentEmail(
@@ -477,15 +627,12 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     ct,
                     folder.FullName,
                     uid,
-                    emailDateRome
+                    emailDateRome,
+                    providerThreadKey
                 );
             }
             else
             {
-                var gmailThreadKey = s.GMailThreadId.HasValue
-                 ? $"gmail:{s.GMailThreadId.Value}"
-                 : null;
-
                 emailId = await SaveEmail(
                     dbConn,
                     casellaId,
@@ -495,9 +642,8 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
                     folder.FullName,
                     uid,
                     emailDateRome,
-                    gmailThreadKey
+                    providerThreadKey
                 );
-
                 var isBlacklisted = await IsSenderBlacklistedAsync(dbConn, full.From?.ToString(), ct);
 
                 if (isSpamFolder)
@@ -565,73 +711,33 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
     string folderPath,
     long? messageUid,
     DateTime? internalDateRome = null,
-    string? forcedThreadKey = null)
+   string? providerThreadKey = null)
     {
         messageId = NormalizeMessageId(messageId);
         if (string.IsNullOrWhiteSpace(messageId))
             messageId = BuildStableFallbackMessageId(message);
 
-        string? threadKey = forcedThreadKey;
-        const string sqlFindThreadKey = @"
-SELECT THREAD_KEY
-FROM (
-    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_RICEZIONE AS DATA_REF
-    FROM SGAPP.EMAIL_RICEVUTE
-    UNION ALL
-    SELECT LOWER(MESSAGE_ID) AS MESSAGE_ID, THREAD_KEY, DATA_INVIO AS DATA_REF
-    FROM SGAPP.EMAIL_INVIATE
-)
-WHERE MESSAGE_ID = :p_mid
-ORDER BY DATA_REF DESC
-FETCH FIRST 1 ROWS ONLY";
+        var resolvedThread = await ResolveThreadKeyAsync(
+       conn,
+       casellaId,
+       messageId,
+       message,
+       providerThreadKey,
+       ct
+   );
 
-      
-
-        async Task<string?> TryResolveThreadKeyAsync(string rawId)
-        {
-            var norm = NormalizeMessageId(rawId);
-            if (string.IsNullOrWhiteSpace(norm))
-                return null;
-
-            // 1) match esatto
-            await using (var cmd = new OracleCommand(sqlFindThreadKey, conn) { BindByName = true })
-            {
-                cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = norm.ToLowerInvariant();
-                var obj = await cmd.ExecuteScalarAsync(ct);
-                if (obj != null && obj != DBNull.Value)
-                    return obj.ToString();
-            }
-
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(threadKey) && !string.IsNullOrWhiteSpace(message.InReplyTo))
-        {
-            threadKey = await TryResolveThreadKeyAsync(message.InReplyTo);
-        }
-
-        if (string.IsNullOrWhiteSpace(threadKey) && message.References != null && message.References.Any())
-        {
-            foreach (var refIdRaw in message.References.Reverse())
-            {
-                threadKey = await TryResolveThreadKeyAsync(refIdRaw);
-                if (!string.IsNullOrWhiteSpace(threadKey))
-                    break;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(threadKey))
-            threadKey = messageId;
+        var threadKey = resolvedThread.ThreadKey;
+        var gmailThreadId = resolvedThread.GmailThreadKey ?? providerThreadKey;
         var blacklist = await IsSenderBlacklistedAsync(conn, message.From?.ToString(), ct);
         const string sql = @"
 INSERT INTO SGAPP.EMAIL_RICEVUTE
     (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, CC, CCN, OGGETTO,
      CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
-     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY, BLACKLIST)
+     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY,GMAIL_THREAD_ID, BLACKLIST)
 VALUES
     (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_cc, :p_ccn, :p_subj,
      :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
-     :p_inreply, :p_refs, :p_thread, :p_blacklist)
+     :p_inreply, :p_refs, :p_thread, :p_gmail_thread_id, :p_blacklist)
 RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -645,7 +751,10 @@ RETURNING ID INTO :p_id";
         cmd.Parameters.Add("p_to", OracleDbType.Varchar2, 2000).Value = message.To?.ToString() ?? "";
         cmd.Parameters.Add("p_cc", OracleDbType.Varchar2, 2000).Value = message.Cc?.ToString() ?? "";
         cmd.Parameters.Add("p_ccn", OracleDbType.Varchar2, 2000).Value = message.Bcc?.ToString() ?? "";
-       
+        cmd.Parameters.Add("p_gmail_thread_id", OracleDbType.Varchar2, 128).Value =
+     !string.IsNullOrWhiteSpace(gmailThreadId)
+         ? gmailThreadId
+         : (object)DBNull.Value;
         var emailRome = internalDateRome ?? TimeZoneInfo.ConvertTime(message.Date, RomeTz).DateTime;
 
         string subject = message.Subject?.Trim() ?? "";
@@ -2444,7 +2553,8 @@ WHERE LOWER(EMAIL) = :p_email
     CancellationToken ct,
     string folderPath,
     long? messageUid,
-    DateTime? internalDateRome = null)
+    DateTime? internalDateRome = null,
+    string? providerThreadKey = null)
     {
         messageId = NormalizeMessageId(messageId);
         if (string.IsNullOrWhiteSpace(messageId))
@@ -2459,17 +2569,27 @@ WHERE LOWER(EMAIL) = :p_email
         if (subject.Length > 1000)
             subject = subject[..1000];
 
-        var threadKey = messageId;
+        var resolvedThread = await ResolveThreadKeyAsync(
+     conn,
+     casellaId,
+     messageId,
+     message,
+     providerThreadKey,
+     ct
+ );
+
+        var threadKey = resolvedThread.ThreadKey;
+        var gmailThreadId = resolvedThread.GmailThreadKey ?? providerThreadKey;
 
         const string sql = @"
 INSERT INTO SGAPP.EMAIL_INVIATE
     (CASELLA_ID, UTENTE, CORPO_TESTO, DATA_INVIO, CORPO_HTML,
      DESTINATARI, OGGETTO, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR,
-     THREAD_KEY, CC, BCC,FOLDER_PATH, MESSAGE_UID)
+     THREAD_KEY, CC, BCC, FOLDER_PATH, MESSAGE_UID, GMAIL_THREAD_ID)
 VALUES
     (:p_cid, :p_utente, :p_text, :p_dt, :p_html,
      :p_to, :p_subj, :p_mid, :p_inreply, :p_refs,
-     :p_thread, :p_cc, :p_bcc, :p_fp, :p_uid )
+     :p_thread, :p_cc, :p_bcc, :p_fp, :p_uid, :p_gmail_thread_id)
 RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -2518,7 +2638,10 @@ RETURNING ID INTO :p_id";
         {
             Direction = ParameterDirection.Output
         };
-
+        cmd.Parameters.Add("p_gmail_thread_id", OracleDbType.Varchar2, 128).Value =
+    !string.IsNullOrWhiteSpace(gmailThreadId)
+        ? gmailThreadId
+        : (object)DBNull.Value;
         cmd.Parameters.Add(outId);
 
         try
@@ -3253,6 +3376,16 @@ UPDATE SGAPP.EMAIL_RICEVUTE
         }
 
         return body;
+    }
+    private static bool IsDraftFolder(IMailFolder folder)
+    {
+        var name = NormalizeFolderPath(folder.FullName).ToLowerInvariant();
+
+        return name.Contains("draft")
+            || name.Contains("bozze")
+            || name.Contains("bozza")
+            || name.Contains("[gmail]/drafts")
+            || name.Contains("[gmail]/bozze");
     }
 
     private static bool IsPecWrapperBody(string? html, string? text)

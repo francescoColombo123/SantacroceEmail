@@ -903,17 +903,15 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             await using var conn = await GetOpenConnectionAsync();
 
             string? threadKey = null;
-            string? gmailThreadId = null;
-
             const string findThreadSql = @"
-            SELECT THREAD_KEY, GMAIL_THREAD_ID FROM (
-                SELECT THREAD_KEY, GMAIL_THREAD_ID
+            SELECT THREAD_KEY FROM (
+                SELECT THREAD_KEY
                 FROM SGAPP.EMAIL_RICEVUTE
                 WHERE ID = :id
 
                 UNION ALL
 
-                SELECT THREAD_KEY, GMAIL_THREAD_ID
+                SELECT THREAD_KEY
                 FROM SGAPP.EMAIL_INVIATE
                 WHERE ID = :id
             )
@@ -928,12 +926,10 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                 if (await r.ReadAsync())
                 {
                     threadKey = r.IsDBNull(0) ? null : r.GetString(0);
-                    gmailThreadId = r.IsDBNull(1) ? null : r.GetString(1);
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(threadKey) &&
-                string.IsNullOrWhiteSpace(gmailThreadId))
+            if (string.IsNullOrWhiteSpace(threadKey))
                 return new();
 
             const string sql = @"
@@ -956,11 +952,7 @@ SELECT
     'R' AS TIPO
 FROM SGAPP.EMAIL_RICEVUTE r
 LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
-WHERE (
-    (:p_gmail_thread IS NOT NULL AND r.GMAIL_THREAD_ID = :p_gmail_thread)
-    OR
-    (:p_gmail_thread IS NULL AND r.THREAD_KEY = :p_thread)
-)
+WHERE r.THREAD_KEY = :p_thread
 UNION ALL
 
 SELECT 
@@ -981,19 +973,12 @@ SELECT
     TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
     'I' AS TIPO
 FROM SGAPP.EMAIL_INVIATE i
-WHERE (
-    (:p_gmail_thread IS NOT NULL AND i.GMAIL_THREAD_ID = :p_gmail_thread)
-    OR
-    (:p_gmail_thread IS NULL AND i.THREAD_KEY = :p_thread)
-)
-
+WHERE i.THREAD_KEY = :p_thread
 ORDER BY DATA";
 
             await using var cmd = new OracleCommand(sql, conn);
             cmd.BindByName = true;
 
-            cmd.Parameters.Add("p_gmail_thread", OracleDbType.Varchar2).Value =
-                string.IsNullOrWhiteSpace(gmailThreadId) ? DBNull.Value : gmailThreadId;
 
             cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value =
                 string.IsNullOrWhiteSpace(threadKey) ? DBNull.Value : threadKey;
@@ -1421,7 +1406,7 @@ WHEN MATCHED THEN
         t.LETTO = NVL(t.LETTO, 'Y')
 WHEN NOT MATCHED THEN
     INSERT (EMAIL_ID, UTENTE, CREATA_IL, LETTO)
-    VALUES (s.EMAIL_ID, s.UTENTE, SYSDATE, 'Y')";
+    VALUES (s.EMAIL_ID, s.UTENTE, SYSDATE, 'N')";
 
             await using var cmd = new OracleCommand(sql, conn)
             {
@@ -3440,7 +3425,8 @@ ORDER BY s.ORDINE, s.NOME";
     string? fromAddressOverride = null,
     string? inReplyTo = null,
     string? referencesHdr = null,
-    CancellationToken ct = default)
+string? threadKey = null,
+CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
 
@@ -3579,42 +3565,35 @@ ORDER BY s.ORDINE, s.NOME";
                 );
             }
 
-            var messageIdClean = (message.MessageId ?? "").Trim('<', '>', ' ', '\t', '\r', '\n');
-            // 🔹 Calcolo THREAD_KEY coerente con email ricevute/inviate
-            string threadKeyClean;
+            var messageIdClean = CleanMsgId(message.MessageId);
+            var threadKeyClean = NormalizeMsgId(threadKey);
 
-            if (!string.IsNullOrEmpty(inReplyTo))
+            if (string.IsNullOrWhiteSpace(threadKeyClean) && !string.IsNullOrWhiteSpace(cleanInReplyTo))
             {
-                var normalizedInReply = inReplyTo.Trim('<', '>', ' ', '\t', '\r', '\n').ToUpperInvariant();
+                var parentId = NormalizeMsgId(cleanInReplyTo);
 
-                // Cerca se già esiste nel DB (EMAIL_RICEVUTE o EMAIL_INVIATE)
-                var existingKey = await db.EmailInviate
-                    .Where(e => e.MessageId.ToUpper() == normalizedInReply)
+                var existingKey = await db.EmailRicevute
+                    .Where(e => e.MessageId != null && e.MessageId.ToUpper() == parentId)
                     .Select(e => e.ThreadKey)
                     .FirstOrDefaultAsync(ct);
 
-                if (string.IsNullOrEmpty(existingKey))
+                if (string.IsNullOrWhiteSpace(existingKey))
                 {
-                    existingKey = await db.EmailRicevute
-                        .Where(e => e.MessageId.ToUpper() == normalizedInReply)
+                    existingKey = await db.EmailInviate
+                        .Where(e => e.MessageId != null && e.MessageId.ToUpper() == parentId)
                         .Select(e => e.ThreadKey)
                         .FirstOrDefaultAsync(ct);
                 }
 
-                // Se trovata, eredito la chiave del thread esistente
-                threadKeyClean = !string.IsNullOrEmpty(existingKey)
-                    ? existingKey
-                    : normalizedInReply;
-
-                _logger.LogInformation("🧩 ThreadKey derivata da InReplyTo: {Key}", threadKeyClean);
+                threadKeyClean = !string.IsNullOrWhiteSpace(existingKey)
+                    ? NormalizeMsgId(existingKey)
+                    : parentId;
             }
-            else
+
+            if (string.IsNullOrWhiteSpace(threadKeyClean))
             {
-                // Nuovo thread → uso MessageId
-                threadKeyClean = messageIdClean.ToUpperInvariant();
-                _logger.LogInformation("🆕 Nuovo thread creato: {Key}", threadKeyClean);
+                threadKeyClean = NormalizeMsgId(messageIdClean);
             }
-
             var inReplyToClean = string.IsNullOrWhiteSpace(cleanInReplyTo)
     ? null
     : cleanInReplyTo;
@@ -3624,7 +3603,7 @@ ORDER BY s.ORDINE, s.NOME";
             var inviata = new EmailInviata
             {
                 CasellaId = casella.Id,
-                Utente = usernameOrEmail,
+                Utente = casella.Email,
                 Destinatari = to,
                 Cc = cc,
                 Bcc = bcc,
@@ -3844,7 +3823,19 @@ ORDER BY s.ORDINE, s.NOME";
              );
 
         }
+        private static string NormalizeMsgId(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "";
 
+            var v = value.Trim()
+                .Trim('<', '>', ' ', '\t', '\r', '\n', '|', ';', ',');
+
+            if (v.Contains('|'))
+                v = v.Split('|', StringSplitOptions.RemoveEmptyEntries)[0].Trim();
+
+            return v.ToUpperInvariant();
+        }
         public async Task AddRecipientIfNotExistsAsync(string email, string? nome = null, CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();

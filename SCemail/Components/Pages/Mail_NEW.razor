@@ -2402,24 +2402,51 @@ else
     private async Task<List<EmailListItem_NEW>> ApplyThreadCountsToPageAsync(List<EmailListItem_NEW> page)
     {
         if (page == null || page.Count == 0)
+            return page ?? new();
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var keys = page
+            .Select(x => x.ThreadKey)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (keys.Count == 0)
             return page;
 
-        var result = new List<EmailListItem_NEW>(page.Count);
+        var ricevute = await db.EmailRicevute
+            .Where(x => x.ThreadKey != null && keys.Contains(x.ThreadKey))
+            .GroupBy(x => x.ThreadKey)
+            .Select(g => new { ThreadKey = g.Key!, Count = g.Count() })
+            .ToListAsync();
 
-        foreach (var item in page)
+        var inviate = await db.EmailInviate
+            .Where(x => x.ThreadKey != null && keys.Contains(x.ThreadKey))
+            .GroupBy(x => x.ThreadKey)
+            .Select(g => new { ThreadKey = g.Key!, Count = g.Count() })
+            .ToListAsync();
+
+        var counts = ricevute
+            .Concat(inviate)
+            .GroupBy(x => x.ThreadKey, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(x => x.Count),
+                StringComparer.OrdinalIgnoreCase
+            );
+
+        return page.Select(x =>
         {
-            var realThreadLen = await MailSvc.GetConversationCountByThreadFromRicevuteAsync(item.Id);
-            if (realThreadLen <= 0)
-                realThreadLen = 1;
+            var key = x.ThreadKey?.Trim();
 
-            result.Add(item with
-            {
-                ThreadLen = realThreadLen,
-                Replies = Math.Max(0, realThreadLen - 1)
-            });
-        }
+            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var c)
+                ? c
+                : 1;
 
-        return result;
+            return x with { ThreadLen = count };
+        }).ToList();
     }
     private async Task NuovoPostIt()
     {

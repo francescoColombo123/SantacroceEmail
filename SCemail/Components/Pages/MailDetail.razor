@@ -143,13 +143,22 @@
                     <div class="gmail-msg">
                         <div class="gmail-head2">
                             <div class="gmail-left2">
-                                <div class="avatar" style="background:@GetAvatarColor(mail.Mittente)">
-                                    @GetInitials(mail.Mittente)
+                                @{
+                                    var senderDisplay = GetMailHeaderSender(mail);
+                                }
+
+                                <div class="avatar" style="background:@GetAvatarColor(senderDisplay)">
+                                    @GetInitials(senderDisplay)
                                 </div>
 
                                 <div class="gmail-meta2">
-                                    <div class="from2">@ExtractEmailOnly(mail.Mittente)</div>
-
+                                    <div class="from2">
+                                        <span class="from-email">@senderDisplay</span>
+                                        @if (IsSentMail(mail))
+                                        {
+                                            <span class="sent-badge">Inviata</span>
+                                        }
+                                    </div>
                                     <div class="recips2" title="@BuildThreadRecipientsTooltip(mail)">
                                         @BuildThreadRecipientsInline(mail)
                                     </div>
@@ -182,21 +191,13 @@
                         </div>
 
                         <div class="gmail-body">
-                            @if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
-                            {
-                                var safe = PrepareHtmlForDisplay(mail);
-                                <div class="mail-body-frame-wrap">
-                                    <iframe class="mail-iframe" sandbox="" srcdoc="@safe"></iframe>
-                                </div>
+                            @{
+                                var safe = PrepareHtmlForDisplayOnlyCurrent(mail);
                             }
-                            else
-                            {
-                                var txt = mail.CorpoTesto ?? "";
 
-                                <div class="mail-body-text-wrap">
-                                    @((MarkupString)$"<pre style='white-space:pre-wrap;margin:0;font-family:inherit'>{System.Net.WebUtility.HtmlEncode(txt)}</pre>")
-                                </div>
-                            }
+                            <div class="mail-clean-body">
+                                @((MarkupString)safe)
+                            </div>
                         </div>
                         @if (mail.Allegati?.Any() == true)
                         {
@@ -424,10 +425,7 @@
     private async Task Reply(EmailDetail_NEW msg)
     {
         if (msg is null) return;
-
-        var quoteText = BuildGmailReplyAsText(msg);
-        var quoteHtml = ToQuoteHtmlForQuill(quoteText);
-
+        var quoteHtml = await BuildReplyQuoteHtml(msg);
         var replyTo = ExtractEmailOnly(msg.Mittente);
 
         var fromCasella = (msg.CasellaEmail ?? "").Trim();
@@ -575,6 +573,92 @@
         GoBack();
     }
 
+    private async Task<string> BuildReplyQuoteHtml(EmailDetail_NEW original)
+    {
+        var from = await ResolveDisplayEmailAsync(original);
+        var it = new System.Globalization.CultureInfo("it-IT");
+
+        var d = original.Data?.ToString("ddd d MMM yyyy", it) ?? "";
+        var t = original.Data?.ToString("HH:mm", it) ?? "";
+
+        var bodyText = GetBodyVisibleAsTextOnlyCurrent(original);
+        var bodyHtml = TextToHtmlPreserve(bodyText);
+        return $@"
+        <div style=""font-family:'Courier New',monospace;font-size:14px;line-height:1.45;color:#222;"">
+            <div>
+                Il giorno {Html(d)} alle ore {Html(t)} {Html(from)} ha scritto:
+            </div>
+            <br>
+            <div>
+                {bodyHtml}
+            </div>
+        </div>";
+    }
+    private string GetBodyVisibleAsTextOnlyCurrent(EmailDetail_NEW mail)
+    {
+        var text = !string.IsNullOrWhiteSpace(mail.CorpoHtml)
+            ? HtmlToText(mail.CorpoHtml)
+            : mail.CorpoTesto ?? "";
+
+        text = Regex.Replace(
+            text,
+            @"(?im)^\s*Il giorno .+? ha scritto:\s*$[\s\S]*$",
+            ""
+        );
+
+        text = Regex.Replace(
+            text,
+            @"(?im)^\s*Messaggio precedente:\s*$[\s\S]*$",
+            ""
+        );
+
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+
+        return text.Trim();
+    }
+    private static string TextToHtmlPreserve(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+
+        var safe = Html(text)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+
+        return safe;
+    }
+
+    private string ResolveDisplayEmail(EmailDetail_NEW mail)
+    {
+        var from = ExtractEmailOnly(mail.Mittente);
+
+        if (!string.IsNullOrWhiteSpace(from) && from.Contains("@"))
+            return from;
+
+        if (!string.IsNullOrWhiteSpace(mail.CasellaEmail) && mail.CasellaEmail.Contains("@"))
+            return mail.CasellaEmail.Trim();
+
+        return from;
+    }
+
+    private async Task<string> ResolveDisplayEmailAsync(EmailDetail_NEW mail)
+    {
+        var raw = ExtractEmailOnly(mail.Mittente);
+
+        if (!string.IsNullOrWhiteSpace(raw) && raw.Contains("@"))
+            return raw;
+
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            var resolved = await MailSvc1.GetEmailAddressByUsernameAsync(raw);
+
+            if (!string.IsNullOrWhiteSpace(resolved) && resolved.Contains("@"))
+                return resolved;
+        }
+
+        return raw;
+    }
     private async Task MarkUnreadThread()
     {
         var last = GetThreadLast();
@@ -604,6 +688,49 @@
         await ReplyAll(last); // <- implementalo come hai fatto nell’altra pagina (usa GetReplyInfoAsync)
     }
 
+    private bool IsSentMail(EmailDetail_NEW mail)
+    {
+        return string.Equals(mail.Tipo, "SENT", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(mail.Tipo, "INVIATA", StringComparison.OrdinalIgnoreCase)
+            || (!string.IsNullOrWhiteSpace(mail.Mittente)
+                && !mail.Mittente.Contains("@")
+                && !string.IsNullOrWhiteSpace(mail.CasellaEmail)
+                && mail.CasellaEmail.Contains("@"));
+    }
+
+    private string GetMailHeaderSender(EmailDetail_NEW mail)
+    {
+        if (IsSentMail(mail))
+        {
+            if (!string.IsNullOrWhiteSpace(mail.CasellaEmail))
+                return mail.CasellaEmail.Trim();
+
+            return "Io";
+        }
+        var mittente = ExtractEmailOnly(mail.Mittente);
+        if (!string.IsNullOrWhiteSpace(mittente))
+            return mittente.Trim();
+        return "(mittente sconosciuto)";
+    }
+
+    private string PrepareHtmlForDisplayOnlyCurrent(EmailDetail_NEW mail)
+    {
+        var text = !string.IsNullOrWhiteSpace(mail.CorpoHtml)
+            ? HtmlToText(mail.CorpoHtml)
+            : mail.CorpoTesto ?? "";
+
+        text = Regex.Replace(text, @"(?im)^\s*Messaggio precedente:\s*$[\s\S]*$", "");
+        text = Regex.Replace(text, @"(?im)^\s*Il giorno .+? ha scritto:\s*$[\s\S]*$", "");
+
+        text = Regex.Replace(text, @"[ \t]{2,}", " ");
+        text = Regex.Replace(text, @" *\n *", "\n");
+        text = Regex.Replace(text, @"\n{3,}", "\n\n");
+
+        return System.Net.WebUtility.HtmlEncode(text.Trim())
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+    }
     private async Task AssignThread()
     {
         var emailIdToAssign = Id;
@@ -777,12 +904,7 @@
         {
             toList.Add(fromEmail);
         }
-
-        // 3) ✅ QUOTA SEMPRE POPOLATA (safe per Quill): testo -> <pre>
-        //    Così vedi SEMPRE il contenuto del messaggio a cui stai rispondendo.
-        var quoteText = BuildGmailReplyAsText(msg);     // usa il body di msg (ora caricato)
-        var quoteHtml = ToQuoteHtmlForQuill(quoteText);
-        // 4) ✅ Reply headers: stai rispondendo a QUESTO msg
+        var quoteHtml = await BuildReplyQuoteHtml(msg);
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
@@ -1161,26 +1283,40 @@
 
     private static string NormalizeMime(string? mime, string? filename)
     {
-        if (!string.IsNullOrWhiteSpace(mime) &&
-            !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
-            return mime;
-
         var ext = Path.GetExtension(filename ?? "").ToLowerInvariant();
-        return ext switch
+
+        // prima guardo SEMPRE l'estensione
+        var byExt = ext switch
         {
             ".pdf" => "application/pdf",
             ".jpg" or ".jpeg" => "image/jpeg",
             ".png" => "image/png",
             ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".svg" => "image/svg+xml",
+
             ".txt" => "text/plain",
+            ".csv" => "text/csv",
             ".html" or ".htm" => "text/html",
+
             ".eml" => "message/rfc822",
+
             ".doc" => "application/msword",
             ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".xls" => "application/vnd.ms-excel",
             ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            _ => mime ?? "application/octet-stream"
+
+            _ => null
         };
+
+        if (!string.IsNullOrWhiteSpace(byExt))
+            return byExt;
+
+        if (!string.IsNullOrWhiteSpace(mime))
+            return mime;
+
+        return "application/octet-stream";
     }
 
     private bool _showAttachmentViewer;
@@ -2964,4 +3100,77 @@
         font-size: 11px;
         font-weight: 700;
     }
+
+    .gmail-msg {
+        border-radius: 14px;
+        border: 1px solid #e5e7eb;
+        background: #fff;
+        margin-bottom: 14px;
+        overflow: hidden;
+        box-shadow: 0 1px 2px rgba(60,64,67,.08);
+    }
+
+    .gmail-head2 {
+        padding: 14px 18px 10px 18px;
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .gmail-left2 {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+    }
+
+    .gmail-meta2 {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+    }
+
+    .from2 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .from-email {
+        font-size: 15px;
+        font-weight: 700;
+        color: #202124;
+    }
+
+    .sent-badge {
+        font-size: 11px;
+        font-weight: 700;
+        color: #1a73e8;
+        background: #e8f0fe;
+        border: 1px solid #d2e3fc;
+        padding: 2px 7px;
+        border-radius: 999px;
+    }
+
+    .recips2 {
+        color: #5f6368;
+        font-size: 12px;
+        line-height: 1.3;
+    }
+
+    .gmail-body {
+        padding: 12px 18px 16px 18px;
+    }
+
+    .mail-clean-body {
+        white-space: normal;
+        line-height: 1.42;
+        font-size: 14px;
+        color: #202124;
+        word-break: break-word;
+    }
+
+        .mail-clean-body br + br {
+            display: block;
+            content: "";
+            margin-top: 6px;
+        }
 </style>

@@ -202,7 +202,49 @@
         <!-- Editor -->
         <div style="margin-top: 12px;">
             <label class="msg-label">Messaggio</label>
-            <div id="editor"></div>
+
+            <div class="compose-editor-shell">
+                <div id="composeToolbar">
+                    <button class="ql-bold"></button>
+                    <button class="ql-italic"></button>
+                    <button class="ql-underline"></button>
+                    <button class="ql-list" value="ordered"></button>
+                    <button class="ql-list" value="bullet"></button>
+                    <button class="ql-link"></button>
+                    <button class="ql-clean"></button>
+                </div>
+
+                <div id="editor"></div>
+
+                @if (!string.IsNullOrWhiteSpace(_firmaHtml))
+                {
+                    <div class="compose-signature-box">
+                        @((MarkupString)NormalizeFirmaHtml(_firmaHtml))
+                    </div>
+                }
+
+                @if (!string.IsNullOrWhiteSpace(_quoteHtml))
+                {
+                    <div class="compose-gmail-quote">
+                        <button type="button"
+                                class="gmail-quote-dots"
+                                title="Mostra/Nascondi messaggio precedente"
+                                @onclick="@(() => _showQuoteDetails = !_showQuoteDetails)">
+                            ...
+                        </button>
+
+                        @if (_showQuoteDetails)
+                        {
+                            <div class="compose-quote-box">
+                                <div class="compose-quote-title">Messaggio precedente</div>
+                                <div class="compose-quote-body">
+                                    @((MarkupString)_quoteHtml)
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
         </div>
 
         
@@ -379,34 +421,30 @@
 
 <style>
     #editor {
+        border: none !important;
+        border-radius: 0 !important;
         background: #fff;
-        border: 1px solid #ccc;
-        border-radius: 8px;
     }
 
-        /* forza l’altezza reale dell’area di scrittura */
-        #editor .ql-container {
-            min-height: 260px !important;
-            height: 260px !important; /* oppure 40vh */
-            border: none !important;
-        }
+    #editor .ql-container {
+        min-height: 330px !important;
+        height: 330px !important;
+        border: none !important;
+    }
+
+    #editor .ql-editor {
+        min-height: 330px !important;
+        font-family: "Courier New", Courier, monospace !important;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #222;
+    }
 
 
     /* area testo scrollabile */
     .mud-dialog-content {
         max-height: 75vh;
     }
-
-
-    #editor .ql-editor {
-        font-family: "Courier New", Courier, monospace !important;
-        font-size: 14px;
-        min-height: 260px !important;
-        height: 100% !important;
-        line-height: 1.5;
-        color: #222;
-    }
-
 
     .undo-bar {
         position: sticky;
@@ -657,6 +695,32 @@
         margin-left: auto;
     }
 
+    .compose-editor-shell {
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        background: #fff;
+        overflow: hidden;
+    }
+    #composeToolbar {
+        border: none !important;
+        border-bottom: 1px solid #ddd !important;
+        background: #fafafa;
+    }
+
+    .compose-signature-box {
+        margin-top: 18px;
+        padding-top: 12px;
+        color: #5f6368;
+        font-size: 13px;
+        border-top: 1px solid #e0e0e0;
+    }
+
+    .compose-signature-preview {
+        margin-top: 12px;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 14px;
+        line-height: 1.5;
+    }
     .attach-meta {
         margin-top: 8px;
         font-size: 12px;
@@ -760,6 +824,66 @@
         color: #35507a;
     }
 
+    .firma-brand {
+        color: #003366;
+        font-weight: 700;
+        font-style: italic;
+    }
+
+    .compose-gmail-quote {
+        border-top: 1px solid #eef0f3;
+        background: #fff;
+        padding: 8px 14px 12px 14px;
+    }
+
+    .gmail-quote-dots {
+        border: 1px solid #dadce0;
+        background: #f1f3f4;
+        color: #5f6368;
+        border-radius: 14px;
+        min-width: 34px;
+        height: 22px;
+        line-height: 14px;
+        font-size: 18px;
+        font-weight: 700;
+        cursor: pointer;
+        padding: 0 8px 4px 8px;
+    }
+
+        .gmail-quote-dots:hover {
+            background: #e8eaed;
+        }
+
+    .compose-quote-box {
+        margin-top: 8px;
+        padding-left: 12px;
+        border-left: 2px solid #d0d7de;
+        color: #5f6368;
+        font-size: 13px;
+        background: transparent;
+        max-height: 220px;
+        overflow-y: auto;
+    }
+
+    .compose-quote-title {
+        font-weight: 700;
+        color: #5f6368;
+        margin-bottom: 8px;
+    }
+
+    .compose-quote-body {
+        border-left: 2px solid #d0d7de;
+        padding-left: 12px;
+    }
+
+    .compose-quote-body {
+        font-family: "Courier New", Courier, monospace;
+        font-size: 14px;
+        line-height: 1.45;
+        white-space: normal;
+        word-break: break-word;
+    }
+    
     .compose-layout {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 280px;
@@ -818,12 +942,12 @@
     }
 
     #editor .ql-container {
-        min-height: 420px !important;
-        height: 420px !important;
+        min-height: 260px !important;
+        height: 260px !important;
     }
 
     #editor .ql-editor {
-        min-height: 420px !important;
+        min-height: 260px !important;
     }
 
         #editor .ql-editor blockquote {
@@ -901,7 +1025,7 @@
     private string? _firmaHtml;
     private string _bodyHtml = "";
     private string _quoteHtml = "";
-
+    private bool _showQuoteDetails = false;
     private readonly List<IBrowserFile> _attachments = new();
     private readonly List<MailService_NEW.OutgoingAttachment_NEW> _outgoing = new();
     private readonly List<MailService_NEW.OutgoingAttachment_NEW> _forwardedAttachments = new();
@@ -981,8 +1105,7 @@
         }
         if (DraftId.HasValue)
         {
-            _bodyHtml = CorpoIniziale ?? "";
-            _quoteHtml = "";
+            SplitDraftBody(CorpoIniziale ?? "");
         }
         else
         {
@@ -1043,51 +1166,140 @@
             StateHasChanged();
         }
     }
-    
+    private void SplitDraftBody(string html)
+    {
+        html ??= "";
+
+        var m = Regex.Match(
+            html,
+            @"(?is)<hr[^>]*>\s*<div>\s*<(b|strong)>\s*Messaggio precedente:\s*</\1>\s*</div>\s*<blockquote[^>]*>(?<quote>[\s\S]*?)</blockquote>"
+        );
+
+        if (!m.Success)
+        {
+            m = Regex.Match(
+                html,
+                @"(?is)Messaggio precedente:\s*(?<quote>[\s\S]*)"
+            );
+        }
+
+        if (m.Success)
+        {
+            var quoteStart = m.Index;
+            var beforeQuote = html[..quoteStart];
+            var quotePart = m.Groups["quote"].Value;
+
+            _quoteHtml = quotePart.Trim();
+
+            var firmaMatch = Regex.Match(
+                beforeQuote,
+                @"(?is)(<br\s*/?>\s*){0,3}Cordiali\s+saluti[\s\S]*$"
+            );
+
+            if (firmaMatch.Success)
+            {
+                var onlyBody = beforeQuote[..firmaMatch.Index].Trim();
+                _bodyHtml = string.IsNullOrWhiteSpace(HtmlToPlain(onlyBody))
+                    ? ExtractBodyBeforeSignature(beforeQuote)
+                    : onlyBody;
+            }
+            else
+            {
+                _bodyHtml = beforeQuote.Trim();
+            }
+        }
+        else
+        {
+            _bodyHtml = html;
+            _quoteHtml = "";
+        }
+
+        _showQuoteDetails = false;
+    }
+
+    private static string HtmlToPlain(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var s = WebUtility.HtmlDecode(html);
+        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<[^>]+>", "");
+        return s.Trim();
+    }
+
+    private static string ExtractBodyBeforeSignature(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var idx = html.IndexOf("Cordiali saluti", StringComparison.OrdinalIgnoreCase);
+
+        if (idx > 0)
+            return html[..idx].Trim();
+
+        return html.Trim();
+    }
     private async Task OnCasellaChanged(string? value)
     {
+        value = value?.Trim();
+
+        if (_isSwitchingCasella || _isSavingDraft || _isDisposed)
+            return;
+
         if (string.Equals(_selectedCasella, value, StringComparison.OrdinalIgnoreCase))
             return;
 
-        _selectedCasella = value;
+        _isSwitchingCasella = true;
 
-        await LoadFirmaAsync();
+        try
+        {
+            _selectedCasella = value;
 
-        await JSRuntime.InvokeVoidAsync(
-            "composeInterop.replaceSignature",
-            "editor",
-            _firmaHtml ?? ""
-        );
-
-        await InvokeAsync(StateHasChanged);
+            await LoadFirmaAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Errore cambio casella/firma");
+            Snackbar.Add("Errore durante il cambio casella ❌", Severity.Error);
+        }
+        finally
+        {
+            _isSwitchingCasella = false;
+        }
     }
     private async Task LoadFirmaAsync()
     {
         _firmaHtml = "";
 
-        if (string.IsNullOrWhiteSpace(_selectedCasella))
-            return;
-
         try
         {
-            _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
-            Logger.LogWarning("FIRMA DEBUG: [{Firma}]", _firmaHtml);
-            Logger.LogInformation(
-                "Firma caricata: Utente={Utente}, Casella={Casella}, Lunghezza={Length}",
+            if (!string.IsNullOrWhiteSpace(_selectedCasella))
+            {
+                _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
+            }
+
+            if (string.IsNullOrWhiteSpace(_firmaHtml))
+            {
+                var defaultFrom = await MailSvc.GetEmailAddressByUsernameAsync(Utente);
+
+                if (!string.IsNullOrWhiteSpace(defaultFrom))
+                    _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, defaultFrom);
+            }
+
+            Logger.LogWarning(
+                "FIRMA DEBUG FINALE: Utente={Utente}, Casella={Casella}, Len={Len}, Firma=[{Firma}]",
                 Utente,
                 _selectedCasella,
-                _firmaHtml?.Length ?? 0
+                _firmaHtml?.Length ?? 0,
+                _firmaHtml
             );
         }
         catch (Exception ex)
         {
-            Logger.LogError(
-                ex,
-                "Errore caricamento firma: Utente={Utente}, Casella={Casella}",
-                Utente,
-                _selectedCasella
-            );
-
+            Logger.LogError(ex, "Errore caricamento firma");
             _firmaHtml = "";
         }
     }
@@ -1263,24 +1475,24 @@
         if (!_pendingQuillInit)
             return;
 
+        if (DraftId.HasValue && string.IsNullOrWhiteSpace(_bodyHtml))
+        {
+            SplitDraftBody(CorpoIniziale ?? "");
+
+            Logger.LogWarning(
+                "PRE INIT SPLIT - Body=[{Body}] QuoteLen={QuoteLen}",
+                _bodyHtml,
+                _quoteHtml?.Length ?? 0
+            );
+        }
+
         var bodyNow = DraftId.HasValue
             ? (_bodyHtml ?? "")
             : "<p><br></p>";
 
         var quoteNow = _quoteHtml ?? "";
-
-        var firmaText = "";
-        if (!DraftId.HasValue)
-        {
-            firmaText = _firmaHtml ?? "";
-
-            if (string.IsNullOrWhiteSpace(firmaText) &&
-                !string.IsNullOrWhiteSpace(_selectedCasella))
-            {
-                await LoadFirmaAsync();
-                firmaText = _firmaHtml ?? "";
-            }
-        }
+        await LoadFirmaAsync();
+        var firmaText = _firmaHtml ?? "";
         Logger.LogWarning(
             "INIT QUILL DEBUG - BodyLen={BodyLen}, FirmaLen={FirmaLen}, QuoteLen={QuoteLen}, Firma=[{Firma}]",
             bodyNow?.Length ?? 0,
@@ -1315,15 +1527,38 @@
 
         var s = html.Trim();
 
-        s = Regex.Replace(s, @"<\s*hr[^>]*>", "<br>------------------------------<br>", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"<\s*/?\s*small[^>]*>", "", RegexOptions.IgnoreCase);
+        s = WebUtility.HtmlDecode(s)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("&nbsp;", " ");
 
+        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*div\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<\s*hr[^>]*>", "\n------------------------------\n", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<\s*p[^>]*>", "", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<\s*div[^>]*>", "", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"<\s*/\s*div\s*>", "<br>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<\s*/?\s*small[^>]*>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<[^>]+>", "");
 
-        s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"[ \t]+", " ");
+        s = Regex.Replace(s, @" *\n *", "\n");
+        s = Regex.Replace(s, @"\n{3,}", "\n\n");
+        s = s.Trim();
 
-        return s.Trim();
+        var safe = WebUtility.HtmlEncode(s)
+            .Replace("\n\n", "<br><br>")
+            .Replace("\n", "<br>");
+
+        safe = Regex.Replace(
+            safe,
+            @"\b(GRUPPO\s+SANTACROCE|EUROCEREALI\s+SRL)\b",
+            @"<span class=""firma-brand"">$1</span>",
+            RegexOptions.IgnoreCase
+        );
+
+        return safe;
     }
 
     [JSInvokable]
@@ -1331,6 +1566,18 @@
     [JSInvokable]
     public async Task CloseFromJs()
     {
+        if (_isDisposed || _isSavingDraft || _isClosing)
+            return;
+
+        try
+        {
+            _bodyHtml = await JSRuntime.InvokeAsync<string>(
+                "composeInterop.getEditorHtml",
+                "editor"
+            );
+        }
+        catch { }
+
         await CloseAndSaveDraft();
     }
     [JSInvokable]
@@ -1401,18 +1648,18 @@
 
                 var corpoHtml = _bodyHtml ?? "";
                 await MailSvc.SendEmailAsync(
-                    usernameOrEmail: Utente,
-                    to: string.Join(";", ChipsToEmails(_toList)),
-                    cc: string.Join(";", ChipsToEmails(_ccList)),
-                    bcc: string.Join(";", ChipsToEmails(_bccList)),
-                    subject: _composeSubject ?? "(nessun oggetto)",
-                    bodyHtml: CleanBeforeSend(_bodyHtml),
-                    attachments: _outgoing,
-                    fromAddressOverride: fromAddress,
-                    inReplyTo: ReplyToMessageId,
-                    referencesHdr: References
-                );
-
+     usernameOrEmail: Utente,
+     to: string.Join(";", ChipsToEmails(_toList)),
+     cc: string.Join(";", ChipsToEmails(_ccList)),
+     bcc: string.Join(";", ChipsToEmails(_bccList)),
+     subject: _composeSubject ?? "(nessun oggetto)",
+     bodyHtml: BuildBodyForSend(),
+     attachments: _outgoing,
+     fromAddressOverride: fromAddress,
+     inReplyTo: ReplyToMessageId,
+     referencesHdr: References,
+     threadKey: ThreadKey
+ );
                 Snackbar.Add("Email inviata ✅", Severity.Success);
             },
             seconds: 10,
@@ -1424,36 +1671,38 @@
 
     private async Task CloseAndSaveDraft()
     {
-        if (_isClosing)
+        if (_isClosing || _isSavingDraft || _isDisposed)
             return;
 
         _isClosing = true;
+        _isSavingDraft = true;
 
         try
         {
             if (_uploadingAttachments)
             {
                 Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
-                _isClosing = false;
                 return;
             }
 
             await CancelPendingInternal();
 
             _bodyHtml = _bodyHtml?.Trim() ?? "";
+
             if (!HasDraftContent())
             {
                 await SafeDestroyEditor();
                 MudDialog.Close(DialogResult.Ok("draft-empty"));
                 return;
             }
+
             _draftId = await MailSvc.SaveDraftAsync(
                 utente: Utente,
                 to: string.Join(";", ChipsToEmails(_toList)),
                 cc: string.Join(";", ChipsToEmails(_ccList)),
                 ccn: string.Join(";", ChipsToEmails(_bccList)),
                 subject: _composeSubject,
-                bodyHtml: CleanBeforeSend(_bodyHtml),
+                bodyHtml: BuildBodyForSend(),
                 draftId: _draftId,
                 fromAddress: _selectedCasella,
                 threadKey: ThreadKey,
@@ -1461,14 +1710,17 @@
             );
 
             await SafeDestroyEditor();
-
             MudDialog.Close(DialogResult.Ok("draft"));
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Errore salvataggio bozza in chiusura");
+            Logger.LogError(ex, "Errore salvataggio bozza");
             Snackbar.Add("Errore nel salvataggio della bozza ❌", Severity.Error);
             _isClosing = false;
+        }
+        finally
+        {
+            _isSavingDraft = false;
         }
     }
 
@@ -1481,9 +1733,25 @@
         return ParseAddressToChip(raw);
     }
     private long? _draftId;
+    private bool _isSavingDraft;
+    private bool _isSwitchingCasella;
+    private bool _isDisposed;
+    private string BuildBodyForSend()
+    {
+        var body = CleanBeforeSend(_bodyHtml);
+        var firma = NormalizeFirmaHtml(_firmaHtml);
+        var quote = _quoteHtml ?? "";
 
+        var result = body;
 
+        if (!string.IsNullOrWhiteSpace(firma))
+            result += "<br><br>" + firma;
 
+        if (!string.IsNullOrWhiteSpace(quote))
+            result += "<br><br><hr><div><b>Messaggio precedente:</b></div><blockquote style='border-left:2px solid #ccc;margin-left:8px;padding-left:12px;'>" + quote + "</blockquote>";
+
+        return result;
+    }
     private static string RemoveQuoteGarbage(string? input)
 
     {
@@ -1936,13 +2204,15 @@
     }
     public async ValueTask DisposeAsync()
     {
+        _isDisposed = true;
+
         await CancelPendingInternal();
 
         try
         {
             await JSRuntime.InvokeVoidAsync("destroyQuill", "editor");
         }
-        catch { /* ignoriamo */ }
+        catch { }
 
         _dotnetRef?.Dispose();
     }
@@ -1991,18 +2261,10 @@
 
         _composeInitializedOnce = true;
 
-        _composeSubject = Oggetto ?? string.Empty;
+        Logger.LogWarning("DRAFT SPLIT DEBUG Body=[{Body}] QuoteLen={QuoteLen}",
+            _bodyHtml,
+            _quoteHtml?.Length ?? 0);
 
-        if (DraftId.HasValue)
-        {
-            _bodyHtml = CorpoIniziale ?? "";
-            _quoteHtml = "";
-        }
-        else
-        {
-            _bodyHtml = "";
-            _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
-        }
         if (!_quillInitialized)
             _pendingQuillInit = true;
     }
@@ -2120,30 +2382,50 @@
                || _outgoing.Any();
     }
 
-    private static string PrepareQuoteForEditor(string? input)
-{
-    if (string.IsNullOrWhiteSpace(input))
-        return "";
+    private static string PrepareQuoteForEditor(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
 
-    var s = input.Trim();
+        var s = WebUtility.HtmlDecode(html)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("&nbsp;", " ");
 
-    s = Regex.Replace(s, @"<\/?(html|body)[^>]*>", "", RegexOptions.IgnoreCase);
-    s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
-    s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
-    s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+        // elimina blocchi tecnici Outlook/Word
+        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
 
-    s = Regex.Replace(
-        s,
-        @"<blockquote[^>]*data-sc-quote=[""']1[""'][^>]*>[\s\S]*?</blockquote>",
-        "",
-        RegexOptions.IgnoreCase
-    );
+        // elimina CSS Outlook se è già diventato testo visibile
+        s = Regex.Replace(s, @"(?is)v\\?:\*\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)o\\?:\*\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)w\\?:\*\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)\.shape\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)@font-face\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)@page\s+\w+\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)@list\s+\w+\s*\{.*?\}", "");
+        s = Regex.Replace(s, @"(?is)/\*\s*Font Definitions\s*\*/[\s\S]*?/\*\s*Style Definitions\s*\*/", "");
+        s = Regex.Replace(s, @"(?is)/\*\s*Style Definitions\s*\*/[\s\S]*?/\*\s*List Definitions\s*\*/", "");
+        s = Regex.Replace(s, @"(?is)/\*\s*List Definitions\s*\*/[\s\S]*?-->", "");
 
-    s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
-    s = Regex.Replace(s, @"(<p><br></p>\s*){2,}", "<p><br></p>", RegexOptions.IgnoreCase);
+        // tag in righe
+        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</\s*div\s*>", "\n", RegexOptions.IgnoreCase);
 
-    return s.Trim();
-}
+        // elimina tag residui
+        s = Regex.Replace(s, @"<[^>]+>", "");
 
+        // pulizia spazi
+        s = Regex.Replace(s, @"[ \t]+", " ");
+        s = Regex.Replace(s, @" *\n *", "\n");
+        s = Regex.Replace(s, @"\n{3,}", "\n\n");
+        s = Regex.Replace(s, @"^(\s|<br\s*/?>|&nbsp;)+", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
+        return WebUtility.HtmlEncode(s.Trim())
+            .Replace("\n\n", "<br><br>")
+            .Replace("\n", "<br>");
+    }
 
 }

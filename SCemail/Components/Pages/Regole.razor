@@ -144,7 +144,7 @@
 
         // ✅ carica solo utenti validi (iniziano con lettera + punto)
         _utenti = await db.Database
-            .SqlQueryRaw<string>("SELECT UTENTE FROM INFOUSER WHERE REGEXP_LIKE(UTENTE, '^[A-Za-z]\\.') ORDER BY UTENTE")
+            .SqlQueryRaw<string>("SELECT UTENTE FROM INFOUSER ORDER BY UTENTE")
             .ToListAsync();
 
         _regole = await db.EmailRegole.AsNoTracking()

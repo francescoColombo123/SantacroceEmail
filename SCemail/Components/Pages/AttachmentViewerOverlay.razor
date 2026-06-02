@@ -104,7 +104,7 @@
                 else
                 {
                     <div class="attov-state">
-                        Questo file (<b>@_currentMeta.Mime</b>) non è visualizzabile direttamente nel browser.
+                        Questo file (<b>@_effectiveMime</b>) non è visualizzabile direttamente nel browser.
                         Puoi comunque scaricarlo.
                     </div>
                 }
@@ -318,7 +318,6 @@
     private bool _visible = true;
     private bool _loading = true;
     private string? _error;
-
     private List<AttachmentMetaDto> _attachments = new();
     private AttachmentMetaDto? _currentMeta;
     private int _currentIndex = -1;
@@ -328,25 +327,22 @@
     private bool _hasNext => _currentIndex >= 0 && _currentIndex < _attachments.Count - 1;
     private bool _isSent => string.Equals(Src, "sent", StringComparison.OrdinalIgnoreCase);
 
+    private string _effectiveMime =>
+       _currentMeta is null
+           ? "application/octet-stream"
+           : NormalizeMime(_currentMeta.Mime, _currentMeta.Filename);
+
     private bool _isImage =>
-        _currentMeta is not null &&
-        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
-        _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        _effectiveMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 
     private bool _isPdf =>
-        _currentMeta is not null &&
-        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
-        _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
+        _effectiveMime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
 
     private bool _isPreviewable =>
-        _currentMeta is not null &&
-        !string.IsNullOrWhiteSpace(_currentMeta.Mime) &&
-        (
-            _currentMeta.Mime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
-            _currentMeta.Mime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
-            _currentMeta.Mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
-            _currentMeta.Mime.Equals("text/html", StringComparison.OrdinalIgnoreCase)
-        );
+        _effectiveMime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+        _effectiveMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
+        _effectiveMime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
+        _effectiveMime.Equals("text/html", StringComparison.OrdinalIgnoreCase);
 
     private string _querySuffix
     {
@@ -471,7 +467,41 @@
 
         return "application/octet-stream";
     }
+    private static string NormalizeMime(string? mime, string? filename)
+    {
+        var ext = Path.GetExtension(filename ?? "").ToLowerInvariant();
 
+        var byExt = ext switch
+        {
+            ".pdf" => "application/pdf",
+
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".svg" => "image/svg+xml",
+
+            ".txt" => "text/plain",
+            ".csv" => "text/csv",
+            ".html" or ".htm" => "text/html",
+
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+
+            ".eml" => "message/rfc822",
+
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(byExt))
+            return byExt;
+
+        return mime ?? "application/octet-stream";
+    }
     private async Task GoPrevious()
     {
         if (!_hasPrevious)
