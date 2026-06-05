@@ -192,7 +192,7 @@
 
                         <div class="gmail-body">
                             @{
-                                var safe = PrepareHtmlForDisplayOnlyCurrent(mail);
+                                var safe = PrepareHtmlForDisplay(mail);
                             }
 
                             <div class="mail-clean-body">
@@ -213,154 +213,154 @@
                                            href="javascript:void(0)"
                                            title="@a.NomeFile"
                                            @onclick="@(async () => await OpenAttachmentOrEmailAsync(
-                                                        a,
-                                                       NormalizeMime(a.MimeType, a.NomeFile),
-                                                       mail.Allegati.Select(x => x.Id).ToList()
-                                                   ))" @onclick:stopPropagation="true">
+                                           a,
+                                                                                  NormalizeMime(a.MimeType, a.NomeFile),
+                                                                                  mail.Allegati.Select(x => x.Id).ToList()
+                                                                              ))" @onclick:stopPropagation="true">
 
-                                            <MudIcon Icon="@(a.IsEmailEml? Icons.Material.Filled.Email : GetAttachmentIcon(a.NomeFile))"
-                                                     Size="Size.Small"
-                                                     Class="attach-icon" />
+                            <MudIcon Icon="@(a.IsEmailEml? Icons.Material.Filled.Email : GetAttachmentIcon(a.NomeFile))"
+                                     Size="Size.Small"
+                                     Class="attach-icon" />
 
-                                            <span class="attach-name">@a.NomeFile</span>
-                                            @if (a.IsEmailEml)
-                                            {
-                                                <span class="eml-badge">Apri email</span>
-                                                <MudIcon Icon="@Icons.Material.Filled.OpenInNew"
-                                                         Size="Size.Small"
-                                                         Class="attach-open-icon" />
-                                            }
-                                        </a>
-                                    }
+                            <span class="attach-name">@a.NomeFile</span>
+                            @if (a.IsEmailEml)
+                                {
+                                    <span class="eml-badge">Apri email</span>
+                                    <MudIcon Icon="@Icons.Material.Filled.OpenInNew"
+                                             Size="Size.Small"
+                                             Class="attach-open-icon" />
+                                }
+                            </a>
+                        }
+                    </div>
+                </div>
+                                }
+            </div>
+                        }
+
+
+        </div>
+
+
+    </section>
+
+    <!-- DESTRA: COMMENTI -->
+    <aside class="right-pane">
+        <h4 class="comments-title">💬 Commenti interni</h4>
+
+        <div class="comments-list">
+            @if (_comments == null)
+            {
+                <div class="muted">Caricamento…</div>
+            }
+            else if (_comments.Count == 0)
+            {
+                <div class="muted">Nessun commento</div>
+            }
+            else
+            {
+                @foreach (var c in _comments.OrderBy(x => x.DataCreazione))
+                {
+                    if (IsActivity(c))
+                    {
+                        <div class="activity-line">
+                            <span class="activity-text">@((MarkupString)ActivityText(c))</span>
+                            <span class="activity-time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="comment-box">
+                            <!-- AVATAR TEAM STYLE -->
+                            <div class="avatar2" style="background:@GetAvatarColor(c.Autore)">
+                                @GetInitials(c.Autore)
+                            </div>
+
+                            <div class="comment-content">
+                                <div class="comment-header">
+                                    <span class="author">@c.Autore</span>
+                                    <span class="time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
                                 </div>
+
+                                <div class="comment-text">
+                                    @((MarkupString)HighlightMentions(c.Testo))
+                                </div>
+
+                                @if (!string.IsNullOrWhiteSpace(c.AllegatoNome))
+                                {
+                                    <div class="comment-attachment">
+                                        <MudIcon Icon="@GetAttachmentIcon(c.AllegatoNome)" />
+                                        <a href="@GetCommentAttachmentUrl(c.Id)" target="_blank">@c.AllegatoNome</a>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    }
+                }
+            }
+        </div>
+
+        <!-- EDITOR COMMENTI -->
+        <div class="editor">
+            <div class="mention-wrapper">
+                <MudTextField T="string"
+                              Value="_newComment"
+                              ValueChanged="@(v => OnTextChanged(v))"
+                              Lines="4"
+                              Variant="Variant.Outlined"
+                              Placeholder=@("Scrivi un commento… usa @ per menzionare")
+                              Immediate="true"
+                              OnKeyDown="@((KeyboardEventArgs e) => HandleKeyNav(e))"
+                              Class="editor-text" />
+
+                @if (_mentionOpen && _mentionSuggestions.Count > 0)
+                {
+                    <div class="mention-popup top">
+                        @foreach (var u in _mentionSuggestions)
+                        {
+                            <div class="mention-item" @onclick="@(() => SelectMention(u))">@u</div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <!-- PULSANTE + FILE -->
+            <div class="editor-files">
+                <label class="file-plus">
+                    <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Medium" />
+                    <InputFile OnChange="OnFilesSelected" multiple style="display:none" />
+                </label>
+
+                @if (_selectedFiles.Count > 0)
+                {
+                    <div class="file-list">
+                        @foreach (var f in _selectedFiles)
+                        {
+                            <div class="file-chip">
+                                <MudIcon Icon="@GetAttachmentIcon(f.Name)" />
+                                @f.Name
+                                <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                               Size="Size.Small"
+                                               Color="Color.Error"
+                                               OnClick="@(() => RemoveFile(f))" />
                             </div>
                         }
                     </div>
                 }
 
-
             </div>
 
+            <MudButton Color="Color.Primary"
+                       Variant="Variant.Filled"
+                       OnClick="AddComment"
+                       Disabled="@_savingComment"
+                       Loading="@_savingComment">
+                INVIA
+            </MudButton>
+        </div>
 
-        </section>
-
-        <!-- DESTRA: COMMENTI -->
-        <aside class="right-pane">
-            <h4 class="comments-title">💬 Commenti interni</h4>
-
-            <div class="comments-list">
-                @if (_comments == null)
-                {
-                    <div class="muted">Caricamento…</div>
-                }
-                else if (_comments.Count == 0)
-                {
-                    <div class="muted">Nessun commento</div>
-                }
-                else
-                {
-                    @foreach (var c in _comments.OrderBy(x => x.DataCreazione))
-                    {
-                        if (IsActivity(c))
-                        {
-                            <div class="activity-line">
-                                <span class="activity-text">@((MarkupString)ActivityText(c))</span>
-                                <span class="activity-time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
-                            </div>
-                        }
-                        else
-                        {
-                            <div class="comment-box">
-                                <!-- AVATAR TEAM STYLE -->
-                                <div class="avatar2" style="background:@GetAvatarColor(c.Autore)">
-                                    @GetInitials(c.Autore)
-                                </div>
-
-                                <div class="comment-content">
-                                    <div class="comment-header">
-                                        <span class="author">@c.Autore</span>
-                                        <span class="time">@c.DataCreazione.ToString("dd MMM yyyy HH:mm")</span>
-                                    </div>
-
-                                    <div class="comment-text">
-                                        @((MarkupString)HighlightMentions(c.Testo))
-                                    </div>
-
-                                    @if (!string.IsNullOrWhiteSpace(c.AllegatoNome))
-                                    {
-                                        <div class="comment-attachment">
-                                            <MudIcon Icon="@GetAttachmentIcon(c.AllegatoNome)" />
-                                            <a href="@GetCommentAttachmentUrl(c.Id)" target="_blank">@c.AllegatoNome</a>
-                                        </div>
-                                    }
-                                </div>
-                            </div>
-                        }
-                    }
-                }
-            </div>
-
-            <!-- EDITOR COMMENTI -->
-            <div class="editor">
-                <div class="mention-wrapper">
-                    <MudTextField T="string"
-                                  Value="_newComment"
-                                  ValueChanged="@(v => OnTextChanged(v))"
-                                  Lines="4"
-                                  Variant="Variant.Outlined"
-                                  Placeholder=@("Scrivi un commento… usa @ per menzionare")
-                                  Immediate="true"
-                                  OnKeyDown="@((KeyboardEventArgs e) => HandleKeyNav(e))"
-                                  Class="editor-text" />
-
-                    @if (_mentionOpen && _mentionSuggestions.Count > 0)
-                    {
-                        <div class="mention-popup top">
-                            @foreach (var u in _mentionSuggestions)
-                            {
-                                <div class="mention-item" @onclick="@(() => SelectMention(u))">@u</div>
-                            }
-                        </div>
-                    }
-                </div>
-
-                <!-- PULSANTE + FILE -->
-                <div class="editor-files">
-                    <label class="file-plus">
-                        <MudIcon Icon="@Icons.Material.Filled.AttachFile" Size="Size.Medium" />
-                        <InputFile OnChange="OnFilesSelected" multiple style="display:none" />
-                    </label>
-
-                    @if (_selectedFiles.Count > 0)
-                    {
-                        <div class="file-list">
-                            @foreach (var f in _selectedFiles)
-                            {
-                                <div class="file-chip">
-                                    <MudIcon Icon="@GetAttachmentIcon(f.Name)" />
-                                    @f.Name
-                                    <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                                   Size="Size.Small"
-                                                   Color="Color.Error"
-                                                   OnClick="@(() => RemoveFile(f))" />
-                                </div>
-                            }
-                        </div>
-                    }
-
-                </div>
-
-                <MudButton Color="Color.Primary"
-                           Variant="Variant.Filled"
-                           OnClick="AddComment"
-                           Disabled="@_savingComment"
-                           Loading="@_savingComment">
-                    INVIA
-                </MudButton>
-            </div>
-
-        </aside>
-    }
+    </aside>
+        }
 
     @if (_showAttachmentViewer)
     {
@@ -581,18 +581,18 @@
         var d = original.Data?.ToString("ddd d MMM yyyy", it) ?? "";
         var t = original.Data?.ToString("HH:mm", it) ?? "";
 
-        var bodyText = GetBodyVisibleAsTextOnlyCurrent(original);
-        var bodyHtml = TextToHtmlPreserve(bodyText);
+        var bodyHtml = PrepareHtmlForDisplay(original);
+
         return $@"
-        <div style=""font-family:'Courier New',monospace;font-size:14px;line-height:1.45;color:#222;"">
-            <div>
-                Il giorno {Html(d)} alle ore {Html(t)} {Html(from)} ha scritto:
-            </div>
-            <br>
-            <div>
-                {bodyHtml}
-            </div>
-        </div>";
+<div style=""font-family:'Courier New',monospace;font-size:14px;line-height:1.45;color:#222;"">
+    <div>
+        Il giorno {Html(d)} alle ore {Html(t)} {Html(from)} ha scritto:
+    </div>
+    <br>
+    <div>
+        {bodyHtml}
+    </div>
+</div>";
     }
     private string GetBodyVisibleAsTextOnlyCurrent(EmailDetail_NEW mail)
     {
@@ -839,12 +839,12 @@
         }
     }
 
-   private async Task ForwardExternalThread()
-{
-    var last = GetThreadLast();
-    if (last == null) return;
-    await ForwardExternalFrom(last);
-}
+    private async Task ForwardExternalThread()
+    {
+        var last = GetThreadLast();
+        if (last == null) return;
+        await ForwardExternalFrom(last);
+    }
 
     private async Task ReplyAll(EmailDetail_NEW msg)
     {
@@ -1198,10 +1198,16 @@
     private static string HtmlToText(string html)
     {
         if (string.IsNullOrWhiteSpace(html)) return "";
-        var noTags = Regex.Replace(html, "<br\\s*/?>", "\n", RegexOptions.IgnoreCase);
+        // Decode first so encoded HTML comments/tags (e.g. &lt;!-- ... --&gt;) can be removed.
+        var noTags = System.Net.WebUtility.HtmlDecode(html);
+
+        noTags = Regex.Replace(noTags, "<!--.*?-->", "", RegexOptions.Singleline);
+        noTags = Regex.Replace(noTags, "<style\\b[^>]*>.*?</style>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        noTags = Regex.Replace(noTags, "<script\\b[^>]*>.*?</script>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
+        noTags = Regex.Replace(noTags, "<br\\s*/?>", "\n", RegexOptions.IgnoreCase);
         noTags = Regex.Replace(noTags, "</p\\s*>", "\n\n", RegexOptions.IgnoreCase);
         noTags = Regex.Replace(noTags, "<.*?>", " ");
-        noTags = System.Net.WebUtility.HtmlDecode(noTags);
         return noTags;
     }
 
@@ -1804,38 +1810,38 @@
 
 
     private async Task<List<MailService_NEW.OutgoingAttachment_NEW>> BuildForwardAttachmentsAsync(EmailDetail_NEW msg)
-{
-    var result = new List<MailService_NEW.OutgoingAttachment_NEW>();
-
-    if (msg.Allegati == null || !msg.Allegati.Any())
-        return result;
-
-    foreach (var a in msg.Allegati)
     {
-        if (a.IsEmailEml)
-            continue;
+        var result = new List<MailService_NEW.OutgoingAttachment_NEW>();
 
-        try
+        if (msg.Allegati == null || !msg.Allegati.Any())
+            return result;
+
+        foreach (var a in msg.Allegati)
         {
-            var bytes = await Http.GetByteArrayAsync($"/api/attachments/{a.Id}/download");
-
-            if (bytes == null || bytes.Length == 0)
+            if (a.IsEmailEml)
                 continue;
 
-            result.Add(new MailService_NEW.OutgoingAttachment_NEW(
-                a.NomeFile,
-                NormalizeMime(a.MimeType, a.NomeFile),
-                bytes
-            ));
-        }
-        catch
-        {
-            Snackbar.Add($"Impossibile allegare automaticamente: {a.NomeFile}", Severity.Warning);
-        }
-    }
+            try
+            {
+                var bytes = await Http.GetByteArrayAsync($"/api/attachments/{a.Id}/download");
 
-    return result;
-}
+                if (bytes == null || bytes.Length == 0)
+                    continue;
+
+                result.Add(new MailService_NEW.OutgoingAttachment_NEW(
+                    a.NomeFile,
+                    NormalizeMime(a.MimeType, a.NomeFile),
+                    bytes
+                ));
+            }
+            catch
+            {
+                Snackbar.Add($"Impossibile allegare automaticamente: {a.NomeFile}", Severity.Warning);
+            }
+        }
+
+        return result;
+    }
 
     private static string ToPreHtml(string text)
     {
@@ -2026,7 +2032,7 @@
             if (!string.IsNullOrWhiteSpace(to))
                 sb.AppendLine($"<b>To:</b> {System.Net.WebUtility.HtmlEncode(to)}<br>");
 
-            
+
 
             sb.AppendLine("<br>");
 
@@ -2107,7 +2113,7 @@
             .Replace("\r", "\n")
             .Replace("\n", "<br>");
 
-       
+
 
         return $@"
 <div style=""background:#fff;color:#222;font-family:inherit;font-size:14px;line-height:1.5;white-space:pre-wrap;"">
@@ -2207,7 +2213,7 @@
             // UNION partecipanti + menzionati
             var utentiDaNotificare = partecipanti
     .Union(mentionedUsers, StringComparer.OrdinalIgnoreCase)
-    .Union(proprietariEmail, StringComparer.OrdinalIgnoreCase) 
+    .Union(proprietariEmail, StringComparer.OrdinalIgnoreCase)
     .Distinct(StringComparer.OrdinalIgnoreCase)
     .ToList();
             foreach (var u in utentiDaNotificare)
@@ -2355,7 +2361,15 @@
         color: #1565c0; /* colore a scelta */
         font-weight: 600;
     }
-.detail-shell{display:grid;grid-template-columns:2fr 1fr;gap:16px;height:calc(100vh - 90px);padding:16px;background:#f5f8ff}
+
+    .detail-shell {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+        height: calc(100vh - 90px);
+        padding: 16px;
+        background: #f5f8ff
+    }
 
     .left-pane {
         background: #fff;
@@ -2444,8 +2458,21 @@
         font-size: 14px;
         line-height: 1.4
     }
-.attachments{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap}
-.attach-link{display:inline-flex;align-items:center;gap:6px;text-decoration:none;color:#1565c0}
+
+    .attachments {
+        margin-top: 12px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap
+    }
+
+    .attach-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        text-decoration: none;
+        color: #1565c0
+    }
 
     .right-pane {
         background: #fff;
@@ -2458,15 +2485,53 @@
         overflow-x: hidden;
     }
 
-.comments-title{margin-top:0}
-.muted{color:#93a1bf;font-size:13px}
-.comments-list{overflow-y:auto;flex:1 1 auto;border:1px solid #eef3ff;border-radius:8px;padding:8px;margin-bottom:10px}
-.comment-item{border-bottom:1px solid #f1f4ff;padding:6px 4px}
-.comment-item:last-child{border-bottom:none}
-.c-head{display:flex;justify-content:space-between;font-size:13px}
-.c-date{color:#8aa}
-.c-text{white-space:pre-wrap;margin-top:4px}
-.c-file{color:#1565c0;font-size:13px;text-decoration:none}
+    .comments-title {
+        margin-top: 0
+    }
+
+    .muted {
+        color: #93a1bf;
+        font-size: 13px
+    }
+
+    .comments-list {
+        overflow-y: auto;
+        flex: 1 1 auto;
+        border: 1px solid #eef3ff;
+        border-radius: 8px;
+        padding: 8px;
+        margin-bottom: 10px
+    }
+
+    .comment-item {
+        border-bottom: 1px solid #f1f4ff;
+        padding: 6px 4px
+    }
+
+        .comment-item:last-child {
+            border-bottom: none
+        }
+
+    .c-head {
+        display: flex;
+        justify-content: space-between;
+        font-size: 13px
+    }
+
+    .c-date {
+        color: #8aa
+    }
+
+    .c-text {
+        white-space: pre-wrap;
+        margin-top: 4px
+    }
+
+    .c-file {
+        color: #1565c0;
+        font-size: 13px;
+        text-decoration: none
+    }
 
     .editor {
         position: relative; /* 👈 fondamentale per il posizionamento */
@@ -2477,8 +2542,16 @@
     .editor-text {
         width: 100%
     }
-.editor-files{margin:6px 0}
-.selected-file{margin-left:8px;font-size:13px;color:#1565c0}
+
+    .editor-files {
+        margin: 6px 0
+    }
+
+    .selected-file {
+        margin-left: 8px;
+        font-size: 13px;
+        color: #1565c0
+    }
 
     .mention-wrapper {
         position: relative;
@@ -2498,13 +2571,28 @@
     }
         /* Sopra la textarea */
         .mention-popup.top {
-            bottom: calc(100% + 4px); 
+            bottom: calc(100% + 4px);
         }
 
         /* (opzionale) Se vuoi aprirla sotto in futuro */
         .mention-popup.bottom {
             top: calc(100% + 4px);
         }
+
+    .mail-clean-body table {
+        max-width: 100%;
+        border-collapse: collapse;
+    }
+
+    .mail-clean-body td,
+    .mail-clean-body th {
+        padding: 4px 8px;
+        vertical-align: top;
+    }
+
+    .mail-clean-body img {
+        max-width: 100%;
+    }
     .mention-item {
         padding: 6px 10px;
         cursor: pointer;
@@ -2555,7 +2643,17 @@
             min-width: 0;
         }
     }
-@@media (max-width:980px){.detail-shell{grid-template-columns:1fr;height:auto}.comments-list{max-height:40vh}}
+
+    @@media (max-width:980px) {
+        .detail-shell {
+            grid-template-columns: 1fr;
+            height: auto
+        }
+
+        .comments-list {
+            max-height: 40vh
+        }
+    }
 
 
     .email-item {
@@ -2646,6 +2744,7 @@
     .attach-chip * {
         pointer-events: none;
     }
+
     .email-thread {
         display: flex;
         flex-direction: column;
@@ -2662,9 +2761,9 @@
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
 
-    .gmail-msg:hover {
-        background: #fdfefe;
-    }
+        .gmail-msg:hover {
+            background: #fdfefe;
+        }
 
     .gmail-head {
         display: flex;
@@ -2728,6 +2827,7 @@
         text-overflow: ellipsis;
         max-width: 900px;
     }
+
     .gmail-attachments {
         margin-top: 10px;
         border-top: 1px solid #eef3ff;
@@ -2769,76 +2869,77 @@
         margin-bottom: 4px;
         color: #444;
     }
+
     .comment-box {
-    display: flex;
-    gap: 12px;
-    padding: 12px 6px;
-    border-bottom: 1px solid #eef3ff;
-}
+        display: flex;
+        gap: 12px;
+        padding: 12px 6px;
+        border-bottom: 1px solid #eef3ff;
+    }
 
-.avatar2 {
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    color: #fff;
-    font-weight: 700;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}
+    .avatar2 {
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        color: #fff;
+        font-weight: 700;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
 
-.comment-content {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-}
+    .comment-content {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+    }
 
-.comment-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
+    .comment-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
 
-.comment-header .author {
-    font-weight: 600;
-    font-size: 14px;
-}
+        .comment-header .author {
+            font-weight: 600;
+            font-size: 14px;
+        }
 
-.comment-header .time {
-    font-size: 12px;
-    color: #888;
-}
+        .comment-header .time {
+            font-size: 12px;
+            color: #888;
+        }
 
-.comment-text {
-    margin: 4px 0 6px 0;
-    white-space: pre-wrap;
-    font-size: 14px;
-}
+    .comment-text {
+        margin: 4px 0 6px 0;
+        white-space: pre-wrap;
+        font-size: 14px;
+    }
 
-.comment-attachment {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    background: #f2f6ff;
-    border-radius: 6px;
-    font-size: 13px;
-    width: fit-content;
-    border: 1px solid #dce7ff;
-}
+    .comment-attachment {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        background: #f2f6ff;
+        border-radius: 6px;
+        font-size: 13px;
+        width: fit-content;
+        border: 1px solid #dce7ff;
+    }
 
-.file-plus {
-    cursor: pointer;
-    color: #5a78ff;
-    display: inline-flex;
-    align-items: center;
-}
+    .file-plus {
+        cursor: pointer;
+        color: #5a78ff;
+        display: inline-flex;
+        align-items: center;
+    }
 
-.file-plus:hover {
-    opacity: 0.7;
-}
+        .file-plus:hover {
+            opacity: 0.7;
+        }
 
     .file-chip {
         display: inline-flex;
@@ -2898,6 +2999,7 @@
         background: #fff;
         border-radius: 8px;
     }
+
     .attach-grid {
         display: flex;
         flex-wrap: wrap;
@@ -2935,12 +3037,12 @@
         max-width: 520px;
     }
 
-    .attach-chip span {
-        max-width: 360px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
+        .attach-chip span {
+            max-width: 360px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
 
     .activity-line {
         display: flex;

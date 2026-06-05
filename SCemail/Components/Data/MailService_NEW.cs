@@ -9,6 +9,7 @@ using Microsoft.Extensions.Options;
 using MimeKit;
 using MudBlazor.Charts;
 using Oracle.ManagedDataAccess.Client;
+using Oracle.ManagedDataAccess.Types;
 using SCemail.Components.Data;
 using SCemail.Components.Shared;
 using System.Data;
@@ -991,20 +992,20 @@ ORDER BY DATA";
                 {
                     Id = reader.GetInt32(0),
                     CasellaId = reader.IsDBNull(1) ? null : reader.GetInt32(1),
-                    CasellaEmail = reader.IsDBNull(2) ? null : reader.GetString(2),
-                    Mittente = reader.IsDBNull(3) ? null : reader.GetString(3),
-                    Destinatari = reader.IsDBNull(4) ? null : reader.GetString(4),
-                    Cc = reader.IsDBNull(5) ? null : reader.GetString(5),
-                    Ccn = reader.IsDBNull(6) ? null : reader.GetString(6),
-                    Oggetto = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    CasellaEmail = GetStr(reader, 2),
+                    Mittente = GetStr(reader, 3),
+                    Destinatari = GetStr(reader, 4),
+                    Cc = GetStr(reader, 5),
+                    Ccn = GetStr(reader, 6),
+                    Oggetto = GetStr(reader, 7),
                     Data = reader.IsDBNull(8) ? null : reader.GetDateTime(8),
-                    CorpoHtml = reader.IsDBNull(9) ? null : reader.GetString(9),
-                    CorpoTesto = reader.IsDBNull(10) ? null : reader.GetString(10),
-                    MessageId = reader.IsDBNull(11) ? null : reader.GetString(11),
-                    InReplyTo = reader.IsDBNull(12) ? null : reader.GetString(12),
-                    References = reader.IsDBNull(13) ? null : reader.GetString(13),
-                    ThreadKey = reader.IsDBNull(14) ? null : reader.GetString(14),
-                    Tipo = reader.IsDBNull(15) ? null : reader.GetString(15),
+                    CorpoHtml = GetStr(reader, 9),
+                    CorpoTesto = GetStr(reader, 10),
+                    MessageId = GetStr(reader, 11),
+                    InReplyTo = GetStr(reader, 12),
+                    References = GetStr(reader, 13),
+                    ThreadKey = GetStr(reader, 14),
+                    Tipo = GetStr(reader, 15),
                     IsLoaded = true
                 });
             }
@@ -2680,6 +2681,17 @@ WHERE RN = 1";
 
         static string? GetStr(OracleDataReader r, string col)
     => r.IsDBNull(col) ? null : r.GetString(col);
+
+        static string? GetStr(OracleDataReader r, int ordinal)
+        {
+            if (r.IsDBNull(ordinal)) return null;
+
+            var value = r.GetValue(ordinal);
+            if (value is OracleClob clob)
+                return clob.IsNull ? null : clob.Value;
+
+            return value?.ToString();
+        }
         public async Task SaveSentAsync(
     string utente,
     string destinatari,

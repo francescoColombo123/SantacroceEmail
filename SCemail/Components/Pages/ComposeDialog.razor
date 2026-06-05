@@ -2420,45 +2420,13 @@
         if (string.IsNullOrWhiteSpace(html))
             return "";
 
-        var s = WebUtility.HtmlDecode(html)
-            .Replace("\r\n", "\n")
-            .Replace("\r", "\n")
-            .Replace("&nbsp;", " ");
+        var s = html.Trim();
 
-        // elimina blocchi tecnici Outlook/Word
-        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
 
-        // elimina CSS Outlook se è già diventato testo visibile
-        s = Regex.Replace(s, @"(?is)v\\?:\*\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)o\\?:\*\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)w\\?:\*\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)\.shape\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)@font-face\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)@page\s+\w+\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)@list\s+\w+\s*\{.*?\}", "");
-        s = Regex.Replace(s, @"(?is)/\*\s*Font Definitions\s*\*/[\s\S]*?/\*\s*Style Definitions\s*\*/", "");
-        s = Regex.Replace(s, @"(?is)/\*\s*Style Definitions\s*\*/[\s\S]*?/\*\s*List Definitions\s*\*/", "");
-        s = Regex.Replace(s, @"(?is)/\*\s*List Definitions\s*\*/[\s\S]*?-->", "");
-
-        // tag in righe
-        s = Regex.Replace(s, @"<\s*br\s*/?\s*>", "\n", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"</\s*p\s*>", "\n", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"</\s*div\s*>", "\n", RegexOptions.IgnoreCase);
-
-        // elimina tag residui
-        s = Regex.Replace(s, @"<[^>]+>", "");
-
-        // pulizia spazi
-        s = Regex.Replace(s, @"[ \t]+", " ");
-        s = Regex.Replace(s, @" *\n *", "\n");
-        s = Regex.Replace(s, @"\n{3,}", "\n\n");
-        s = Regex.Replace(s, @"^(\s|<br\s*/?>|&nbsp;)+", "", RegexOptions.IgnoreCase);
-        s = Regex.Replace(s, @"(<br\s*/?>\s*){3,}", "<br><br>", RegexOptions.IgnoreCase);
-        return WebUtility.HtmlEncode(s.Trim())
-            .Replace("\n\n", "<br><br>")
-            .Replace("\n", "<br>");
+        return s;
     }
 
 }
