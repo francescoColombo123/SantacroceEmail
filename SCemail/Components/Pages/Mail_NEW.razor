@@ -2400,86 +2400,49 @@ else
         if (page == null || page.Count == 0)
             return page ?? new();
 
-        var ids = page.Select(x => x.Id).Distinct().ToList();
-        var inClause = string.Join(",", ids.Select((_, i) => $":id{i}"));
+        var keys = page
+            .Select(x => x.ThreadKey?.Trim())
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (keys.Count == 0)
+            return page.Select(x => x with { ThreadLen = 1 }).ToList();
+
+        var inClause = string.Join(",", keys.Select((_, i) => $":k{i}"));
 
         var sql = $@"
-WITH page_ids AS (
-    SELECT ID AS EMAIL_ID,
-           THREAD_KEY,
-           MESSAGE_ID,
-           IN_REPLY_TO,
-           REFERENCES_HDR
+SELECT THREAD_KEY, SUM(CNT) AS CNT
+FROM (
+    SELECT THREAD_KEY, COUNT(*) AS CNT
     FROM SGAPP.EMAIL_RICEVUTE
-    WHERE ID IN ({inClause})
-),
-matches AS (
-    SELECT
-        p.EMAIL_ID,
-        r.ID AS MATCH_ID,
-        r.MESSAGE_ID,
-        'R' AS TIPO
-    FROM page_ids p
-    JOIN SGAPP.EMAIL_RICEVUTE r
-      ON NVL(r.ELIMINATO, 'N') = 'N'
-     AND (
-            UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(p.THREAD_KEY))
-         OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(p.MESSAGE_ID))
-         OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(p.MESSAGE_ID))
-         OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(p.IN_REPLY_TO))
-         OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(p.MESSAGE_ID))) > 0
-         OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(p.IN_REPLY_TO))) > 0
-         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
-         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
-     )
+    WHERE NVL(ELIMINATO, 'N') = 'N'
+      AND THREAD_KEY IN ({inClause})
+    GROUP BY THREAD_KEY
 
     UNION ALL
 
-    SELECT
-        p.EMAIL_ID,
-        i.ID AS MATCH_ID,
-        i.MESSAGE_ID,
-        'I' AS TIPO
-    FROM page_ids p
-    JOIN SGAPP.EMAIL_INVIATE i
-      ON (
-            UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(p.THREAD_KEY))
-         OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(p.MESSAGE_ID))
-         OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(p.MESSAGE_ID))
-         OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(p.IN_REPLY_TO))
-         OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(p.MESSAGE_ID))) > 0
-         OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(p.IN_REPLY_TO))) > 0
-         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
-         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
-     )
-),
-dedup AS (
-    SELECT DISTINCT
-        EMAIL_ID,
-        CASE
-            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
-            ELSE TIPO || '-' || MATCH_ID
-        END AS DEDUP_KEY
-    FROM matches
+    SELECT THREAD_KEY, COUNT(*) AS CNT
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE THREAD_KEY IN ({inClause})
+    GROUP BY THREAD_KEY
 )
-SELECT EMAIL_ID, COUNT(*) AS CNT
-FROM dedup
-GROUP BY EMAIL_ID";
+GROUP BY THREAD_KEY";
 
-        var counts = new Dictionary<int, int>();
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         await using var db = await DbFactory.CreateDbContextAsync();
         await db.Database.OpenConnectionAsync();
 
         await using var cmd = db.Database.GetDbConnection().CreateCommand();
         cmd.CommandText = sql;
-        cmd.CommandTimeout = 0;
+        cmd.CommandTimeout = 5;
 
-        for (int i = 0; i < ids.Count; i++)
+        for (int i = 0; i < keys.Count; i++)
         {
             var p = cmd.CreateParameter();
-            p.ParameterName = $"id{i}";
-            p.Value = ids[i];
+            p.ParameterName = $"k{i}";
+            p.Value = keys[i]!;
             cmd.Parameters.Add(p);
         }
 
@@ -2487,12 +2450,21 @@ GROUP BY EMAIL_ID";
 
         while (await reader.ReadAsync())
         {
-            counts[reader.GetInt32(0)] = reader.GetInt32(1);
+            var key = reader.IsDBNull(0) ? "" : reader.GetString(0);
+            var count = reader.IsDBNull(1) ? 1 : Convert.ToInt32(reader.GetValue(1));
+
+            if (!string.IsNullOrWhiteSpace(key))
+                counts[key] = count;
         }
 
         return page.Select(x =>
         {
-            var count = counts.TryGetValue(x.Id, out var c) ? c : 1;
+            var key = x.ThreadKey?.Trim();
+
+            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var c)
+                ? c
+                : 1;
+
             return x with { ThreadLen = Math.Max(count, 1) };
         }).ToList();
     }
