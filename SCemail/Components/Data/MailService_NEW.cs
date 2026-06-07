@@ -903,87 +903,101 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
         {
             await using var conn = await GetOpenConnectionAsync();
 
-            string? threadKey = null;
-            const string findThreadSql = @"
-            SELECT THREAD_KEY FROM (
-                SELECT THREAD_KEY
-                FROM SGAPP.EMAIL_RICEVUTE
-                WHERE ID = :id
-
-                UNION ALL
-
-                SELECT THREAD_KEY
-                FROM SGAPP.EMAIL_INVIATE
-                WHERE ID = :id
-            )
-            WHERE ROWNUM = 1";
-
-            await using (var findCmd = new OracleCommand(findThreadSql, conn))
-            {
-                findCmd.BindByName = true;
-                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
-
-                await using var r = await findCmd.ExecuteReaderAsync();
-                if (await r.ReadAsync())
-                {
-                    threadKey = r.IsDBNull(0) ? null : r.GetString(0);
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(threadKey))
-                return new();
-
             const string sql = @"
-SELECT 
-    r.ID,
-    r.CASELLA_ID,
-    TO_CLOB(cp.EMAIL) AS CASELLA_EMAIL,
-    TO_CLOB(r.MITTENTE) AS MITTENTE,
-    TO_CLOB(r.DESTINATARI) AS DESTINATARI,
-    TO_CLOB(r.CC) AS CC,
-    TO_CLOB(r.CCN) AS CCN,
-    TO_CLOB(r.OGGETTO) AS OGGETTO,
-    r.DATA_RICEZIONE AS DATA,
-    TO_CLOB(r.CORPO_HTML) AS CORPO_HTML,
-    TO_CLOB(r.CORPO_TESTO) AS CORPO_TESTO,
-    TO_CLOB(r.MESSAGE_ID) AS MESSAGE_ID,
-    TO_CLOB(r.IN_REPLY_TO) AS IN_REPLY_TO,
-    TO_CLOB(r.REFERENCES_HDR) AS REFERENCES_HDR,
-    TO_CLOB(r.THREAD_KEY) AS THREAD_KEY,
-    'R' AS TIPO
-FROM SGAPP.EMAIL_RICEVUTE r
-LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
-WHERE r.THREAD_KEY = :p_thread
-UNION ALL
+WITH base AS (
+    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID = :id
 
-SELECT 
-    i.ID,
-    CAST(NULL AS NUMBER) AS CASELLA_ID,
-    TO_CLOB(i.UTENTE) AS CASELLA_EMAIL,
-    TO_CLOB(i.UTENTE) AS MITTENTE,
-    TO_CLOB(i.DESTINATARI) AS DESTINATARI,
-    TO_CLOB(i.CC) AS CC,
-    TO_CLOB(i.BCC) AS CCN,
-    TO_CLOB(i.OGGETTO) AS OGGETTO,
-    i.DATA_INVIO AS DATA,
-    TO_CLOB(i.CORPO_HTML) AS CORPO_HTML,
-    TO_CLOB(i.CORPO_TESTO) AS CORPO_TESTO,
-    TO_CLOB(i.MESSAGE_ID) AS MESSAGE_ID,
-    TO_CLOB(i.IN_REPLY_TO) AS IN_REPLY_TO,
-    TO_CLOB(i.REFERENCES_HDR) AS REFERENCES_HDR,
-    TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
-    'I' AS TIPO
-FROM SGAPP.EMAIL_INVIATE i
-WHERE i.THREAD_KEY = :p_thread
-ORDER BY DATA";
+    UNION ALL
+
+    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE ID = :id
+),
+raw_thread AS (
+    SELECT 
+        r.ID,
+        r.CASELLA_ID,
+        TO_CLOB(cp.EMAIL) AS CASELLA_EMAIL,
+        TO_CLOB(r.MITTENTE) AS MITTENTE,
+        TO_CLOB(r.DESTINATARI) AS DESTINATARI,
+        TO_CLOB(r.CC) AS CC,
+        TO_CLOB(r.CCN) AS CCN,
+        TO_CLOB(r.OGGETTO) AS OGGETTO,
+        r.DATA_RICEZIONE AS DATA,
+        TO_CLOB(r.CORPO_HTML) AS CORPO_HTML,
+        TO_CLOB(r.CORPO_TESTO) AS CORPO_TESTO,
+        TO_CLOB(r.MESSAGE_ID) AS MESSAGE_ID,
+        TO_CLOB(r.IN_REPLY_TO) AS IN_REPLY_TO,
+        TO_CLOB(r.REFERENCES_HDR) AS REFERENCES_HDR,
+        TO_CLOB(r.THREAD_KEY) AS THREAD_KEY,
+        'R' AS TIPO
+    FROM SGAPP.EMAIL_RICEVUTE r
+    LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
+    WHERE NVL(r.ELIMINATO, 'N') = 'N'
+      AND EXISTS (
+        SELECT 1
+        FROM base b
+        WHERE 
+              UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
+           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
+
+           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
+
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
+      )
+
+    UNION ALL
+
+    SELECT 
+        i.ID,
+        CAST(NULL AS NUMBER) AS CASELLA_ID,
+        TO_CLOB(i.UTENTE) AS CASELLA_EMAIL,
+        TO_CLOB(i.UTENTE) AS MITTENTE,
+        TO_CLOB(i.DESTINATARI) AS DESTINATARI,
+        TO_CLOB(i.CC) AS CC,
+        TO_CLOB(i.BCC) AS CCN,
+        TO_CLOB(i.OGGETTO) AS OGGETTO,
+        i.DATA_INVIO AS DATA,
+        TO_CLOB(i.CORPO_HTML) AS CORPO_HTML,
+        TO_CLOB(i.CORPO_TESTO) AS CORPO_TESTO,
+        TO_CLOB(i.MESSAGE_ID) AS MESSAGE_ID,
+        TO_CLOB(i.IN_REPLY_TO) AS IN_REPLY_TO,
+        TO_CLOB(i.REFERENCES_HDR) AS REFERENCES_HDR,
+        TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
+        'I' AS TIPO
+    FROM SGAPP.EMAIL_INVIATE i
+    WHERE EXISTS (
+        SELECT 1
+        FROM base b
+        WHERE 
+              UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
+           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
+
+           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
+
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
+    )
+)
+SELECT *
+FROM raw_thread
+ORDER BY DATA, ID";
 
             await using var cmd = new OracleCommand(sql, conn);
             cmd.BindByName = true;
+            cmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
 
-
-            cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value =
-                string.IsNullOrWhiteSpace(threadKey) ? DBNull.Value : threadKey;
             var list = new List<EmailDetail_NEW>();
+
             await using var reader = await cmd.ExecuteReaderAsync();
 
             while (await reader.ReadAsync())
@@ -1010,7 +1024,6 @@ ORDER BY DATA";
                 });
             }
 
-
             const string attachSqlRicevute = @"
 SELECT ID, NOME_FILE, MIME_TYPE, IS_EMAIL_EML, EMAIL_EML_ID
 FROM SGAPP.EMAIL_ALLEGATI
@@ -1027,20 +1040,16 @@ WHERE EMAIL_ID = :id_email";
             {
                 mail.Allegati = new List<AllegatoItem_NEW>();
 
-                var sqlAllegati = mail.Tipo == "I"
-                    ? attachSqlInviate
-                    : attachSqlRicevute;
+                var sqlAllegati = mail.Tipo == "I" ? attachSqlInviate : attachSqlRicevute;
 
                 await using var aCmd = new OracleCommand(sqlAllegati, conn);
+                aCmd.BindByName = true;
                 aCmd.Parameters.Add("id_email", OracleDbType.Int32).Value = mail.Id;
 
                 await using var aReader = await aCmd.ExecuteReaderAsync();
+
                 while (await aReader.ReadAsync())
                 {
-                    var allegatoId = aReader.GetInt32(0);
-
-                    Console.WriteLine(
-                        $"MAIL={mail.Id} ALLEGATO={allegatoId}");
                     mail.Allegati.Add(new AllegatoItem_NEW
                     {
                         Id = aReader.GetInt32(0),
@@ -1052,100 +1061,192 @@ WHERE EMAIL_ID = :id_email";
                     });
                 }
             }
-            if (!string.IsNullOrWhiteSpace(utente) && list.Any())
-            {
 
-                var emailIds = list
-                    .Where(x => x.Tipo == "R")
-                    .Select(x => x.Id)
-                    .Distinct()
-                    .ToList();
-
-                if (emailIds.Any())
-                {
-                    // Ultima menzione del thread per l'utente
-                    var mentions = new List<(int EmailId, string Utente, string Visto, DateTime? DataMenzione)>();
-
-                    const string mentionsSql = @"
-SELECT EMAIL_ID, UTENTE, VISTO, DATA_MENZIONE
-FROM SGAPP.EMAIL_MENZIONI
-WHERE EMAIL_ID IN (
-    SELECT ID
-    FROM SGAPP.EMAIL_RICEVUTE
-    WHERE THREAD_KEY = :p_thread
-)
-AND UPPER(UTENTE) = UPPER(:p_user)";
-
-                    await using (var mCmd = new OracleCommand(mentionsSql, conn))
-                    {
-                        mCmd.BindByName = true;
-                        mCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
-                        mCmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente;
-
-                        await using var mReader = await mCmd.ExecuteReaderAsync();
-                        while (await mReader.ReadAsync())
-                        {
-                            mentions.Add((
-                                EmailId: mReader.GetInt32(0),
-                                Utente: mReader.IsDBNull(1) ? "" : mReader.GetString(1),
-                                Visto: mReader.IsDBNull(2) ? "" : mReader.GetString(2),
-                                DataMenzione: mReader.IsDBNull(3) ? null : mReader.GetDateTime(3)
-                            ));
-                        }
-                    }
-
-                    var lastMention = mentions
-                        .OrderByDescending(x => x.DataMenzione)
-                        .FirstOrDefault();
-
-                    bool canArchive = true;
-
-                    if (!string.IsNullOrWhiteSpace(lastMention.Utente) && lastMention.DataMenzione.HasValue)
-                    {
-                        var comments = new List<(int EmailId, string Autore, DateTime? DataCreazione)>();
-
-                        const string commentsSql = @"
-SELECT EMAIL_ID, AUTORE, DATA_CREAZIONE
-FROM SGAPP.COMMENTI_EMAIL
-WHERE EMAIL_ID IN (
-    SELECT ID
-    FROM SGAPP.EMAIL_RICEVUTE
-    WHERE THREAD_KEY = :p_thread
-)";
-
-                        await using (var cCmd = new OracleCommand(commentsSql, conn))
-                        {
-                            cCmd.BindByName = true;
-                            cCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
-
-                            await using var cReader = await cCmd.ExecuteReaderAsync();
-                            while (await cReader.ReadAsync())
-                            {
-                                comments.Add((
-                                    EmailId: cReader.GetInt32(0),
-                                    Autore: cReader.IsDBNull(1) ? "" : cReader.GetString(1),
-                                    DataCreazione: cReader.IsDBNull(2) ? null : cReader.GetDateTime(2)
-                                ));
-                            }
-                        }
-
-                        var mentionedUserHasReplied = comments.Any(c =>
-                            c.Autore.Equals(lastMention.Utente, StringComparison.OrdinalIgnoreCase) &&
-                            c.DataCreazione.HasValue &&
-                            c.DataCreazione.Value > lastMention.DataMenzione.Value
-                        );
-
-                        canArchive = !string.Equals(utente, lastMention.Utente, StringComparison.OrdinalIgnoreCase)
-                                     || mentionedUserHasReplied;
-                    }
-
-                    foreach (var mail in list)
-                        mail.CanArchive = canArchive;
-                }
-            }
-            return list;
+            return list
+                 .GroupBy(x => BuildThreadDedupKey(x))
+                 .Select(g => g
+                     .OrderByDescending(x => x.Allegati?.Count ?? 0)
+                     .ThenBy(x => x.Data)
+                     .ThenBy(x => x.Id)
+                     .First())
+                 .OrderBy(x => x.Data)
+                 .ToList();
         }
 
+        private static string BuildThreadDedupKey(EmailDetail_NEW x)
+        {
+            var subject = NormalizeSubjectForThread(x.Oggetto);
+            var sender = NormalizeEmailForThread(x.Mittente);
+            var recipients = NormalizeEmailForThread(x.Destinatari);
+            var visibleBody = NormalizeBodyForThreadDedup(x.CorpoHtml ?? x.CorpoTesto);
+
+            if (!string.IsNullOrWhiteSpace(visibleBody))
+            {
+                if (visibleBody.Length > 700)
+                    visibleBody = visibleBody[..700];
+
+                return $"{sender}|{recipients}|{subject}|{visibleBody}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(x.MessageId))
+                return x.MessageId.Trim().ToLowerInvariant();
+
+            return $"{x.Tipo}-{x.Id}";
+        }
+
+        private static string NormalizeSubjectForThread(string? s)
+        {
+            s ??= "";
+            s = Regex.Replace(s, @"^\s*((re|fwd|fw)\s*:\s*)+", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s+", " ");
+            return s.Trim().ToLowerInvariant();
+        }
+
+        private static string NormalizeEmailForThread(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s))
+                return "";
+
+            s = System.Net.WebUtility.HtmlDecode(s);
+
+            var emails = Regex.Matches(s, @"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+                .Select(m => m.Value.Trim().ToLowerInvariant())
+                .Distinct()
+                .OrderBy(x => x)
+                .ToList();
+
+            if (emails.Any())
+                return string.Join(";", emails);
+
+            s = Regex.Replace(s, @"\s+", " ");
+            return s.Trim().ToLowerInvariant();
+        }
+
+        private static string NormalizeBodyForThreadDedup(string? htmlOrText)
+        {
+            if (string.IsNullOrWhiteSpace(htmlOrText))
+                return "";
+
+            var s = htmlOrText;
+
+            s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+
+            s = Regex.Replace(s, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"</p\s*>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"</div\s*>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<[^>]+>", " ");
+
+            s = System.Net.WebUtility.HtmlDecode(s);
+
+            s = Regex.Replace(
+                s,
+                @"(?is)il giorno\s+.+?\s+ha scritto:.*$",
+                ""
+            );
+
+            s = Regex.Replace(
+                s,
+                @"(?is)-{2,}\s*messaggio originale\s*-{2,}.*$",
+                ""
+            );
+
+            s = Regex.Replace(s, @"\s+", " ");
+
+            return s.Trim().ToLowerInvariant();
+        }
+        private static string BuildLogicalEmailKey(EmailDetail_NEW x)
+        {
+            var sender = NormalizeEmailLikeKey(x.Mittente);
+            var to = NormalizeEmailsLikeKey(x.Destinatari);
+            var cc = NormalizeEmailsLikeKey(x.Cc);
+            var subject = NormalizeSubjectKey(x.Oggetto);
+            var date = x.Data?.ToString("yyyyMMddHHmm") ?? "";
+            var body = NormalizeBodyKey(x.CorpoHtml ?? x.CorpoTesto);
+
+            if (!string.IsNullOrWhiteSpace(sender)
+                && !string.IsNullOrWhiteSpace(subject)
+                && !string.IsNullOrWhiteSpace(date)
+                && !string.IsNullOrWhiteSpace(body))
+            {
+                return $"LOGIC|{sender}|{to}|{cc}|{subject}|{date}|{body}";
+            }
+
+            var msgId = NormalizeKey(x.MessageId);
+            if (!string.IsNullOrWhiteSpace(msgId))
+                return "MSG|" + msgId;
+
+            return $"{x.Tipo}-{x.Id}";
+        }
+
+        private static string NormalizeKey(string? value)
+        {
+            return (value ?? "")
+                .Trim()
+                .Trim('<', '>')
+                .ToUpperInvariant();
+        }
+
+        private static string NormalizeSubjectKey(string? subject)
+        {
+            var s = (subject ?? "").Trim().ToLowerInvariant();
+
+            s = Regex.Replace(s, @"^(re|r|fw|fwd)\s*:\s*", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s+", " ");
+
+            return s;
+        }
+        private static string HtmlToText(string? html)
+        {
+            if (string.IsNullOrWhiteSpace(html))
+                return "";
+
+            var s = System.Net.WebUtility.HtmlDecode(html);
+
+            s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+
+            s = Regex.Replace(s, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"</p\s*>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"</div\s*>", "\n", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<[^>]+>", " ");
+
+            s = Regex.Replace(s, @"\s+", " ").Trim();
+
+            return s;
+        }
+        private static string NormalizeBodyKey(string? body)
+        {
+            if (string.IsNullOrWhiteSpace(body))
+                return "";
+
+            var s = HtmlToText(body)
+                .ToLowerInvariant();
+
+            s = Regex.Replace(s, @"\s+", " ").Trim();
+
+            if (s.Length > 700)
+                s = s[..700];
+
+            return s;
+        }
+
+        private static string NormalizeEmailLikeKey(string? raw)
+        {
+            var email = ExtractEmailOnly(raw);
+            return (email ?? "").Trim().ToLowerInvariant();
+        }
+
+        private static string NormalizeEmailsLikeKey(string? raw)
+        {
+            return string.Join(";",
+                ParseEmailsSafe(raw)
+                    .Select(x => x.Trim().ToLowerInvariant())
+                    .Distinct()
+                    .OrderBy(x => x));
+        }
         public async Task<int> GetConversationCountByThreadFromRicevuteAsync(int emailId)
         {
             await using var conn = await GetOpenConnectionAsync();
@@ -3111,14 +3212,7 @@ ORDER BY s.ORDINE, s.NOME";
             }
         }
 
-        private static string ExtractEmailOnly(string raw)
-        {
-            if (string.IsNullOrWhiteSpace(raw))
-                return "";
-
-            var match = Regex.Match(raw, @"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}");
-            return match.Success ? match.Value.ToLower() : raw.Trim().ToLower();
-        }
+        
 
         public async Task DeleteDraftAsync(long id, string utente)
         {
@@ -5390,7 +5484,43 @@ WHERE NVL(e.ELIMINATO,'N') = 'N'
             name = name.Trim();
             return string.IsNullOrWhiteSpace(name) ? "allegato" : name;
         }
+        private static string ExtractEmailOnly(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
 
+            var match = Regex.Match(raw, "<([^>]+)>");
+            if (match.Success)
+                return match.Groups[1].Value.Trim();
+
+            if (raw.Contains("@"))
+                return raw.Trim().Trim('"');
+
+            return raw.Trim();
+        }
+
+        private static List<string> ParseEmailsSafe(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return new();
+
+            try
+            {
+                var list = MimeKit.InternetAddressList.Parse(raw);
+
+                return list.Mailboxes
+                    .Select(m => (m.Address ?? "").Trim())
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+            }
+            catch
+            {
+                return raw.Split(';', ',', '\n', '\r')
+                    .Select(x => ExtractEmailOnly(x))
+                    .Where(x => x.Contains("@"))
+                    .ToList();
+            }
+        }
         private static string EnsureUniquePath(string fullPath)
         {
             if (!File.Exists(fullPath)) return fullPath;

@@ -2400,49 +2400,200 @@ else
         if (page == null || page.Count == 0)
             return page ?? new();
 
+        var ids = page.Select(x => x.Id).Distinct().ToList();
+        var inClause = string.Join(",", ids.Select((_, i) => $":id{i}"));
+
+        var sql = $@"
+WITH page_ids AS (
+    SELECT ID AS EMAIL_ID,
+           THREAD_KEY,
+           MESSAGE_ID,
+           IN_REPLY_TO,
+           REFERENCES_HDR
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID IN ({inClause})
+),
+matches AS (
+    SELECT
+        p.EMAIL_ID,
+        r.ID AS MATCH_ID,
+        r.MESSAGE_ID,
+        'R' AS TIPO
+    FROM page_ids p
+    JOIN SGAPP.EMAIL_RICEVUTE r
+      ON NVL(r.ELIMINATO, 'N') = 'N'
+     AND (
+            UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(p.THREAD_KEY))
+         OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(p.MESSAGE_ID))
+         OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(p.MESSAGE_ID))
+         OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(p.IN_REPLY_TO))
+         OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(p.MESSAGE_ID))) > 0
+         OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(p.IN_REPLY_TO))) > 0
+         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
+         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
+     )
+
+    UNION ALL
+
+    SELECT
+        p.EMAIL_ID,
+        i.ID AS MATCH_ID,
+        i.MESSAGE_ID,
+        'I' AS TIPO
+    FROM page_ids p
+    JOIN SGAPP.EMAIL_INVIATE i
+      ON (
+            UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(p.THREAD_KEY))
+         OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(p.MESSAGE_ID))
+         OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(p.MESSAGE_ID))
+         OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(p.IN_REPLY_TO))
+         OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(p.MESSAGE_ID))) > 0
+         OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(p.IN_REPLY_TO))) > 0
+         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
+         OR INSTR(UPPER(NVL(p.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
+     )
+),
+dedup AS (
+    SELECT DISTINCT
+        EMAIL_ID,
+        CASE
+            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
+            ELSE TIPO || '-' || MATCH_ID
+        END AS DEDUP_KEY
+    FROM matches
+)
+SELECT EMAIL_ID, COUNT(*) AS CNT
+FROM dedup
+GROUP BY EMAIL_ID";
+
+        var counts = new Dictionary<int, int>();
+
         await using var db = await DbFactory.CreateDbContextAsync();
+        await db.Database.OpenConnectionAsync();
 
-        var keys = page
-            .Select(x => x.ThreadKey)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!.Trim())
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        await using var cmd = db.Database.GetDbConnection().CreateCommand();
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = 0;
 
-        if (keys.Count == 0)
-            return page;
+        for (int i = 0; i < ids.Count; i++)
+        {
+            var p = cmd.CreateParameter();
+            p.ParameterName = $"id{i}";
+            p.Value = ids[i];
+            cmd.Parameters.Add(p);
+        }
 
-        var ricevute = await db.EmailRicevute
-            .Where(x => x.ThreadKey != null && keys.Contains(x.ThreadKey))
-            .GroupBy(x => x.ThreadKey)
-            .Select(g => new { ThreadKey = g.Key!, Count = g.Count() })
-            .ToListAsync();
+        await using var reader = await cmd.ExecuteReaderAsync();
 
-        var inviate = await db.EmailInviate
-            .Where(x => x.ThreadKey != null && keys.Contains(x.ThreadKey))
-            .GroupBy(x => x.ThreadKey)
-            .Select(g => new { ThreadKey = g.Key!, Count = g.Count() })
-            .ToListAsync();
-
-        var counts = ricevute
-            .Concat(inviate)
-            .GroupBy(x => x.ThreadKey, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(
-                g => g.Key,
-                g => g.Sum(x => x.Count),
-                StringComparer.OrdinalIgnoreCase
-            );
+        while (await reader.ReadAsync())
+        {
+            counts[reader.GetInt32(0)] = reader.GetInt32(1);
+        }
 
         return page.Select(x =>
         {
-            var key = x.ThreadKey?.Trim();
-
-            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var c)
-                ? c
-                : 1;
-
-            return x with { ThreadLen = count };
+            var count = counts.TryGetValue(x.Id, out var c) ? c : 1;
+            return x with { ThreadLen = Math.Max(count, 1) };
         }).ToList();
+    }
+
+    private async Task<int> CountThreadMessagesAsync(MailDbContext db, int emailId)
+    {
+        const string sql = @"
+WITH base AS (
+    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID = :id
+
+    UNION ALL
+
+    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE ID = :id
+),
+raw_thread AS (
+    SELECT
+        r.ID,
+        r.MESSAGE_ID,
+        r.MITTENTE,
+        r.DESTINATARI,
+        r.OGGETTO,
+        r.DATA_RICEZIONE AS DATA_MAIL,
+        'R' AS TIPO
+    FROM SGAPP.EMAIL_RICEVUTE r
+    WHERE NVL(r.ELIMINATO, 'N') = 'N'
+      AND EXISTS (
+        SELECT 1
+        FROM base b
+        WHERE
+              UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
+           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
+
+           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
+
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
+      )
+
+    UNION ALL
+
+    SELECT
+        i.ID,
+        i.MESSAGE_ID,
+        i.UTENTE AS MITTENTE,
+        i.DESTINATARI,
+        i.OGGETTO,
+        i.DATA_INVIO AS DATA_MAIL,
+        'I' AS TIPO
+    FROM SGAPP.EMAIL_INVIATE i
+    WHERE EXISTS (
+        SELECT 1
+        FROM base b
+        WHERE
+              UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
+           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
+           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
+
+           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
+
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
+           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
+    )
+)
+SELECT COUNT(*)
+FROM (
+    SELECT
+        CASE
+            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
+            ELSE TIPO || '-' || ID
+        END AS DEDUP_KEY
+    FROM raw_thread
+    GROUP BY
+        CASE
+            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
+            ELSE TIPO || '-' || ID
+        END
+)";
+
+        await using var cmd = db.Database.GetDbConnection().CreateCommand();
+        cmd.CommandText = sql;
+        cmd.CommandTimeout = 0;
+
+        var p = cmd.CreateParameter();
+        p.ParameterName = "id";
+        p.Value = emailId;
+        cmd.Parameters.Add(p);
+
+        var value = await cmd.ExecuteScalarAsync();
+
+        return value == null || value == DBNull.Value
+            ? 1
+            : Convert.ToInt32(value);
     }
     private async Task NuovoPostIt()
     {

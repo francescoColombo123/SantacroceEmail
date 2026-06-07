@@ -192,7 +192,7 @@
 
                         <div class="gmail-body">
                             @{
-                                var safe = PrepareHtmlForDisplay(mail);
+                                var safe = PrepareHtmlForDisplayGmailLike(mail);
                             }
 
                             <div class="mail-clean-body">
@@ -421,6 +421,47 @@
 
         await LoadPageAsync();
     }
+    
+    private string PrepareHtmlForDisplayGmailLike(EmailDetail_NEW mail)
+    {
+        var html = mail.CorpoHtml ?? "";
+
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            var text = mail.CorpoTesto ?? "";
+            text = CutQuotedTextOnly(text);
+
+            return System.Net.WebUtility.HtmlEncode(text)
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .Replace("\n", "<br>");
+        }
+
+        html = StripActiveContent(html);
+
+        html = HideQuotedPartsButKeepHtml(html);
+
+        if (mail.Allegati != null && mail.Allegati.Any())
+        {
+            foreach (var a in mail.Allegati)
+            {
+                var nome = a.NomeFile ?? "";
+                if (string.IsNullOrWhiteSpace(nome))
+                    continue;
+
+                var url = $"/api/attachments/{a.Id}/download";
+
+                html = Regex.Replace(
+                    html,
+                    $@"cid:{Regex.Escape(nome)}",
+                    url,
+                    RegexOptions.IgnoreCase
+                );
+            }
+        }
+
+        return RemoveUnresolvedCidImages(html);
+    }
 
     private async Task Reply(EmailDetail_NEW msg)
     {
@@ -497,7 +538,121 @@
 
         return RemoveUnresolvedCidImages(html);
     }
+    private static string HideQuotedPartsButKeepHtml(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
 
+        var s = html;
+
+        // Gmail: blocchi quotati veri, li nascondiamo ma NON tocchiamo il resto HTML/CSS
+        s = Regex.Replace(
+            s,
+            @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_quote[^""']*[""'][^>]*)>[\s\S]*?</div>",
+            @"<div $1 style=""display:none !important;""></div>",
+            RegexOptions.IgnoreCase
+        );
+
+        // Gmail extra quote
+        s = Regex.Replace(
+            s,
+            @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_extra[^""']*[""'][^>]*)>[\s\S]*?</div>",
+            @"<div $1 style=""display:none !important;""></div>",
+            RegexOptions.IgnoreCase
+        );
+
+        // Outlook / altri client: blockquote quotato
+        s = Regex.Replace(
+            s,
+            @"<blockquote\b([^>]*)>[\s\S]*?</blockquote>",
+            @"<blockquote $1 style=""display:none !important;""></blockquote>",
+            RegexOptions.IgnoreCase
+        );
+
+        // Mozilla Thunderbird
+        s = Regex.Replace(
+            s,
+            @"<div\b([^>]*class\s*=\s*[""'][^""']*moz-cite-prefix[^""']*[""'][^>]*)>[\s\S]*?</div>",
+            @"<div $1 style=""display:none !important;""></div>",
+            RegexOptions.IgnoreCase
+        );
+
+        // Se nel corpo c'è il classico header testuale, taglia da lì in poi.
+        // Però NON convertiamo in testo: manteniamo tutto l'HTML prima.
+        s = CutHtmlFromReplyHeader(s);
+
+        return s.Trim();
+    }
+
+    private static string CutHtmlFromReplyHeader(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var markers = new[]
+        {
+        @"Il giorno\s+.+?\s+ha scritto:",
+        @"On\s+.+?\s+wrote:",
+        @"Da:\s*.+",
+        @"Inviato:\s*.+",
+        @"Oggetto:\s*.+",
+        @"-{2,}\s*Messaggio originale\s*-{2,}",
+        @"-{2,}\s*Forwarded message\s*-{2,}"
+    };
+
+        var bestIndex = -1;
+
+        foreach (var marker in markers)
+        {
+            var m = Regex.Match(html, marker, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            if (m.Success && m.Index > 0)
+            {
+                if (bestIndex == -1 || m.Index < bestIndex)
+                    bestIndex = m.Index;
+            }
+        }
+
+        if (bestIndex > 0)
+            return html[..bestIndex];
+
+        return html;
+    }
+
+    private static string CutQuotedTextOnly(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "";
+
+        var s = text.Replace("\r", "");
+
+        var markers = new[]
+        {
+        @"(?im)^\s*Il giorno .+? ha scritto:\s*$",
+        @"(?im)^\s*On .+? wrote:\s*$",
+        @"(?im)^\s*Da:\s+.+$",
+        @"(?im)^\s*Inviato:\s+.+$",
+        @"(?im)^\s*Oggetto:\s+.+$",
+        @"(?im)^\s*-{2,}\s*Messaggio originale\s*-{2,}\s*$",
+        @"(?im)^\s*-{2,}\s*Forwarded message\s*-{2,}\s*$"
+    };
+
+        var bestIndex = -1;
+
+        foreach (var marker in markers)
+        {
+            var m = Regex.Match(s, marker);
+            if (m.Success && m.Index > 0)
+            {
+                if (bestIndex == -1 || m.Index < bestIndex)
+                    bestIndex = m.Index;
+            }
+        }
+
+        if (bestIndex > 0)
+            return s[..bestIndex].Trim();
+
+        return s.Trim();
+    }
     private static string RemoveUnresolvedCidImages(string html)
     {
         return Regex.Replace(
@@ -1195,21 +1350,7 @@
 
         return r;
     }
-    private static string HtmlToText(string html)
-    {
-        if (string.IsNullOrWhiteSpace(html)) return "";
-        // Decode first so encoded HTML comments/tags (e.g. &lt;!-- ... --&gt;) can be removed.
-        var noTags = System.Net.WebUtility.HtmlDecode(html);
-
-        noTags = Regex.Replace(noTags, "<!--.*?-->", "", RegexOptions.Singleline);
-        noTags = Regex.Replace(noTags, "<style\\b[^>]*>.*?</style>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-        noTags = Regex.Replace(noTags, "<script\\b[^>]*>.*?</script>", "", RegexOptions.IgnoreCase | RegexOptions.Singleline);
-
-        noTags = Regex.Replace(noTags, "<br\\s*/?>", "\n", RegexOptions.IgnoreCase);
-        noTags = Regex.Replace(noTags, "</p\\s*>", "\n\n", RegexOptions.IgnoreCase);
-        noTags = Regex.Replace(noTags, "<.*?>", " ");
-        return noTags;
-    }
+    
 
     private async Task LoadPageAsync()
     {
@@ -1257,23 +1398,11 @@
             _sezioneSelezionata = await MailSvc1.GetSezioneCorrenteAsync(_email.Id, _utente);
 
             _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
-
-            _thread = _thread
-     .GroupBy(t => string.IsNullOrWhiteSpace(t.MessageId)
-         ? $"{t.Tipo}-{t.Id}"
-         : t.MessageId.Trim().ToLowerInvariant())
-     .Select(g => g
-         .OrderByDescending(x => x.Data)
-         .ThenByDescending(x => x.Id)
-         .First())
-     .OrderBy(x => x.Data)
-     .ToList();
         }
         else
         {
             _thread = new();
         }
-
         _comments = await MailSvc.GetCommentsByEmailAsync(Id);
 
         _comments = _comments?
@@ -1402,6 +1531,27 @@
             return CleanQuotedPart(HtmlToText(mail.CorpoHtml));
 
         return "";
+    }
+
+    private static string HtmlToText(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var s = System.Net.WebUtility.HtmlDecode(html);
+
+        s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+
+        s = Regex.Replace(s, @"<br\s*/?>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</p\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</div\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<[^>]+>", " ");
+
+        s = Regex.Replace(s, @"\s+", " ").Trim();
+
+        return s;
     }
     private static string BuildThreadUniqueKey(EmailDetail_NEW mail)
     {
