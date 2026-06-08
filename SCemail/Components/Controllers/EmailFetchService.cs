@@ -521,6 +521,13 @@ FETCH FIRST 1 ROWS ONLY";
 
         foreach (var s in summaries.OrderBy(x => x.UniqueId.Id))
         {
+            if (IsDraftSummary(s))
+            {
+                _logger.LogDebug(
+                    "SKIP bozza [{Acc}] {Folder} uid={Uid}",
+                    accountEmail, folder.FullName, (long)s.UniqueId.Id);
+                continue;
+            }
             int? forcedExistingSentId = null;
             var envMid = NormalizeMessageId(s.Envelope?.MessageId);
 
@@ -1174,7 +1181,19 @@ RETURNING ID INTO :p_id";
 
         await cmd.ExecuteNonQueryAsync(ct);
     }
+    private static bool IsDraftSummary(IMessageSummary s)
+    {
+        if (s.GMailLabels == null)
+            return false;
 
+        return s.GMailLabels.Any(l =>
+            l.Equals(@"\Draft", StringComparison.OrdinalIgnoreCase) ||
+            l.Equals("Draft", StringComparison.OrdinalIgnoreCase) ||
+            l.Equals("Drafts", StringComparison.OrdinalIgnoreCase) ||
+            l.Equals("Bozze", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("draft", StringComparison.OrdinalIgnoreCase) ||
+            l.Contains("bozz", StringComparison.OrdinalIgnoreCase));
+    }
     private async Task ApplyRulesAsync(
     OracleConnection conn,
     int emailId,
@@ -1992,7 +2011,7 @@ UPDATE SGAPP.EMAIL_ALLEGATI
             MessageSummaryItems.Envelope |
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
-            MessageSummaryItems.GMailThreadId;
+            MessageSummaryItems.GMailThreadId | MessageSummaryItems.GMailLabels; 
         var summaries = await folder.FetchAsync(range, items, ct);
 
         // aggiorno cursor a "prima del blocco"
@@ -2161,7 +2180,8 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
             MessageSummaryItems.Envelope |
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
-            MessageSummaryItems.GMailThreadId;
+            MessageSummaryItems.GMailThreadId |
+                MessageSummaryItems.GMailLabels;
         _logger.LogInformation(
                 "NEWSCAN cid={Cid} folder='{Folder}' lastSeen={LastSeen} uidNext={UidNext} start={Start} end={End} limitEnd={LimitEnd}",
                 casellaId,
@@ -2256,7 +2276,8 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
             MessageSummaryItems.Envelope |
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
-            MessageSummaryItems.GMailThreadId;
+            MessageSummaryItems.GMailThreadId |
+             MessageSummaryItems.GMailLabels;
 
         var sums = await folder.FetchAsync(finalUids, items, ct);
         if (sums == null || sums.Count == 0) return new List<IMessageSummary>();
