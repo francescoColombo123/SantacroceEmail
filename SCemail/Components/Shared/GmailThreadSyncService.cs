@@ -801,6 +801,27 @@ UPDATE {tableName}
     {
         var mime = (mimeType ?? "").Trim();
 
+        var byExt = Path.GetExtension(fileName ?? "").ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".eml" => "message/rfc822",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(byExt))
+            return byExt;
+
         if (!string.IsNullOrWhiteSpace(mime) &&
             !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
             return mime;

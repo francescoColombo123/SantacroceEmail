@@ -1379,6 +1379,8 @@ else
     // cache locale rubrica (come compose)
     private List<RecipientChip> _allRecipients = new();
     private CancellationTokenSource? _ctsAddr;
+    private CancellationTokenSource? _ctsAddrApply;
+    private string? _lastAppliedAddressFilter;
 
     private class SezioneVm
     {
@@ -1421,7 +1423,43 @@ else
     private static string StripHtml(string? html)
     {
         if (string.IsNullOrWhiteSpace(html)) return "";
-        return Regex.Replace(html, "<.*?>", " ").Trim();
+        var s = Regex.Replace(html, "<.*?>", " ");
+        s = WebUtility.HtmlDecode(s);
+        s = FixCommonMojibake(s);
+        return Regex.Replace(s, @"\s+", " ").Trim();
+    }
+
+    private static string FixCommonMojibake(string? input)
+    {
+        var s = input ?? "";
+
+        if (string.IsNullOrWhiteSpace(s) || !LooksLikeMojibake(s))
+            return s;
+
+        try
+        {
+            var bytes = System.Text.Encoding.Latin1.GetBytes(s);
+            var fixedText = System.Text.Encoding.UTF8.GetString(bytes);
+
+            if (CountMojibakeMarkers(fixedText) < CountMojibakeMarkers(s))
+                return fixedText;
+        }
+        catch
+        {
+        }
+
+        return s;
+    }
+
+    private static bool LooksLikeMojibake(string s)
+        => s.Contains("Ã") || s.Contains("Â") || s.Contains("â€") || s.Contains("â€™") || s.Contains("â€œ") || s.Contains("â€");
+
+    private static int CountMojibakeMarkers(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return 0;
+
+        return Regex.Matches(s, "Ã|Â|â€|â€™|â€œ").Count;
     }
     private async Task OnWordSearchChanged(string? value)
     {
@@ -2064,8 +2102,10 @@ else
         _searchText = null;
         _addrInput = null;
         _selectedAddressChip = null;
+        _lastAppliedAddressFilter = null;
         _showAddrSuggestions = false;
         _addrSuggestions.Clear();
+        _ctsAddrApply?.Cancel();
 
         // ui/scroll
         _loadingEmails = false;
@@ -2213,7 +2253,7 @@ else
             _caselleIds ??= await AccessiSrv.GetCaselleAbilitateAsync(_utente!);
 
             var word = _searchWord;
-            var addr = _selectedAddressChip?.Email;
+            var addr = GetEffectiveAddressFilter();
 
             var (page, total) = await MailSvc.GetEmailPageInSezioneAsync(
                 idSezione: sec.IdSezione,
@@ -2273,6 +2313,7 @@ else
         // rimuove tag HTML (semplice ma efficace per preview)
         var s = System.Text.RegularExpressions.Regex.Replace(html, "<.*?>", " ");
         s = WebUtility.HtmlDecode(s);
+        s = FixCommonMojibake(s);
         s = System.Text.RegularExpressions.Regex.Replace(s, @"\s+", " ").Trim();
         return s;
     }
@@ -2336,6 +2377,7 @@ else
 
     private async Task OnAddressInput(string value)
     {
+        _addrInput = value;
         var q = (value ?? "").Trim();
 
         if (string.IsNullOrWhiteSpace(q) || q.Length < 2)
@@ -2361,9 +2403,45 @@ else
             var res = (await SearchRecipientsHybrid(q, _ctsAddr.Token)).ToList();
             _addrSuggestions = res;
             _showAddrSuggestions = res.Any();
+            await ScheduleAddressFilterApplyAsync();
             StateHasChanged();
         }
         catch (TaskCanceledException) { }
+    }
+
+    private async Task ScheduleAddressFilterApplyAsync()
+    {
+        _ctsAddrApply?.Cancel();
+        _ctsAddrApply = new CancellationTokenSource();
+        var ct = _ctsAddrApply.Token;
+
+        try
+        {
+            await Task.Delay(220, ct);
+            if (ct.IsCancellationRequested)
+                return;
+
+            var current = GetEffectiveAddressFilter() ?? string.Empty;
+            if (string.Equals(current, _lastAppliedAddressFilter ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            await ApplyAddressFilter();
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+    private string? GetEffectiveAddressFilter()
+    {
+        var chip = _selectedAddressChip?.Email?.Trim();
+        if (!string.IsNullOrWhiteSpace(chip) && chip.Length >= 2)
+            return chip;
+
+        var typed = _addrInput?.Trim();
+        if (!string.IsNullOrWhiteSpace(typed) && typed.Length >= 2)
+            return typed;
+
+        return null;
     }
     private async Task SelectAddressSuggestion(RecipientChip chip)
     {
@@ -2379,6 +2457,8 @@ else
     }
     private async Task ApplyAddressFilter()
     {
+        _lastAppliedAddressFilter = GetEffectiveAddressFilter();
+
         _currentIndex = 0;
         _emails.Clear();
         _hasMore = true;
@@ -2400,69 +2480,94 @@ else
         if (page == null || page.Count == 0)
             return page ?? new();
 
+        var useReceivedOnlyCounts =
+            string.Equals(_folder, "inbox", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(_folder, "spam", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(_folder, "unassigned", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(_folder, "mailfollowed", StringComparison.OrdinalIgnoreCase);
+
         var keys = page
-            .Select(x => x.ThreadKey?.Trim())
+            .Select(x => x.ThreadKey?.Trim().ToUpperInvariant())
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        if (keys.Count == 0)
-            return page.Select(x => x with { ThreadLen = 1 }).ToList();
-
-        var inClause = string.Join(",", keys.Select((_, i) => $":k{i}"));
-
-        var sql = $@"
-SELECT THREAD_KEY, SUM(CNT) AS CNT
-FROM (
-    SELECT THREAD_KEY, COUNT(*) AS CNT
-    FROM SGAPP.EMAIL_RICEVUTE
-    WHERE NVL(ELIMINATO, 'N') = 'N'
-      AND THREAD_KEY IN ({inClause})
-    GROUP BY THREAD_KEY
-
-    UNION ALL
-
-    SELECT THREAD_KEY, COUNT(*) AS CNT
-    FROM SGAPP.EMAIL_INVIATE
-    WHERE THREAD_KEY IN ({inClause})
-    GROUP BY THREAD_KEY
-)
-GROUP BY THREAD_KEY";
-
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var fallbackCounts = new Dictionary<int, int>();
 
         await using var db = await DbFactory.CreateDbContextAsync();
         await db.Database.OpenConnectionAsync();
 
-        await using var cmd = db.Database.GetDbConnection().CreateCommand();
-        cmd.CommandText = sql;
-        cmd.CommandTimeout = 5;
-
-        for (int i = 0; i < keys.Count; i++)
+        if (keys.Count > 0)
         {
-            var p = cmd.CreateParameter();
-            p.ParameterName = $"k{i}";
-            p.Value = keys[i]!;
-            cmd.Parameters.Add(p);
+            var inClause = string.Join(",", keys.Select((_, i) => $":k{i}"));
+
+                        var sql = useReceivedOnlyCounts
+                                ? $@"
+SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE NVL(ELIMINATO, 'N') = 'N'
+    AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
+GROUP BY UPPER(TRIM(THREAD_KEY))"
+                                : $@"
+SELECT THREAD_KEY, SUM(CNT) AS CNT
+FROM (
+    SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE NVL(ELIMINATO, 'N') = 'N'
+      AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
+    GROUP BY UPPER(TRIM(THREAD_KEY))
+
+    UNION ALL
+
+    SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE UPPER(TRIM(THREAD_KEY)) IN ({inClause})
+    GROUP BY UPPER(TRIM(THREAD_KEY))
+)
+GROUP BY THREAD_KEY";
+
+            await using var cmd = db.Database.GetDbConnection().CreateCommand();
+            cmd.CommandText = sql;
+            cmd.CommandTimeout = 5;
+
+            for (int i = 0; i < keys.Count; i++)
+            {
+                var p = cmd.CreateParameter();
+                p.ParameterName = $"k{i}";
+                p.Value = keys[i]!;
+                cmd.Parameters.Add(p);
+            }
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+
+            while (await reader.ReadAsync())
+            {
+                var key = reader.IsDBNull(0) ? "" : reader.GetString(0);
+                var count = reader.IsDBNull(1) ? 1 : Convert.ToInt32(reader.GetValue(1));
+
+                if (!string.IsNullOrWhiteSpace(key))
+                    counts[key] = count;
+            }
         }
 
-        await using var reader = await cmd.ExecuteReaderAsync();
+        var noThreadKeyIds = page
+            .Where(x => string.IsNullOrWhiteSpace(x.ThreadKey))
+            .Select(x => x.Id)
+            .Distinct()
+            .ToList();
 
-        while (await reader.ReadAsync())
-        {
-            var key = reader.IsDBNull(0) ? "" : reader.GetString(0);
-            var count = reader.IsDBNull(1) ? 1 : Convert.ToInt32(reader.GetValue(1));
-
-            if (!string.IsNullOrWhiteSpace(key))
-                counts[key] = count;
-        }
+        foreach (var emailId in noThreadKeyIds)
+            fallbackCounts[emailId] = await CountThreadMessagesAsync(db, emailId);
 
         return page.Select(x =>
         {
-            var key = x.ThreadKey?.Trim();
+            var key = x.ThreadKey?.Trim().ToUpperInvariant();
 
-            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var c)
-                ? c
+            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var byThreadKey)
+                ? byThreadKey
+                : fallbackCounts.TryGetValue(x.Id, out var byHeaders)
+                    ? byHeaders
                 : 1;
 
             return x with { ThreadLen = Math.Max(count, 1) };
@@ -2483,73 +2588,70 @@ WITH base AS (
     FROM SGAPP.EMAIL_INVIATE
     WHERE ID = :id
 ),
-raw_thread AS (
+base_one AS (
     SELECT
-        r.ID,
-        r.MESSAGE_ID,
-        r.MITTENTE,
-        r.DESTINATARI,
-        r.OGGETTO,
-        r.DATA_RICEZIONE AS DATA_MAIL,
-        'R' AS TIPO
+        TRIM(THREAD_KEY) AS THREAD_KEY,
+        TRIM(MESSAGE_ID) AS MESSAGE_ID,
+        TRIM(IN_REPLY_TO) AS IN_REPLY_TO,
+        REFERENCES_HDR
+    FROM base
+    WHERE ROWNUM = 1
+),
+raw_thread AS (
+    SELECT 'R' AS TIPO, r.ID
     FROM SGAPP.EMAIL_RICEVUTE r
+    CROSS JOIN base_one b
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND EXISTS (
-        SELECT 1
-        FROM base b
-        WHERE
-              UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
-           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
-
-           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
-
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
+      AND (
+            (
+                b.THREAD_KEY IS NOT NULL
+                AND b.THREAD_KEY <> ''
+                AND UPPER(TRIM(r.THREAD_KEY)) = UPPER(b.THREAD_KEY)
+            )
+         OR (
+                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
+                AND (
+                       UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+                    OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+                    OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.MESSAGE_ID, '')))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.IN_REPLY_TO, '')))) > 0
+                )
+            )
       )
 
     UNION ALL
 
-    SELECT
-        i.ID,
-        i.MESSAGE_ID,
-        i.UTENTE AS MITTENTE,
-        i.DESTINATARI,
-        i.OGGETTO,
-        i.DATA_INVIO AS DATA_MAIL,
-        'I' AS TIPO
+    SELECT 'I' AS TIPO, i.ID
     FROM SGAPP.EMAIL_INVIATE i
-    WHERE EXISTS (
-        SELECT 1
-        FROM base b
-        WHERE
-              UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
-           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
-
-           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
-
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
+    CROSS JOIN base_one b
+    WHERE (
+            (
+                b.THREAD_KEY IS NOT NULL
+                AND b.THREAD_KEY <> ''
+                AND UPPER(TRIM(i.THREAD_KEY)) = UPPER(b.THREAD_KEY)
+            )
+         OR (
+                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
+                AND (
+                       UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.MESSAGE_ID, '')))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.IN_REPLY_TO, '')))) > 0
+                )
+            )
     )
 )
 SELECT COUNT(*)
 FROM (
-    SELECT
-        CASE
-            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
-            ELSE TIPO || '-' || ID
-        END AS DEDUP_KEY
+    SELECT TIPO || ':' || TO_CHAR(ID) AS ROW_KEY
     FROM raw_thread
-    GROUP BY
-        CASE
-            WHEN MESSAGE_ID IS NOT NULL THEN LOWER(TRIM(MESSAGE_ID))
-            ELSE TIPO || '-' || ID
-        END
+    GROUP BY TIPO || ':' || TO_CHAR(ID)
 )";
 
         await using var cmd = db.Database.GetDbConnection().CreateCommand();
@@ -3056,7 +3158,7 @@ FROM (
             }
 
             var word = filtroEffettivo;
-            var addr = _selectedAddressChip?.Email;
+            var addr = GetEffectiveAddressFilter();
 
             // 🔎 RICERCA AVANZATA
             // 🔎 RICERCA AVANZATA
@@ -3077,7 +3179,6 @@ FROM (
                     );
 
                     var visiblePage = fastPage.Take(_pageSize).ToList();
-                    visiblePage = await ApplyThreadCountsToPageAsync(visiblePage);
 
                     var hasMore = fastPage.Count > _pageSize;
 
@@ -3102,8 +3203,6 @@ FROM (
       utente: _utente
   );
 
-                page = await ApplyThreadCountsToPageAsync(page);
-
                 if (_currentIndex == 0)
                     _emails = page;
                 else
@@ -3127,8 +3226,6 @@ FROM (
     utente: _utente!,
     filtro: null
 );
-
-            normalPage = await ApplyThreadCountsToPageAsync(normalPage);
 
             if (_currentIndex == 0)
                 _emails = normalPage;

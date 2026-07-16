@@ -905,15 +905,28 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
 
             const string sql = @"
 WITH base AS (
-    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    SELECT 0 AS SRC_PRIORITY, THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
     FROM SGAPP.EMAIL_RICEVUTE
     WHERE ID = :id
 
     UNION ALL
 
-    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    SELECT 1 AS SRC_PRIORITY, THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
     FROM SGAPP.EMAIL_INVIATE
     WHERE ID = :id
+),
+base_one AS (
+    SELECT
+        TRIM(THREAD_KEY) AS THREAD_KEY,
+        TRIM(MESSAGE_ID) AS MESSAGE_ID,
+        TRIM(IN_REPLY_TO) AS IN_REPLY_TO,
+        REFERENCES_HDR
+    FROM (
+        SELECT SRC_PRIORITY, THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+        FROM base
+        ORDER BY SRC_PRIORITY
+    )
+    WHERE ROWNUM = 1
 ),
 raw_thread AS (
     SELECT 
@@ -935,22 +948,27 @@ raw_thread AS (
         'R' AS TIPO
     FROM SGAPP.EMAIL_RICEVUTE r
     LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
+        CROSS JOIN base_one b
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND EXISTS (
-        SELECT 1
-        FROM base b
-        WHERE 
-              UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
-           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
-
-           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
-
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(r.IN_REPLY_TO))) > 0
-      )
+            AND (
+                        (
+                                b.THREAD_KEY IS NOT NULL
+                                AND b.THREAD_KEY <> ''
+                                AND UPPER(TRIM(r.THREAD_KEY)) = UPPER(b.THREAD_KEY)
+                        )
+                 OR (
+                                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
+                                AND (
+                                             UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+                                        OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+                                        OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+                                        OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+                                        OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+                                        OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.MESSAGE_ID, '')))) > 0
+                                        OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.IN_REPLY_TO, '')))) > 0
+                                )
+                        )
+            )
 
     UNION ALL
 
@@ -972,20 +990,25 @@ raw_thread AS (
         TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
         'I' AS TIPO
     FROM SGAPP.EMAIL_INVIATE i
-    WHERE EXISTS (
-        SELECT 1
-        FROM base b
-        WHERE 
-              UPPER(TRIM(i.THREAD_KEY)) = UPPER(TRIM(b.THREAD_KEY))
-           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(TRIM(b.MESSAGE_ID))
-           OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(TRIM(b.IN_REPLY_TO))
-
-           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(TRIM(b.IN_REPLY_TO))) > 0
-
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.MESSAGE_ID))) > 0
-           OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(i.IN_REPLY_TO))) > 0
+    CROSS JOIN base_one b
+    WHERE (
+            (
+                b.THREAD_KEY IS NOT NULL
+                AND b.THREAD_KEY <> ''
+                AND UPPER(TRIM(i.THREAD_KEY)) = UPPER(b.THREAD_KEY)
+            )
+         OR (
+                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
+                AND (
+                       UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+                    OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.MESSAGE_ID, '')))) > 0
+                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.IN_REPLY_TO, '')))) > 0
+                )
+            )
     )
 )
 SELECT *
@@ -1062,8 +1085,8 @@ WHERE EMAIL_ID = :id_email";
                 }
             }
 
-            return list
-                 .GroupBy(x => BuildThreadDedupKey(x))
+              return list
+                  .GroupBy(x => $"{(x.Tipo ?? "").Trim().ToUpperInvariant()}|{x.Id}")
                  .Select(g => g
                      .OrderByDescending(x => x.Allegati?.Count ?? 0)
                      .ThenBy(x => x.Data)
@@ -1203,6 +1226,7 @@ WHERE EMAIL_ID = :id_email";
                 return "";
 
             var s = System.Net.WebUtility.HtmlDecode(html);
+            s = FixCommonMojibake(s);
 
             s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
             s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
@@ -1216,6 +1240,39 @@ WHERE EMAIL_ID = :id_email";
             s = Regex.Replace(s, @"\s+", " ").Trim();
 
             return s;
+        }
+
+        private static string FixCommonMojibake(string? input)
+        {
+            var s = input ?? "";
+
+            if (string.IsNullOrWhiteSpace(s) || !LooksLikeMojibake(s))
+                return s;
+
+            try
+            {
+                var bytes = System.Text.Encoding.Latin1.GetBytes(s);
+                var fixedText = System.Text.Encoding.UTF8.GetString(bytes);
+
+                if (CountMojibakeMarkers(fixedText) < CountMojibakeMarkers(s))
+                    return fixedText;
+            }
+            catch
+            {
+            }
+
+            return s;
+        }
+
+        private static bool LooksLikeMojibake(string s)
+            => s.Contains("Ã") || s.Contains("Â") || s.Contains("â€") || s.Contains("â€™") || s.Contains("â€œ") || s.Contains("â€");
+
+        private static int CountMojibakeMarkers(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return 0;
+
+            return Regex.Matches(s, "Ã|Â|â€|â€™|â€œ").Count;
         }
         private static string NormalizeBodyKey(string? body)
         {
@@ -1297,6 +1354,115 @@ FROM (
             return total == null ? 1 : Convert.ToInt32(total);
         }
 
+        public async Task<List<EmailDetail_NEW>> GetConversationDetailByReceivedThreadAsync(int emailId)
+        {
+            await using var conn = await GetOpenConnectionAsync();
+
+            string threadKey = "";
+
+            const string findThreadSql = @"
+SELECT THREAD_KEY
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE ID = :id";
+
+            await using (var findCmd = new OracleCommand(findThreadSql, conn))
+            {
+                findCmd.BindByName = true;
+                findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
+
+                var result = await findCmd.ExecuteScalarAsync();
+                threadKey = result?.ToString() ?? "";
+            }
+
+            if (string.IsNullOrWhiteSpace(threadKey))
+                return new List<EmailDetail_NEW>();
+
+            const string sql = @"
+SELECT 
+    r.ID,
+    r.CASELLA_ID,
+    TO_CLOB(cp.EMAIL) AS CASELLA_EMAIL,
+    TO_CLOB(r.MITTENTE) AS MITTENTE,
+    TO_CLOB(r.DESTINATARI) AS DESTINATARI,
+    TO_CLOB(r.CC) AS CC,
+    TO_CLOB(r.CCN) AS CCN,
+    TO_CLOB(r.OGGETTO) AS OGGETTO,
+    r.DATA_RICEZIONE AS DATA,
+    TO_CLOB(r.CORPO_HTML) AS CORPO_HTML,
+    TO_CLOB(r.CORPO_TESTO) AS CORPO_TESTO,
+    TO_CLOB(r.MESSAGE_ID) AS MESSAGE_ID,
+    TO_CLOB(r.IN_REPLY_TO) AS IN_REPLY_TO,
+    TO_CLOB(r.REFERENCES_HDR) AS REFERENCES_HDR,
+    TO_CLOB(r.THREAD_KEY) AS THREAD_KEY,
+    'R' AS TIPO
+FROM SGAPP.EMAIL_RICEVUTE r
+LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
+WHERE NVL(r.ELIMINATO, 'N') = 'N'
+  AND UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(:p_thread))
+ORDER BY r.DATA_RICEZIONE, r.ID";
+
+            await using var cmd = new OracleCommand(sql, conn);
+            cmd.BindByName = true;
+            cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+
+            var list = new List<EmailDetail_NEW>();
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                list.Add(new EmailDetail_NEW
+                {
+                    Id = reader.GetInt32(0),
+                    CasellaId = reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                    CasellaEmail = GetStr(reader, 2),
+                    Mittente = GetStr(reader, 3),
+                    Destinatari = GetStr(reader, 4),
+                    Cc = GetStr(reader, 5),
+                    Ccn = GetStr(reader, 6),
+                    Oggetto = GetStr(reader, 7),
+                    Data = reader.IsDBNull(8) ? null : reader.GetDateTime(8),
+                    CorpoHtml = GetStr(reader, 9),
+                    CorpoTesto = GetStr(reader, 10),
+                    MessageId = GetStr(reader, 11),
+                    InReplyTo = GetStr(reader, 12),
+                    References = GetStr(reader, 13),
+                    ThreadKey = GetStr(reader, 14),
+                    Tipo = GetStr(reader, 15),
+                    IsLoaded = true
+                });
+            }
+
+            const string attachSql = @"
+SELECT ID, NOME_FILE, MIME_TYPE, IS_EMAIL_EML, EMAIL_EML_ID
+FROM SGAPP.EMAIL_ALLEGATI
+WHERE EMAIL_ID = :id_email";
+
+            foreach (var mail in list)
+            {
+                mail.Allegati = new List<AllegatoItem_NEW>();
+
+                await using var aCmd = new OracleCommand(attachSql, conn);
+                aCmd.BindByName = true;
+                aCmd.Parameters.Add("id_email", OracleDbType.Int32).Value = mail.Id;
+
+                await using var aReader = await aCmd.ExecuteReaderAsync();
+                while (await aReader.ReadAsync())
+                {
+                    mail.Allegati.Add(new AllegatoItem_NEW
+                    {
+                        Id = aReader.GetInt32(0),
+                        NomeFile = aReader.IsDBNull(1) ? "" : aReader.GetString(1),
+                        MimeType = aReader.IsDBNull(2) ? null : aReader.GetString(2),
+                        IsEmailEml = !aReader.IsDBNull(3)
+                            && string.Equals(aReader.GetString(3), "Y", StringComparison.OrdinalIgnoreCase),
+                        EmailEmlId = aReader.IsDBNull(4) ? null : aReader.GetInt32(4)
+                    });
+                }
+            }
+
+            return list;
+        }
+
         public async Task AssignEmailAsync(
     int emailId,
     string utente,
@@ -1348,7 +1514,7 @@ WHERE EMAIL_ID = :p_eid
                         if (keepExecutorUnarchived)
                         {
                             // "Assegna e segui"
-                            await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, ct);
+                            await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, markAsRead: true, ct);
                         }
                         else
                         {
@@ -1360,7 +1526,7 @@ WHERE EMAIL_ID = :p_eid
                     }
 
                     // Tutti gli altri vecchi assegnatari -> seguiti
-                    await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, ct);
+                    await EnsureEmailSeguitaTxAsync(conn, tx, emailId, vecchioUtente, markAsRead: false, ct);
                 }
 
                
@@ -1488,10 +1654,32 @@ WHERE NOT EXISTS (
     OracleTransaction tx,
     int emailId,
     string utente,
+    bool markAsRead,
     CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(utente))
                 return;
+
+            var utenteNorm = utente.Trim().ToLowerInvariant();
+
+            const string sqlUnarchive = @"
+DELETE FROM SGAPP.EMAIL_ARCHIVIO
+WHERE ID_EMAIL = :p_eid
+  AND UPPER(UTENTE) = UPPER(:p_user)";
+
+            await using (var unarchiveCmd = new OracleCommand(sqlUnarchive, conn)
+            {
+                BindByName = true,
+                Transaction = tx
+            })
+            {
+                unarchiveCmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
+                unarchiveCmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utenteNorm;
+
+                await unarchiveCmd.ExecuteNonQueryAsync(ct);
+            }
+
+            var letto = markAsRead ? "Y" : "N";
 
             const string sql = @"
 MERGE INTO SGAPP.EMAIL_SEGUITE t
@@ -1505,10 +1693,17 @@ ON (
 )
 WHEN MATCHED THEN
     UPDATE SET 
-        t.LETTO = NVL(t.LETTO, 'Y')
+        t.LETTO = :p_letto,
+        t.LETTO_IL = CASE WHEN :p_letto = 'Y' THEN SYSDATE ELSE NULL END
 WHEN NOT MATCHED THEN
-    INSERT (EMAIL_ID, UTENTE, CREATA_IL, LETTO)
-    VALUES (s.EMAIL_ID, s.UTENTE, SYSDATE, 'N')";
+    INSERT (EMAIL_ID, UTENTE, CREATA_IL, LETTO, LETTO_IL)
+    VALUES (
+        s.EMAIL_ID,
+        s.UTENTE,
+        SYSDATE,
+        :p_letto,
+        CASE WHEN :p_letto = 'Y' THEN SYSDATE ELSE NULL END
+    )";
 
             await using var cmd = new OracleCommand(sql, conn)
             {
@@ -1517,7 +1712,8 @@ WHEN NOT MATCHED THEN
             };
 
             cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
-            cmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utente.Trim();
+            cmd.Parameters.Add("p_user", OracleDbType.Varchar2).Value = utenteNorm;
+            cmd.Parameters.Add("p_letto", OracleDbType.Char).Value = letto;
 
             await cmd.ExecuteNonQueryAsync(ct);
         }
@@ -1558,7 +1754,8 @@ WHEN NOT MATCHED THEN
             var a = (address ?? "").Trim().ToLowerInvariant();
 
             bool hasWord = !string.IsNullOrWhiteSpace(w) && w.Length >= 2;
-            bool hasAddr = !string.IsNullOrWhiteSpace(a);
+            bool hasAddr = !string.IsNullOrWhiteSpace(a) && a.Length >= 2;
+            bool includeBodySearch = hasWord && w.Length >= 4 && !w.Contains('@');
 
             if (!hasWord && !hasAddr)
                 return new List<EmailListItem_NEW>();
@@ -1629,20 +1826,27 @@ AND (
 
             if (hasWord)
             {
-                whereSql += @"
+                                whereSql += @"
 AND (
-      LOWER(NVL(e.OGGETTO,''))      LIKE :word
-   OR LOWER(NVL(e.MITTENTE,''))     LIKE :word
-   OR LOWER(NVL(e.DESTINATARI,''))  LIKE :word
-   OR LOWER(NVL(e.CC,''))           LIKE :word
-   OR LOWER(NVL(e.CCN,''))          LIKE :word
-   OR LOWER(DBMS_LOB.SUBSTR(NVL(e.CORPO_TESTO, e.CORPO_HTML), 4000, 1)) LIKE :word
-   OR EXISTS (
-        SELECT 1
-        FROM SGAPP.EMAIL_ALLEGATI a
-        WHERE a.EMAIL_ID = e.ID
-          AND LOWER(NVL(a.NOME_FILE,'')) LIKE :word
-   )
+            LOWER(NVL(e.OGGETTO,''))      LIKE :word
+     OR LOWER(NVL(e.MITTENTE,''))     LIKE :word
+     OR LOWER(NVL(e.DESTINATARI,''))  LIKE :word
+     OR LOWER(NVL(e.CC,''))           LIKE :word
+     OR LOWER(NVL(e.CCN,''))          LIKE :word";
+
+                                if (includeBodySearch)
+                                {
+                                        whereSql += @"
+     OR LOWER(DBMS_LOB.SUBSTR(NVL(e.CORPO_TESTO, e.CORPO_HTML), 1200, 1)) LIKE :word";
+                                }
+
+                                whereSql += @"
+     OR EXISTS (
+                SELECT 1
+                FROM SGAPP.EMAIL_ALLEGATI a
+                WHERE a.EMAIL_ID = e.ID
+                    AND LOWER(NVL(a.NOME_FILE,'')) LIKE :word
+     )
 )";
             }
 
@@ -1659,6 +1863,16 @@ WITH base_rows AS (
         e.FOLDER_PATH,
         c.EMAIL AS CASELLA_EMAIL,
         e.APERTO,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                WHERE l.EMAIL_ID = e.ID
+                  AND LOWER(NVL(l.UTENTE, '')) = LOWER(NVL(:utente, ''))
+            )
+            THEN 1
+            ELSE 0
+        END AS IS_READ_BY_ME,
         e.CC,
         e.CCN,
         SUBSTR(NVL(e.CORPO_TESTO, e.CORPO_HTML), 1, 200) AS PREVIEW,
@@ -1682,7 +1896,18 @@ WITH base_rows AS (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
-        MAX(CASE WHEN NVL(e.APERTO, 'N') = 'N' THEN 1 ELSE 0 END) OVER (
+        MAX(
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                    WHERE l.EMAIL_ID = e.ID
+                      AND LOWER(NVL(l.UTENTE, '')) = LOWER(NVL(:utente, ''))
+                )
+                THEN 0
+                ELSE 1
+            END
+        ) OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'SINGLE_' || e.ID)
         ) AS HAS_UNREAD,
         COUNT(*) OVER (
@@ -1703,6 +1928,7 @@ SELECT
     FOLDER_PATH,
     CASELLA_EMAIL,
     CASE WHEN HAS_UNREAD = 1 THEN 'N' ELSE 'Y' END AS APERTO,
+    IS_READ_BY_ME,
     CC,
     CCN,
     HAS_ATTACH,
@@ -1720,8 +1946,7 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
             if (minDate.HasValue)
                 cmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
 
-            if (folderUi == "inbox" || folderUi == "myarchive")
-                cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente;
+            cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utente ?? string.Empty;
 
             if (hasAddr)
                 cmd.Parameters.Add("addr", OracleDbType.Varchar2).Value = $"%{a}%";
@@ -1747,7 +1972,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
     string? Destinatari,
     string? Cc,
     string? Ccn,
-    string? ThreadKey
+    string? ThreadKey,
+    bool IsReadByCurrentUser
 )>();
 
             await using var reader = await cmd.ExecuteReaderAsync();
@@ -1786,7 +2012,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
                     Destinatari: GetStr(reader, "DESTINATARI"),
                     Cc: GetStr(reader, "CC"),
                     Ccn: GetStr(reader, "CCN"),
-                    ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY")
+                    ThreadKey: reader.IsDBNull("THREAD_KEY") ? null : reader.GetString("THREAD_KEY"),
+                    IsReadByCurrentUser: !reader.IsDBNull("IS_READ_BY_ME") && reader.GetInt32("IS_READ_BY_ME") == 1
                 ));
             }
 
@@ -1814,7 +2041,8 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
                     Destinatari: r.Destinatari,
                     Cc: r.Cc,
                     Ccn: r.Ccn,
-                    ThreadKey: r.ThreadKey
+                    ThreadKey: r.ThreadKey,
+                    IsReadByCurrentUser: r.IsReadByCurrentUser
                 );
             }).ToList();
 
@@ -3781,9 +4009,11 @@ CancellationToken ct = default)
             string smtpHost; int smtpPort; SecureSocketOptions socketOptions;
             if (casella.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
                 (smtpHost, smtpPort, socketOptions) = ("smtp.gmail.com", 587, SecureSocketOptions.StartTls);
-            else if (casella.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase))
+            else if (casella.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
+                  || casella.Provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase))
             {
-                if (casella.Email.Contains("@pec.", StringComparison.OrdinalIgnoreCase))
+                if (casella.Provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase)
+                    || casella.Email.Contains("@pec.", StringComparison.OrdinalIgnoreCase))
                 {
                     // PEC Aruba
                     smtpHost = "smtps.pec.aruba.it";
@@ -4314,6 +4544,16 @@ WITH filtered_rows AS (
         e.CASELLA_ID,
         c.EMAIL AS CASELLA_EMAIL,
         e.APERTO,
+        CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                WHERE l.EMAIL_ID = e.ID
+                  AND LOWER(NVL(l.UTENTE, '')) = LOWER(NVL(:p_utente, ''))
+            )
+            THEN 1
+            ELSE 0
+        END AS IS_READ_BY_ME,
         e.CC,
         e.CCN,
         CASE WHEN EXISTS (
@@ -4339,7 +4579,18 @@ WITH filtered_rows AS (
             PARTITION BY NVL(e.THREAD_KEY, 'R_SINGLE_' || e.ID)
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
-        MAX(CASE WHEN NVL(e.APERTO, 'N') = 'N' THEN 1 ELSE 0 END) OVER (
+        MAX(
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                    WHERE l.EMAIL_ID = e.ID
+                      AND LOWER(NVL(l.UTENTE, '')) = LOWER(NVL(:p_utente, ''))
+                )
+                THEN 0
+                ELSE 1
+            END
+        ) OVER (
             PARTITION BY NVL(e.THREAD_KEY, 'R_SINGLE_' || e.ID)
         ) AS HAS_UNREAD
     FROM SGAPP.EMAIL_RICEVUTE e
@@ -4348,19 +4599,35 @@ WITH filtered_rows AS (
 ),
 thread_totals AS (
     SELECT
-        t.THREAD_KEY_NORM,
-        COUNT(*) AS THREAD_LEN_REAL
+        THREAD_KEY_NORM,
+        SUM(CNT) AS THREAD_LEN_REAL
     FROM (
-        SELECT NVL(r.THREAD_KEY, 'R_SINGLE_' || r.ID) AS THREAD_KEY_NORM
+        SELECT
+            r.THREAD_KEY AS THREAD_KEY_NORM,
+            COUNT(*) AS CNT
         FROM SGAPP.EMAIL_RICEVUTE r
         WHERE NVL(r.ELIMINATO, 'N') = 'N'
+          AND r.THREAD_KEY IN (
+              SELECT DISTINCT fr.THREAD_KEY
+              FROM filtered_rows fr
+              WHERE fr.THREAD_KEY IS NOT NULL
+          )
+        GROUP BY r.THREAD_KEY
 
         UNION ALL
 
-        SELECT NVL(i.THREAD_KEY, 'I_SINGLE_' || i.ID) AS THREAD_KEY_NORM
+        SELECT
+            i.THREAD_KEY AS THREAD_KEY_NORM,
+            COUNT(*) AS CNT
         FROM SGAPP.EMAIL_INVIATE i
-    ) t
-    GROUP BY t.THREAD_KEY_NORM
+        WHERE i.THREAD_KEY IN (
+            SELECT DISTINCT fr.THREAD_KEY
+            FROM filtered_rows fr
+            WHERE fr.THREAD_KEY IS NOT NULL
+        )
+        GROUP BY i.THREAD_KEY
+    )
+    GROUP BY THREAD_KEY_NORM
 )
 SELECT
     fr.ID,
@@ -4372,6 +4639,7 @@ SELECT
     fr.CASELLA_ID,
     fr.CASELLA_EMAIL,
     CASE WHEN fr.HAS_UNREAD = 1 THEN 'N' ELSE 'Y' END AS APERTO,
+    fr.IS_READ_BY_ME,
     fr.CC,
     fr.CCN,
     fr.HAS_ATTACH,
@@ -4382,19 +4650,14 @@ SELECT
     COUNT(*) OVER() AS TOTAL_COUNT
 FROM filtered_rows fr
 LEFT JOIN thread_totals tt
-    ON tt.THREAD_KEY_NORM = fr.THREAD_KEY_NORM
+    ON tt.THREAD_KEY_NORM = fr.THREAD_KEY
 WHERE fr.RN = 1
 ORDER BY fr.DATA_RICEZIONE DESC, fr.ID DESC
 OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
 
             await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
 
-            if (!string.IsNullOrWhiteSpace(folderUi) &&
-                (folderUi.Equals("inbox", StringComparison.OrdinalIgnoreCase) ||
-                 folderUi.Equals("myarchive", StringComparison.OrdinalIgnoreCase)))
-            {
-                cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente!;
-            }
+            cmd.Parameters.Add("p_utente", OracleDbType.Varchar2).Value = utente ?? string.Empty;
 
             string? pWord = null;
             string? pAddr = null;
@@ -4414,19 +4677,6 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             cmd.Parameters.Add("p_offset", OracleDbType.Int32).Value = start;
             cmd.Parameters.Add("p_limit", OracleDbType.Int32).Value = pageSize;
 
-            try
-            {
-                _logger.LogWarning(
-                    "### SearchEmailsAdvancedAsync ### folderUi={Folder} utente={Utente} caselle=[{Caselle}] start={Start} limit={Limit} wordRaw='{WordRaw}' addrRaw='{AddrRaw}' p_word='{PWord}' p_addr='{PAddr}'",
-                    folderUi, utente, inList, start, pageSize, w, a, pWord, pAddr);
-
-                _logger.LogWarning("SQL:\n{Sql}", sql);
-
-                foreach (OracleParameter p in cmd.Parameters)
-                    _logger.LogWarning("PARAM {Name}={Value}", p.ParameterName, p.Value);
-            }
-            catch { }
-
             var rawRows = new List<(
       int Id,
       DateTime? Data,
@@ -4442,7 +4692,9 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
       string? Destinatari,
       string? Cc,
       string? Ccn,
-      string? ThreadKey
+      string? ThreadKey,
+      int ThreadLen,
+      bool IsReadByCurrentUser
   )>();
 
             int total = 0;
@@ -4486,15 +4738,15 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     Destinatari: GetStr(reader, "DESTINATARI"),
                     Cc: GetStr(reader, "CC"),
                     Ccn: GetStr(reader, "CCN"),
-                    ThreadKey: GetStr(reader, "THREAD_KEY")
+                    ThreadKey: GetStr(reader, "THREAD_KEY"),
+                    ThreadLen: reader.IsDBNull(reader.GetOrdinal("THREAD_LEN")) ? 1 : Convert.ToInt32(reader.GetValue(reader.GetOrdinal("THREAD_LEN"))),
+                    IsReadByCurrentUser: !reader.IsDBNull(reader.GetOrdinal("IS_READ_BY_ME")) && reader.GetInt32(reader.GetOrdinal("IS_READ_BY_ME")) == 1
                 ));
             }
 
-            var threadCounts = await GetRealThreadCountsAsync(conn, rawRows.Select(x => x.Id).ToList());
-
             var list = rawRows.Select(r =>
             {
-                var threadLen = threadCounts.TryGetValue(r.Id, out var len) ? len : 1;
+                var threadLen = r.ThreadLen > 0 ? r.ThreadLen : 1;
 
                 return new EmailListItem_NEW(
                     Id: r.Id,
@@ -4514,7 +4766,8 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
                     Destinatari: r.Destinatari,
                     Cc: r.Cc,
                     Ccn: r.Ccn,
-                    ThreadKey: r.ThreadKey
+                    ThreadKey: r.ThreadKey,
+                    IsReadByCurrentUser: r.IsReadByCurrentUser
                 );
             }).ToList();
 
@@ -5040,17 +5293,18 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
             const string findThreadSql = @"
 SELECT THREAD_KEY
 FROM (
-    SELECT THREAD_KEY
+    SELECT THREAD_KEY, 0 AS SRC_PRIORITY
     FROM SGAPP.EMAIL_RICEVUTE
     WHERE ID = :id
 
     UNION ALL
 
-    SELECT THREAD_KEY
+    SELECT THREAD_KEY, 1 AS SRC_PRIORITY
     FROM SGAPP.EMAIL_INVIATE
     WHERE ID = :id
 )
-WHERE ROWNUM = 1";
+ORDER BY SRC_PRIORITY
+FETCH FIRST 1 ROWS ONLY";
 
             await using (var findCmd = new OracleCommand(findThreadSql, conn))
             {
@@ -5062,7 +5316,76 @@ WHERE ROWNUM = 1";
             }
 
             if (string.IsNullOrWhiteSpace(threadKey))
-                return 1;
+            {
+                const string fallbackCountSql = @"
+WITH base AS (
+    SELECT 0 AS SRC_PRIORITY, THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID = :id
+
+    UNION ALL
+
+    SELECT 1 AS SRC_PRIORITY, THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE ID = :id
+),
+base_one AS (
+    SELECT
+        TRIM(MESSAGE_ID) AS MESSAGE_ID,
+        TRIM(IN_REPLY_TO) AS IN_REPLY_TO,
+        REFERENCES_HDR
+    FROM (
+        SELECT SRC_PRIORITY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
+        FROM base
+        ORDER BY SRC_PRIORITY
+    )
+    WHERE ROWNUM = 1
+),
+raw_thread AS (
+    SELECT 'R' AS TIPO, r.ID
+    FROM SGAPP.EMAIL_RICEVUTE r
+    CROSS JOIN base_one b
+    WHERE NVL(r.ELIMINATO, 'N') = 'N'
+      AND (
+             UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+          OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+          OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+          OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+          OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+          OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.MESSAGE_ID, '')))) > 0
+          OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.IN_REPLY_TO, '')))) > 0
+      )
+
+    UNION ALL
+
+    SELECT 'I' AS TIPO, i.ID
+    FROM SGAPP.EMAIL_INVIATE i
+    CROSS JOIN base_one b
+    WHERE (
+             UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
+          OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
+          OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
+          OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
+          OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
+          OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.MESSAGE_ID, '')))) > 0
+          OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.IN_REPLY_TO, '')))) > 0
+      )
+)
+SELECT COUNT(*)
+FROM (
+    SELECT TIPO || ':' || TO_CHAR(ID) AS ROW_KEY
+    FROM raw_thread
+    GROUP BY TIPO || ':' || TO_CHAR(ID)
+)";
+
+                await using var fallbackCmd = new OracleCommand(fallbackCountSql, conn);
+                fallbackCmd.BindByName = true;
+                fallbackCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
+
+                var fallbackTotal = await fallbackCmd.ExecuteScalarAsync();
+                var fallbackCount = fallbackTotal == null ? 0 : Convert.ToInt32(fallbackTotal);
+                return fallbackCount <= 0 ? 1 : fallbackCount;
+            }
 
             const string countSql = @"
 SELECT COUNT(*)

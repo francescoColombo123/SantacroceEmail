@@ -50,7 +50,7 @@
 
                         <div class="head-meta-row">
                             <div class="meta">
-                                Thread di @_thread.Count messaggi
+                                Thread di @Math.Max(_threadTotal, _thread.Count) messaggi
                                 @if (_navIds.Count > 0 && _currentNavIndex >= 0)
                                 {
                                     <span> • mail @(_currentNavIndex + 1) di @_navIds.Count</span>
@@ -377,6 +377,7 @@
 
     private EmailDetail_NEW? _email;
     private List<EmailDetail_NEW> _thread = new();
+    private int _threadTotal = 0;
     private List<CommentoEmail>? _comments;
     private bool _loading = true;
     private string? _utente;
@@ -441,24 +442,7 @@
 
         html = HideQuotedPartsButKeepHtml(html);
 
-        if (mail.Allegati != null && mail.Allegati.Any())
-        {
-            foreach (var a in mail.Allegati)
-            {
-                var nome = a.NomeFile ?? "";
-                if (string.IsNullOrWhiteSpace(nome))
-                    continue;
-
-                var url = $"/api/attachments/{a.Id}/download";
-
-                html = Regex.Replace(
-                    html,
-                    $@"cid:{Regex.Escape(nome)}",
-                    url,
-                    RegexOptions.IgnoreCase
-                );
-            }
-        }
+        html = ReplaceCidImagesWithAttachmentUrls(mail, html);
 
         return RemoveUnresolvedCidImages(html);
     }
@@ -517,26 +501,107 @@
     {
         var html = StripActiveContent(mail.CorpoHtml ?? "");
 
-        if (mail.Allegati == null || !mail.Allegati.Any())
-            return RemoveUnresolvedCidImages(html);
-
-        foreach (var a in mail.Allegati)
-        {
-            var nome = a.NomeFile ?? "";
-            if (string.IsNullOrWhiteSpace(nome))
-                continue;
-
-            var url = $"/api/attachments/{a.Id}/download";
-
-            html = Regex.Replace(
-                html,
-                $@"cid:{Regex.Escape(nome)}",
-                url,
-                RegexOptions.IgnoreCase
-            );
-        }
+        html = ReplaceCidImagesWithAttachmentUrls(mail, html);
 
         return RemoveUnresolvedCidImages(html);
+    }
+    private string ReplaceCidImagesWithAttachmentUrls(EmailDetail_NEW mail, string html)
+    {
+        if (string.IsNullOrWhiteSpace(html) || mail.Allegati == null || mail.Allegati.Count == 0)
+            return html;
+
+        var cidMatches = Regex.Matches(html, @"cid:([^\""'\s>]+)", RegexOptions.IgnoreCase)
+            .Select(m => NormalizeCidValue(m.Groups[1].Value))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (cidMatches.Count == 0)
+            return html;
+
+        var imageAttachments = mail.Allegati
+            .Where(a => !a.IsEmailEml)
+            .Where(a => NormalizeMime(a.MimeType, a.NomeFile).StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (imageAttachments.Count == 0)
+            return html;
+
+        var remaining = new List<AllegatoItem_NEW>(imageAttachments);
+        var replacements = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cid in cidMatches)
+        {
+            var matched = remaining.FirstOrDefault(a => CidMatchesAttachment(cid, a.NomeFile));
+            if (matched == null)
+                continue;
+
+            replacements[cid] = GetInlineAttachmentUrl(mail, matched.Id);
+            remaining.Remove(matched);
+        }
+
+        foreach (var cid in cidMatches)
+        {
+            if (replacements.ContainsKey(cid) || remaining.Count == 0)
+                continue;
+
+            var matched = remaining[0];
+            replacements[cid] = GetInlineAttachmentUrl(mail, matched.Id);
+            remaining.RemoveAt(0);
+        }
+
+        if (replacements.Count == 0)
+            return html;
+
+        return Regex.Replace(
+            html,
+            @"cid:([^\""'\s>]+)",
+            m =>
+            {
+                var cid = NormalizeCidValue(m.Groups[1].Value);
+                return replacements.TryGetValue(cid, out var url) ? url : m.Value;
+            },
+            RegexOptions.IgnoreCase);
+    }
+
+    private string GetInlineAttachmentUrl(EmailDetail_NEW mail, int attachmentId)
+    {
+        return IsSentMail(mail)
+            ? $"/api/attachments/{attachmentId}/previewInternal"
+            : $"/api/attachments/{attachmentId}/inline";
+    }
+
+    private static bool CidMatchesAttachment(string cid, string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(cid) || string.IsNullOrWhiteSpace(fileName))
+            return false;
+
+        var normalizedCid = NormalizeCidValue(cid);
+        var normalizedFile = Path.GetFileName(fileName).Trim().ToLowerInvariant();
+        var fileStem = Path.GetFileNameWithoutExtension(normalizedFile).Trim().ToLowerInvariant();
+
+        if (normalizedCid.Equals(normalizedFile, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var localPart = normalizedCid.Split('@')[0].Trim();
+        if (localPart.Equals(normalizedFile, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!string.IsNullOrWhiteSpace(fileStem) && localPart.Equals(fileStem, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return false;
+    }
+
+    private static string NormalizeCidValue(string? raw)
+    {
+        var cid = (raw ?? "").Trim().Trim('<', '>').Trim('"', '\'');
+
+        if (cid.StartsWith("cid:", StringComparison.OrdinalIgnoreCase))
+            cid = cid[4..];
+
+        cid = Uri.UnescapeDataString(cid);
+        return cid.Trim().ToLowerInvariant();
     }
     private static string HideQuotedPartsButKeepHtml(string html)
     {
@@ -1397,11 +1462,26 @@
         {
             _sezioneSelezionata = await MailSvc1.GetSezioneCorrenteAsync(_email.Id, _utente);
 
-            _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
+            if (string.Equals(_fromFolder, "inbox", StringComparison.OrdinalIgnoreCase))
+            {
+                _threadTotal = await MailSvc1.GetConversationCountByThreadFromRicevuteAsync(_email.Id);
+                _thread = _threadTotal > 1
+                    ? await MailSvc1.GetConversationDetailByReceivedThreadAsync(_email.Id)
+                    : await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
+            }
+            else
+            {
+                _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
+                _threadTotal = await MailSvc1.GetConversationCountByThreadAsync(_email.Id);
+            }
+
+            if (_thread == null || _thread.Count == 0)
+                _thread = new List<EmailDetail_NEW> { _email };
         }
         else
         {
             _thread = new();
+            _threadTotal = 0;
         }
         _comments = await MailSvc.GetCommentsByEmailAsync(Id);
 
@@ -1539,6 +1619,7 @@
             return "";
 
         var s = System.Net.WebUtility.HtmlDecode(html);
+        s = FixCommonMojibake(s);
 
         s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
@@ -1552,6 +1633,39 @@
         s = Regex.Replace(s, @"\s+", " ").Trim();
 
         return s;
+    }
+
+    private static string FixCommonMojibake(string? input)
+    {
+        var s = input ?? "";
+
+        if (string.IsNullOrWhiteSpace(s) || !LooksLikeMojibake(s))
+            return s;
+
+        try
+        {
+            var bytes = System.Text.Encoding.Latin1.GetBytes(s);
+            var fixedText = System.Text.Encoding.UTF8.GetString(bytes);
+
+            if (CountMojibakeMarkers(fixedText) < CountMojibakeMarkers(s))
+                return fixedText;
+        }
+        catch
+        {
+        }
+
+        return s;
+    }
+
+    private static bool LooksLikeMojibake(string s)
+        => s.Contains("Ã") || s.Contains("Â") || s.Contains("â€") || s.Contains("â€™") || s.Contains("â€œ") || s.Contains("â€");
+
+    private static int CountMojibakeMarkers(string s)
+    {
+        if (string.IsNullOrEmpty(s))
+            return 0;
+
+        return Regex.Matches(s, "Ã|Â|â€|â€™|â€œ").Count;
     }
     private static string BuildThreadUniqueKey(EmailDetail_NEW mail)
     {

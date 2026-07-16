@@ -1022,14 +1022,34 @@ RETURNING ID INTO :p_id";
     string? fileName)
     {
         var mime = (mimeType ?? "").Trim();
+        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
+
+        var byExt = ext switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".bmp" => "image/bmp",
+            ".webp" => "image/webp",
+            ".txt" => "text/plain",
+            ".html" or ".htm" => "text/html",
+            ".eml" => "message/rfc822",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            _ => null
+        };
+
+        if (!string.IsNullOrWhiteSpace(byExt))
+            return byExt;
 
         if (!string.IsNullOrWhiteSpace(mime) &&
             !mime.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
         {
             return mime;
         }
-
-        var ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
 
         return ext switch
         {
@@ -1183,6 +1203,9 @@ RETURNING ID INTO :p_id";
     }
     private static bool IsDraftSummary(IMessageSummary s)
     {
+        if (s.Flags.HasValue && (s.Flags.Value & MessageFlags.Draft) != 0)
+            return true;
+
         if (s.GMailLabels == null)
             return false;
 
@@ -2011,6 +2034,7 @@ UPDATE SGAPP.EMAIL_ALLEGATI
             MessageSummaryItems.Envelope |
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
+            MessageSummaryItems.Flags |
             MessageSummaryItems.GMailThreadId | MessageSummaryItems.GMailLabels; 
         var summaries = await folder.FetchAsync(range, items, ct);
 
@@ -2181,6 +2205,7 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
             MessageSummaryItems.GMailThreadId |
+                MessageSummaryItems.Flags |
                 MessageSummaryItems.GMailLabels;
         _logger.LogInformation(
                 "NEWSCAN cid={Cid} folder='{Folder}' lastSeen={LastSeen} uidNext={UidNext} start={Start} end={End} limitEnd={LimitEnd}",
@@ -2277,6 +2302,7 @@ VALUES (s.CASELLA_ID, s.FOLDER_PATH, s.LAST_SEEN_UID, SYSDATE)";
             MessageSummaryItems.InternalDate |
             MessageSummaryItems.BodyStructure |
             MessageSummaryItems.GMailThreadId |
+             MessageSummaryItems.Flags |
              MessageSummaryItems.GMailLabels;
 
         var sums = await folder.FetchAsync(finalUids, items, ct);

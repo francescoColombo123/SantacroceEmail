@@ -512,6 +512,30 @@ namespace SCemail.Components.Controllers
         private string ResolveMime(string? dbMime, string? fileName, string fullPath)
         {
             var mime = (dbMime ?? "").Trim();
+            var ext = Path.GetExtension(fileName ?? fullPath)?.ToLowerInvariant();
+
+            var byExt = ext switch
+            {
+                ".pdf" => "application/pdf",
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".bmp" => "image/bmp",
+                ".webp" => "image/webp",
+                ".svg" => "image/svg+xml",
+                ".txt" => "text/plain",
+                ".html" or ".htm" => "text/html",
+                ".csv" => "text/csv",
+                ".eml" => "message/rfc822",
+                ".doc" => "application/msword",
+                ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                ".xls" => "application/vnd.ms-excel",
+                ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                _ => null
+            };
+
+            if (!string.IsNullOrWhiteSpace(byExt))
+                return byExt;
 
             // Se DB dice octet-stream o è vuoto, provo a dedurre
             if (string.IsNullOrWhiteSpace(mime) ||
@@ -523,7 +547,6 @@ namespace SCemail.Components.Controllers
                 if (_ct.TryGetContentType(fullPath, out var byPath))
                     return byPath;
 
-                var ext = Path.GetExtension(fileName ?? fullPath)?.ToLowerInvariant();
                 return ext switch
                 {
                     ".pdf" => "application/pdf",
