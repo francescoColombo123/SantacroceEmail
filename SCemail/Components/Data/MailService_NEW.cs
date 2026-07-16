@@ -1309,9 +1309,10 @@ WHERE EMAIL_ID = :id_email";
             await using var conn = await GetOpenConnectionAsync();
 
             string threadKey;
+            int? casellaId = null;
 
             const string findThreadSql = @"
-SELECT THREAD_KEY
+SELECT THREAD_KEY, CASELLA_ID
 FROM SGAPP.EMAIL_RICEVUTE
 WHERE ID = :id";
 
@@ -1320,11 +1321,19 @@ WHERE ID = :id";
                 findCmd.BindByName = true;
                 findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
 
-                var result = await findCmd.ExecuteScalarAsync();
-                threadKey = result?.ToString() ?? "";
+                await using var rd = await findCmd.ExecuteReaderAsync();
+                if (await rd.ReadAsync())
+                {
+                    threadKey = rd.IsDBNull(0) ? "" : rd.GetString(0);
+                    casellaId = rd.IsDBNull(1) ? null : rd.GetInt32(1);
+                }
+                else
+                {
+                    threadKey = "";
+                }
             }
 
-            if (string.IsNullOrWhiteSpace(threadKey))
+            if (string.IsNullOrWhiteSpace(threadKey) || casellaId is null)
                 return 1;
 
             const string countSql = @"
@@ -1333,6 +1342,7 @@ FROM (
     SELECT LOWER(TRIM(r.MESSAGE_ID)) AS MSG_KEY
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.THREAD_KEY = :p_thread
+            AND r.CASELLA_ID = :p_cid
       AND NVL(r.ELIMINATO, 'N') = 'N'
       AND r.MESSAGE_ID IS NOT NULL
     GROUP BY LOWER(TRIM(r.MESSAGE_ID))
@@ -1342,6 +1352,7 @@ FROM (
     SELECT 'NO_MSGID_' || TO_CHAR(r.ID) AS MSG_KEY
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.THREAD_KEY = :p_thread
+        AND r.CASELLA_ID = :p_cid
       AND NVL(r.ELIMINATO, 'N') = 'N'
       AND r.MESSAGE_ID IS NULL
 )";
@@ -1349,6 +1360,7 @@ FROM (
             await using var countCmd = new OracleCommand(countSql, conn);
             countCmd.BindByName = true;
             countCmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+            countCmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId.Value;
 
             var total = await countCmd.ExecuteScalarAsync();
             return total == null ? 1 : Convert.ToInt32(total);
@@ -1359,9 +1371,10 @@ FROM (
             await using var conn = await GetOpenConnectionAsync();
 
             string threadKey = "";
+            int? casellaId = null;
 
             const string findThreadSql = @"
-SELECT THREAD_KEY
+SELECT THREAD_KEY, CASELLA_ID
 FROM SGAPP.EMAIL_RICEVUTE
 WHERE ID = :id";
 
@@ -1370,11 +1383,15 @@ WHERE ID = :id";
                 findCmd.BindByName = true;
                 findCmd.Parameters.Add("id", OracleDbType.Int32).Value = emailId;
 
-                var result = await findCmd.ExecuteScalarAsync();
-                threadKey = result?.ToString() ?? "";
+                await using var rd = await findCmd.ExecuteReaderAsync();
+                if (await rd.ReadAsync())
+                {
+                    threadKey = rd.IsDBNull(0) ? "" : rd.GetString(0);
+                    casellaId = rd.IsDBNull(1) ? null : rd.GetInt32(1);
+                }
             }
 
-            if (string.IsNullOrWhiteSpace(threadKey))
+            if (string.IsNullOrWhiteSpace(threadKey) || casellaId is null)
                 return new List<EmailDetail_NEW>();
 
             const string sql = @"
@@ -1399,11 +1416,13 @@ FROM SGAPP.EMAIL_RICEVUTE r
 LEFT JOIN SGAPP.CASELLEPOSTA cp ON cp.ID = r.CASELLA_ID
 WHERE NVL(r.ELIMINATO, 'N') = 'N'
   AND UPPER(TRIM(r.THREAD_KEY)) = UPPER(TRIM(:p_thread))
+    AND r.CASELLA_ID = :p_cid
 ORDER BY r.DATA_RICEZIONE, r.ID";
 
             await using var cmd = new OracleCommand(sql, conn);
             cmd.BindByName = true;
             cmd.Parameters.Add("p_thread", OracleDbType.Varchar2).Value = threadKey;
+            cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId.Value;
 
             var list = new List<EmailDetail_NEW>();
 

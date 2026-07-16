@@ -2495,6 +2495,17 @@ else
         var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var fallbackCounts = new Dictionary<int, int>();
 
+        var casellaIdsForCount = (_caselleIds ?? new List<int>())
+            .Distinct()
+            .ToList();
+        var hasCasellaFilter = casellaIdsForCount.Count > 0;
+        var casellaInClause = hasCasellaFilter
+            ? string.Join(",", casellaIdsForCount.Select((_, i) => $":cid{i}"))
+            : "";
+        var casellaWhereClause = hasCasellaFilter
+            ? $" AND CASELLA_ID IN ({casellaInClause})"
+            : "";
+
         await using var db = await DbFactory.CreateDbContextAsync();
         await db.Database.OpenConnectionAsync();
 
@@ -2507,6 +2518,7 @@ else
 SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
 FROM SGAPP.EMAIL_RICEVUTE
 WHERE NVL(ELIMINATO, 'N') = 'N'
+{casellaWhereClause}
     AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
 GROUP BY UPPER(TRIM(THREAD_KEY))"
                                 : $@"
@@ -2515,6 +2527,7 @@ FROM (
     SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
     FROM SGAPP.EMAIL_RICEVUTE
     WHERE NVL(ELIMINATO, 'N') = 'N'
+{casellaWhereClause}
       AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
     GROUP BY UPPER(TRIM(THREAD_KEY))
 
@@ -2536,6 +2549,14 @@ GROUP BY THREAD_KEY";
                 var p = cmd.CreateParameter();
                 p.ParameterName = $"k{i}";
                 p.Value = keys[i]!;
+                cmd.Parameters.Add(p);
+            }
+
+            for (int i = 0; i < casellaIdsForCount.Count; i++)
+            {
+                var p = cmd.CreateParameter();
+                p.ParameterName = $"cid{i}";
+                p.Value = casellaIdsForCount[i];
                 cmd.Parameters.Add(p);
             }
 

@@ -229,6 +229,17 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
     {
         currentMessageId = NormalizeMessageId(currentMessageId) ?? currentMessageId;
 
+        var providerThreadKeyNorm = (providerThreadKey ?? "").Trim();
+        if (!string.IsNullOrWhiteSpace(providerThreadKeyNorm))
+        {
+            // Per Gmail il thread id del provider è la chiave più affidabile e stabile.
+            return new ThreadResolveResult
+            {
+                ThreadKey = providerThreadKeyNorm,
+                GmailThreadKey = providerThreadKeyNorm
+            };
+        }
+
         const string sqlFindByMessageId = @"
 SELECT THREAD_KEY, GMAIL_THREAD_ID
 FROM (
