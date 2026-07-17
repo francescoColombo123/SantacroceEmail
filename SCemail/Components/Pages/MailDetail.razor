@@ -1416,86 +1416,155 @@
         return r;
     }
     
+private async Task LoadPageAsync()
+{
+    _loading = true;
 
-    private async Task LoadPageAsync()
+    try
     {
-        _loading = true;
+        ParseNavigationParameters();
 
-        var uri = Nav.ToAbsoluteUri(Nav.Uri);
-        var q = QueryHelpers.ParseQuery(uri.Query);
+        /*
+         * Il thread contiene già anche il messaggio corrente.
+         * Evitiamo quindi:
+         *
+         * GetEmailDetailAsync(...)
+         * GetConversationCountByThreadAsync(...)
+         *
+         * che sarebbero due query aggiuntive.
+         */
+        var threadTask = MailSvc1.GetConversationByThreadFastAsync(
+            Id,
+            _utente);
 
-        _fromFolder = null;
-        _fromSection = null;
-        _navIds = new();
-        _currentNavIndex = -1;
+        var assegnatariTask =
+            MailSvc1.GetAssegnatariEmailAsync(Id);
 
-        if (q.TryGetValue("fromFolder", out var f))
-            _fromFolder = f.ToString();
+        var sezioniTask =
+            MailSvc1.GetSezioniInboxAsync(soloAttive: true);
 
-        if (q.TryGetValue("fromSection", out var s))
-            _fromSection = s.ToString();
-        _assegnatoA = await MailSvc1.GetAssegnatariEmailAsync(Id);
+        var sezioneCorrenteTask =
+            MailSvc1.GetSezioneCorrenteAsync(Id, _utente!);
 
-        if (q.TryGetValue("ids", out var idsRaw))
+        var canDeleteTask =
+            MailSvc1.CanDeleteEmailAsync(Id, _utente!);
+
+        var commentsTask =
+            MailSvc.GetCommentsByEmailAsync(Id);
+
+        var usersTask =
+            AccessiSrv.GetUserListAsync();
+
+        var markReadTask =
+            MarkCurrentMailAsReadAsync();
+
+        await Task.WhenAll(
+            threadTask,
+            assegnatariTask,
+            sezioniTask,
+            sezioneCorrenteTask,
+            canDeleteTask,
+            commentsTask,
+            usersTask,
+            markReadTask
+        );
+
+        _thread = await threadTask;
+
+        if (_thread == null || _thread.Count == 0)
         {
-            _navIds = idsRaw.ToString()
-                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(x => int.TryParse(x, out var id) ? id : (int?)null)
-                .Where(x => x.HasValue)
-                .Select(x => x!.Value)
-                .Distinct()
-                .ToList();
+            /*
+             * Fallback per eventuali dati vecchi che non possiedono
+             * ancora THREAD_KEY o GMAIL_THREAD_ID coerenti.
+             */
+            _email = await MailSvc1.GetEmailDetailAsync(
+                Id,
+                onlyMeta: false);
 
-            _currentNavIndex = _navIds.FindIndex(x => x == Id);
-        }
-
-        _email = await MailSvc1.GetEmailDetailAsync(Id, onlyMeta: false);
-
-        _sezioni = await MailSvc1.GetSezioniInboxAsync(soloAttive: true);
-
-        _canDeleteEmail = _email != null
-                && !string.IsNullOrWhiteSpace(_utente)
-                && await MailSvc1.CanDeleteEmailAsync(_email.Id, _utente);
-        await MarkCurrentMailAsReadAsync();
-
-        if (_email != null)
-        {
-            _sezioneSelezionata = await MailSvc1.GetSezioneCorrenteAsync(_email.Id, _utente);
-
-            if (string.Equals(_fromFolder, "inbox", StringComparison.OrdinalIgnoreCase))
-            {
-                _threadTotal = await MailSvc1.GetConversationCountByThreadFromRicevuteAsync(_email.Id);
-                _thread = _threadTotal > 1
-                    ? await MailSvc1.GetConversationDetailByReceivedThreadAsync(_email.Id)
-                    : await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
-            }
-            else
-            {
-                _thread = await MailSvc1.GetConversationByThreadAsync(_email.Id, _utente);
-                _threadTotal = await MailSvc1.GetConversationCountByThreadAsync(_email.Id);
-            }
-
-            if (_thread == null || _thread.Count == 0)
-                _thread = new List<EmailDetail_NEW> { _email };
+            _thread = _email == null
+                ? new List<EmailDetail_NEW>()
+                : new List<EmailDetail_NEW> { _email };
         }
         else
         {
-            _thread = new();
-            _threadTotal = 0;
+            _email = _thread.FirstOrDefault(x => x.Id == Id)
+                     ?? _thread.LastOrDefault();
         }
-        _comments = await MailSvc.GetCommentsByEmailAsync(Id);
+
+        _threadTotal = _thread.Count;
+
+        _assegnatoA = await assegnatariTask;
+        _sezioni = await sezioniTask;
+        _sezioneSelezionata = await sezioneCorrenteTask;
+        _canDeleteEmail = await canDeleteTask;
+        _comments = await commentsTask;
+        _allUsers = await usersTask;
 
         _comments = _comments?
-            .GroupBy(c => c.Id)
+            .GroupBy(x => x.Id)
             .Select(g => g.First())
             .ToList();
-
-        _allUsers = await AccessiSrv.GetUserListAsync();
-
-        _loading = false;
-        StateHasChanged();
     }
+    catch (Exception ex)
+    {
+        Console.WriteLine(
+            $"Errore caricamento dettaglio email {Id}: {ex}");
 
+        Snackbar.Add(
+            "Errore durante il caricamento dell'email.",
+            Severity.Error);
+
+        _thread = new List<EmailDetail_NEW>();
+        _threadTotal = 0;
+    }
+    finally
+    {
+        _loading = false;
+        await InvokeAsync(StateHasChanged);
+    }
+}
+
+private void ParseNavigationParameters()
+{
+    var uri = Nav.ToAbsoluteUri(Nav.Uri);
+    var query = QueryHelpers.ParseQuery(uri.Query);
+
+    _fromFolder = query.TryGetValue(
+        "fromFolder",
+        out var folder)
+        ? folder.ToString()
+        : null;
+
+    _fromSection = query.TryGetValue(
+        "fromSection",
+        out var section)
+        ? section.ToString()
+        : null;
+
+    _navIds = new List<int>();
+    _currentNavIndex = -1;
+
+    if (!query.TryGetValue("ids", out var idsRaw))
+        return;
+
+    _navIds = idsRaw
+        .ToString()
+        .Split(
+            ',',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries)
+        .Select(value =>
+            int.TryParse(value, out var parsedId)
+                ? parsedId
+                : (int?)null)
+        .Where(value => value.HasValue)
+        .Select(value => value!.Value)
+        .Distinct()
+        .ToList();
+
+    _currentNavIndex = _navIds.FindIndex(
+        value => value == Id);
+}
     private static string NormalizeMime(string? mime, string? filename)
     {
         var ext = Path.GetExtension(filename ?? "").ToLowerInvariant();
@@ -1956,30 +2025,42 @@
     }
 
     private async Task MarkCurrentMailAsReadAsync()
+{
+    if (string.IsNullOrWhiteSpace(_utente))
+        return;
+
+    try
     {
-        if (_email == null || string.IsNullOrWhiteSpace(_utente))
-            return;
-
-        try
+        var tasks = new List<Task>
         {
-            if (_fromFolder == "mailfollowed")
-            {
-                await MailSvc.MarkEmailSeguitaAsReadAsync(_email.Id, _utente);
-            }
+            MailSvc.MarkOpenedAsync(Id),
+            MailSvc1.SegnaLettaAsync(Id, _utente),
+            MailSvc1.SegnaNotificheVisteAsync(Id, _utente)
+        };
 
-            await MailSvc.MarkOpenedAsync(_email.Id);
-
-            // ✅ QUESTA È QUELLA CHE TI MANCA
-            await MailSvc1.SegnaLettaAsync(_email.Id, _utente);
-
-            await MailSvc1.SegnaNotificheVisteAsync(_email.Id, _utente);
-        }
-        catch (Exception ex)
+        if (string.Equals(
+            _fromFolder,
+            "mailfollowed",
+            StringComparison.OrdinalIgnoreCase))
         {
-            Console.WriteLine($"❌ Errore mark read detail: {ex.Message}");
+            tasks.Add(
+                MailSvc.MarkEmailSeguitaAsReadAsync(
+                    Id,
+                    _utente));
         }
+
+        await Task.WhenAll(tasks);
     }
-
+    catch (Exception ex)
+    {
+        /*
+         * Un errore di marcatura non deve impedire
+         * l'apertura del dettaglio.
+         */
+        Console.WriteLine(
+            $"Errore marcatura email {Id}: {ex.Message}");
+    }
+}
     private void GoPreviousMail()
     {
         if (!HasPrevious || PreviousId is null)

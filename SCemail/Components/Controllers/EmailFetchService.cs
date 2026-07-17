@@ -13,7 +13,6 @@ using System.Collections.Generic;
 using System.Data;
 using System.IO;
 using System.Linq;
-using System.Reflection.PortableExecutable;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -52,7 +51,6 @@ public class EmailFetchService : BackgroundService
     {
         var enabled = _config.GetValue<bool?>("EmailFetch:Enabled") ?? true;
 
-        _logger.LogInformation("EmailFetchService avviato - intervallo {Minuti} minuti", _interval.TotalMinutes);
         if (!enabled)
         {
             _logger.LogWarning("EmailFetchService DISABILITATO via config (EmailFetch:Enabled=false).");
@@ -69,10 +67,15 @@ public class EmailFetchService : BackgroundService
             {
                 await ProcessAllMailboxes(stoppingToken, night);
 
-                // ✅ backfill allegati SOLO di notte
                 if (night)
-                    await BackfillMissingAttachmentsAsync(stoppingToken);
-            }
+                {
+                    await BackfillHistoricalThreadsAsync(
+                        stoppingToken);
+
+                    await BackfillMissingAttachmentsAsync(
+                        stoppingToken);
+                }
+                            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Errore generale nel fetch email");
@@ -81,6 +84,8 @@ public class EmailFetchService : BackgroundService
             try { await Task.Delay(_interval, stoppingToken); } catch { /* ignore */ }
         }
     }
+
+    
 
     private static bool IsNightWindow()
     {
@@ -516,6 +521,69 @@ FETCH FIRST 1 ROWS ONLY";
 
         _logger.LogWarning("Cartella All Mail non trovata per {Email}", email);
     }
+
+    private static async Task MarkThreadAsAlignedAsync(
+    OracleConnection conn,
+    int casellaId,
+    string gmailThreadId,
+    CancellationToken ct)
+{
+    const string updateRicevute = @"
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET THREAD_ALIGNED = 'Y'
+ WHERE CASELLA_ID = :p_cid
+   AND GMAIL_THREAD_ID = :p_thread";
+
+    await using (var cmd =
+                 new OracleCommand(
+                     updateRicevute,
+                     conn)
+                 {
+                     BindByName = true
+                 })
+    {
+        cmd.Parameters.Add(
+            "p_cid",
+            OracleDbType.Int32).Value =
+                casellaId;
+
+        cmd.Parameters.Add(
+            "p_thread",
+            OracleDbType.Varchar2,
+            128).Value =
+                gmailThreadId;
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    const string updateInviate = @"
+UPDATE SGAPP.EMAIL_INVIATE
+   SET THREAD_ALIGNED = 'Y'
+ WHERE CASELLA_ID = :p_cid
+   AND GMAIL_THREAD_ID = :p_thread";
+
+    await using (var cmd =
+                 new OracleCommand(
+                     updateInviate,
+                     conn)
+                 {
+                     BindByName = true
+                 })
+    {
+        cmd.Parameters.Add(
+            "p_cid",
+            OracleDbType.Int32).Value =
+                casellaId;
+
+        cmd.Parameters.Add(
+            "p_thread",
+            OracleDbType.Varchar2,
+            128).Value =
+                gmailThreadId;
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+}
     private async Task ProcessSummariesAsync(
   IMailFolder folder,
   List<IMessageSummary> summaries,
@@ -635,44 +703,84 @@ FETCH FIRST 1 ROWS ONLY";
                  ? $"gmail:{s.GMailThreadId.Value}"
                  : null;
 
-            if (isSentFolder)
-            {
-                emailId = forcedExistingSentId ?? await SaveSentEmail(
-                    dbConn,
-                    casellaId,
-                    mid,
-                    full,
-                    ct,
-                    folder.FullName,
-                    uid,
-                    emailDateRome,
-                    providerThreadKey
-                );
-            }
-            else
-            {
-                emailId = await SaveEmail(
-                    dbConn,
-                    casellaId,
-                    mid,
-                    full,
-                    ct,
-                    folder.FullName,
-                    uid,
-                    emailDateRome,
-                    providerThreadKey
-                );
-                var isBlacklisted = await IsSenderBlacklistedAsync(dbConn, full.From?.ToString(), ct);
+           if (isSentFolder)
+{
+    if (forcedExistingSentId.HasValue)
+    {
+        emailId = forcedExistingSentId.Value;
 
-                if (isSpamFolder)
-                {
-                    await AddSenderToBlacklistAsync(dbConn, full.From?.ToString(), "SYSTEM-SPAM", emailId, ct);
-                }
-                else if (!isBlacklisted)
-                {
-                    await ApplyRulesAsync(dbConn, emailId, full, emailDateRome, accountEmail, ct);
-                }
-            }
+        await TouchExistingSentEmailAsync(
+            dbConn,
+            emailId,
+            folder.FullName,
+            uid,
+            providerThreadKey,
+            ct);
+
+        if (!string.IsNullOrWhiteSpace(providerThreadKey))
+        {
+            await EnsureGmailThreadForConversationAsync(
+                dbConn,
+                casellaId,
+                mid,
+                full,
+                providerThreadKey,
+                ct);
+        }
+    }
+    else
+    {
+        emailId = await SaveSentEmail(
+            dbConn,
+            casellaId,
+            mid,
+            full,
+            ct,
+            folder.FullName,
+            uid,
+            emailDateRome,
+            providerThreadKey);
+    }
+}
+else
+{
+    emailId = await SaveEmail(
+        dbConn,
+        casellaId,
+        mid,
+        full,
+        ct,
+        folder.FullName,
+        uid,
+        emailDateRome,
+        providerThreadKey);
+
+    var isBlacklisted =
+        await IsSenderBlacklistedAsync(
+            dbConn,
+            full.From?.ToString(),
+            ct);
+
+    if (isSpamFolder)
+    {
+        await AddSenderToBlacklistAsync(
+            dbConn,
+            full.From?.ToString(),
+            "SYSTEM-SPAM",
+            emailId,
+            ct);
+    }
+    else if (!isBlacklisted)
+    {
+        await ApplyRulesAsync(
+            dbConn,
+            emailId,
+            full,
+            emailDateRome,
+            accountEmail,
+            ct);
+    }
+}
 
             var body = s.Body;
             if (body == null)
@@ -719,7 +827,247 @@ FETCH FIRST 1 ROWS ONLY";
         }
     }
 
+private static async Task TouchExistingSentEmailAsync(
+    OracleConnection conn,
+    int emailId,
+    string folderPath,
+    long messageUid,
+    string? gmailThreadId,
+    CancellationToken ct)
+{
+    const string sql = @"
+UPDATE SGAPP.EMAIL_INVIATE
+   SET FOLDER_PATH = NVL(FOLDER_PATH, :p_folder),
+       MESSAGE_UID = NVL(MESSAGE_UID, :p_uid),
+       GMAIL_THREAD_ID =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN :p_gmail_thread
+               ELSE GMAIL_THREAD_ID
+           END,
+       THREAD_KEY =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN :p_gmail_thread
+               ELSE THREAD_KEY
+           END,
+       THREAD_ALIGNED =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN 'Y'
+               ELSE THREAD_ALIGNED
+           END
+ WHERE ID = :p_id";
 
+    await using var cmd = new OracleCommand(sql, conn)
+    {
+        BindByName = true
+    };
+
+    cmd.Parameters.Add(
+        "p_folder",
+        OracleDbType.Varchar2,
+        512).Value = NormalizeFolderPath(folderPath);
+
+    cmd.Parameters.Add(
+        "p_uid",
+        OracleDbType.Int64).Value = messageUid;
+
+    cmd.Parameters.Add(
+        "p_gmail_thread",
+        OracleDbType.Varchar2,
+        128).Value =
+            string.IsNullOrWhiteSpace(gmailThreadId)
+                ? DBNull.Value
+                : gmailThreadId;
+
+    cmd.Parameters.Add(
+        "p_id",
+        OracleDbType.Int32).Value = emailId;
+
+    await cmd.ExecuteNonQueryAsync(ct);
+}
+private sealed class HistoricalThreadSeed
+{
+    public int CasellaId { get; init; }
+
+    public string GmailThreadId { get; init; } = "";
+
+    public string? MessageId { get; init; }
+
+    public string? InReplyTo { get; init; }
+
+    public string? References { get; init; }
+}
+
+private static async Task<List<HistoricalThreadSeed>>
+    LoadHistoricalThreadSeedsAsync(
+        OracleConnection conn,
+        int limit,
+        CancellationToken ct)
+{
+    const string sql = @"
+SELECT CASELLA_ID,
+       GMAIL_THREAD_ID,
+       MESSAGE_ID,
+       IN_REPLY_TO,
+       REFERENCES_HDR
+FROM (
+    SELECT
+        CASELLA_ID,
+        GMAIL_THREAD_ID,
+        TO_CLOB(MESSAGE_ID)     AS MESSAGE_ID,
+        TO_CLOB(IN_REPLY_TO)    AS IN_REPLY_TO,
+        TO_CLOB(REFERENCES_HDR) AS REFERENCES_HDR,
+        DATA_RICEZIONE          AS DATA_EMAIL
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE GMAIL_THREAD_ID IS NOT NULL
+      AND NVL(THREAD_ALIGNED, 'N') = 'N'
+      AND NVL(IS_EML_IMPORTATA, 'N') = 'N'
+
+    UNION ALL
+
+    SELECT
+        CASELLA_ID,
+        GMAIL_THREAD_ID,
+        TO_CLOB(MESSAGE_ID)     AS MESSAGE_ID,
+        TO_CLOB(IN_REPLY_TO)    AS IN_REPLY_TO,
+        TO_CLOB(REFERENCES_HDR) AS REFERENCES_HDR,
+        DATA_INVIO              AS DATA_EMAIL
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE GMAIL_THREAD_ID IS NOT NULL
+      AND NVL(THREAD_ALIGNED, 'N') = 'N'
+)
+ORDER BY DATA_EMAIL DESC
+FETCH FIRST :p_limit ROWS ONLY";
+
+    var result = new List<HistoricalThreadSeed>();
+
+    await using var cmd = new OracleCommand(sql, conn)
+    {
+        BindByName = true
+    };
+
+    cmd.Parameters.Add("p_limit", OracleDbType.Int32).Value = limit;
+
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+    while (await reader.ReadAsync(ct))
+    {
+        result.Add(new HistoricalThreadSeed
+        {
+            CasellaId = reader.GetInt32(0),
+            GmailThreadId = ReadOracleText(reader, 1) ?? "",
+            MessageId = ReadOracleText(reader, 2),
+            InReplyTo = ReadOracleText(reader, 3),
+            References = ReadOracleText(reader, 4)
+        });
+    }
+
+    return result;
+}
+
+private async Task BackfillHistoricalThreadsAsync(
+    CancellationToken ct)
+{
+    var connectionString =
+        _config.GetConnectionString("OracleDb")
+        ?? throw new InvalidOperationException(
+            "ConnectionString 'OracleDb' mancante.");
+
+    var limit =
+        _config.GetValue<int?>(
+            "EmailFetch:ThreadBackfillLimit")
+        ?? 200;
+
+    await using var conn =
+        new OracleConnection(connectionString);
+
+    await conn.OpenAsync(ct);
+
+    var seeds =
+        await LoadHistoricalThreadSeedsAsync(
+            conn,
+            limit,
+            ct);
+
+    if (seeds.Count == 0)
+        return;
+
+    var groups = seeds
+        .Where(x =>
+            !string.IsNullOrWhiteSpace(
+                x.GmailThreadId))
+        .GroupBy(x => new
+        {
+            x.CasellaId,
+            GmailThreadId =
+                x.GmailThreadId.Trim()
+        });
+
+    var processedThreads = 0;
+
+    foreach (var group in groups)
+    {
+        var identifiers = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in group)
+        {
+            AddNormalizedMessageId(
+                identifiers,
+                seed.MessageId);
+
+            AddNormalizedMessageId(
+                identifiers,
+                seed.InReplyTo);
+
+            foreach (var reference in
+                     ExtractMessageIdsFromReferences(
+                         seed.References))
+            {
+                AddNormalizedMessageId(
+                    identifiers,
+                    reference);
+            }
+        }
+
+        if (identifiers.Count == 0)
+            continue;
+
+        try
+        {
+            await PropagateGmailThreadAsync(
+                conn,
+                group.Key.CasellaId,
+                identifiers,
+                group.Key.GmailThreadId,
+                ct);
+
+            await MarkThreadAsAlignedAsync(
+                conn,
+                group.Key.CasellaId,
+                group.Key.GmailThreadId,
+                ct);
+
+            processedThreads++;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Errore backfill thread Gmail " +
+                "casellaId={CasellaId} thread={Thread}",
+                group.Key.CasellaId,
+                group.Key.GmailThreadId);
+        }
+    }
+
+    _logger.LogInformation(
+        "Backfill storico thread completato: " +
+        "{Threads} thread elaborati",
+        processedThreads);
+}
     private async Task<int> SaveEmail(
     OracleConnection conn,
     int casellaId,
@@ -751,11 +1099,13 @@ FETCH FIRST 1 ROWS ONLY";
 INSERT INTO SGAPP.EMAIL_RICEVUTE
     (CASELLA_ID, MESSAGE_ID, DATA_RICEZIONE, MITTENTE, DESTINATARI, CC, CCN, OGGETTO,
      CORPO_HTML, CORPO_TESTO, APERTO, ELIMINATO, FOLDER_PATH, MESSAGE_UID,
-     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY,GMAIL_THREAD_ID, BLACKLIST)
+     IN_REPLY_TO, REFERENCES_HDR, THREAD_KEY, GMAIL_THREAD_ID, THREAD_ALIGNED, BLACKLIST)
 VALUES
     (:p_cid, :p_mid, :p_dt, :p_from, :p_to, :p_cc, :p_ccn, :p_subj,
      :p_html, :p_text, 'N', 'N', :p_fp, :p_uid,
-     :p_inreply, :p_refs, :p_thread, :p_gmail_thread_id, :p_blacklist)
+     :p_inreply, :p_refs, :p_thread, :p_gmail_thread_id,
+     CASE WHEN :p_gmail_thread_id IS NOT NULL THEN 'Y' ELSE 'N' END,
+     :p_blacklist)
 RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -819,12 +1169,27 @@ RETURNING ID INTO :p_id";
 
         try
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+          await cmd.ExecuteNonQueryAsync(ct);
 
-            if (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal o)
-                return o.ToInt32();
+if (!string.IsNullOrWhiteSpace(gmailThreadId))
+{
+    await EnsureGmailThreadForConversationAsync(
+        conn,
+        casellaId,
+        messageId,
+        message,
+        gmailThreadId,
+        ct);
+}
 
-            return Convert.ToInt32(outId.Value?.ToString());
+if (outId.Value is
+    Oracle.ManagedDataAccess.Types.OracleDecimal od)
+{
+    return od.ToInt32();
+}
+
+return Convert.ToInt32(
+    outId.Value?.ToString());
         }
         catch (OracleException ex) when (ex.Number == 1)
         {
@@ -2643,11 +3008,12 @@ WHERE LOWER(EMAIL) = :p_email
 INSERT INTO SGAPP.EMAIL_INVIATE
     (CASELLA_ID, UTENTE, CORPO_TESTO, DATA_INVIO, CORPO_HTML,
      DESTINATARI, OGGETTO, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR,
-     THREAD_KEY, CC, BCC, FOLDER_PATH, MESSAGE_UID, GMAIL_THREAD_ID)
+     THREAD_KEY, CC, BCC, FOLDER_PATH, MESSAGE_UID, GMAIL_THREAD_ID, THREAD_ALIGNED)
 VALUES
     (:p_cid, :p_utente, :p_text, :p_dt, :p_html,
      :p_to, :p_subj, :p_mid, :p_inreply, :p_refs,
-     :p_thread, :p_cc, :p_bcc, :p_fp, :p_uid, :p_gmail_thread_id)
+     :p_thread, :p_cc, :p_bcc, :p_fp, :p_uid, :p_gmail_thread_id,
+     CASE WHEN :p_gmail_thread_id IS NOT NULL THEN 'Y' ELSE 'N' END)
 RETURNING ID INTO :p_id";
 
         await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
@@ -2704,12 +3070,27 @@ RETURNING ID INTO :p_id";
 
         try
         {
-            await cmd.ExecuteNonQueryAsync(ct);
+          await cmd.ExecuteNonQueryAsync(ct);
 
-            if (outId.Value is Oracle.ManagedDataAccess.Types.OracleDecimal od)
+            if (!string.IsNullOrWhiteSpace(gmailThreadId))
+            {
+                await EnsureGmailThreadForConversationAsync(
+                    conn,
+                    casellaId,
+                    messageId,
+                    message,
+                    gmailThreadId,
+                    ct);
+            }
+
+            if (outId.Value is
+                Oracle.ManagedDataAccess.Types.OracleDecimal od)
+            {
                 return od.ToInt32();
+            }
 
-            return Convert.ToInt32(outId.Value?.ToString());
+            return Convert.ToInt32(
+                outId.Value?.ToString());
         }
         catch (OracleException ex) when (ex.Number == 1)
         {
@@ -2720,6 +3101,331 @@ RETURNING ID INTO :p_id";
             throw;
         }
     }
+
+   private async Task EnsureGmailThreadForConversationAsync(
+    OracleConnection conn,
+    int casellaId,
+    string currentMessageId,
+    MimeMessage message,
+    string gmailThreadId,
+    CancellationToken ct)
+{
+    var normalizedThreadId = gmailThreadId?.Trim();
+
+    if (string.IsNullOrWhiteSpace(normalizedThreadId))
+        return;
+
+    var initialMessageIds = new HashSet<string>(
+        StringComparer.OrdinalIgnoreCase);
+
+    AddNormalizedMessageId(initialMessageIds, currentMessageId);
+    AddNormalizedMessageId(initialMessageIds, message.InReplyTo);
+
+    if (message.References != null)
+    {
+        foreach (var reference in message.References)
+            AddNormalizedMessageId(initialMessageIds, reference);
+    }
+
+    await PropagateGmailThreadAsync(
+        conn,
+        casellaId,
+        initialMessageIds,
+        normalizedThreadId,
+        ct);
+}
+
+private async Task PropagateGmailThreadAsync(
+    OracleConnection conn,
+    int casellaId,
+    IEnumerable<string> initialMessageIds,
+    string gmailThreadId,
+    CancellationToken ct)
+{
+    if (string.IsNullOrWhiteSpace(gmailThreadId))
+        return;
+
+    var knownMessageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    var pendingMessageIds = new Queue<string>();
+
+    foreach (var value in initialMessageIds)
+    {
+        var normalized = NormalizeMessageId(value);
+
+        if (string.IsNullOrWhiteSpace(normalized))
+            continue;
+
+        if (knownMessageIds.Add(normalized))
+            pendingMessageIds.Enqueue(normalized);
+    }
+
+    if (pendingMessageIds.Count == 0)
+        return;
+
+    const int batchSize = 100;
+    const int maxIdentifiers = 2000;
+
+    while (pendingMessageIds.Count > 0 &&
+           knownMessageIds.Count <= maxIdentifiers)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var currentBatch = new List<string>(batchSize);
+
+        while (pendingMessageIds.Count > 0 &&
+               currentBatch.Count < batchSize)
+        {
+            currentBatch.Add(pendingMessageIds.Dequeue());
+        }
+
+        await UpdateThreadByMessageIdsAsync(
+            conn,
+            casellaId,
+            currentBatch,
+            gmailThreadId,
+            ct);
+
+        var linkedIdentifiers = await LoadLinkedThreadIdentifiersAsync(
+            conn,
+            casellaId,
+            currentBatch,
+            ct);
+
+        foreach (var linked in linkedIdentifiers)
+        {
+            var normalized = NormalizeMessageId(linked);
+
+            if (string.IsNullOrWhiteSpace(normalized))
+                continue;
+
+            if (knownMessageIds.Add(normalized))
+                pendingMessageIds.Enqueue(normalized);
+        }
+    }
+
+    if (knownMessageIds.Count > maxIdentifiers)
+    {
+        _logger.LogWarning(
+            "Propagazione thread interrotta per limite: casellaId={CasellaId}, thread={Thread}, ids={Count}",
+            casellaId,
+            gmailThreadId,
+            knownMessageIds.Count);
+    }
+}
+
+private static async Task UpdateThreadByMessageIdsAsync(
+    OracleConnection conn,
+    int casellaId,
+    IReadOnlyList<string> messageIds,
+    string gmailThreadId,
+    CancellationToken ct)
+{
+    if (messageIds.Count == 0)
+        return;
+
+    var placeholders = messageIds
+        .Select((_, index) => $":p_mid_{index}")
+        .ToList();
+
+    var inClause = string.Join(", ", placeholders);
+
+    var updateRicevute = $@"
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET GMAIL_THREAD_ID = :p_thread,
+       THREAD_KEY      = :p_thread,
+       THREAD_ALIGNED  = 'Y'
+ WHERE CASELLA_ID = :p_cid
+   AND LOWER(TRIM(MESSAGE_ID)) IN ({inClause})
+   AND (
+          NVL(TRIM(GMAIL_THREAD_ID), '#') <> :p_thread_cmp
+       OR NVL(TRIM(THREAD_KEY), '#') <> :p_thread_cmp
+       OR NVL(THREAD_ALIGNED, 'N') <> 'Y'
+   )";
+
+    await ExecuteThreadUpdateAsync(
+        conn,
+        updateRicevute,
+        casellaId,
+        messageIds,
+        gmailThreadId,
+        ct);
+
+    var updateInviate = $@"
+UPDATE SGAPP.EMAIL_INVIATE
+   SET GMAIL_THREAD_ID = :p_thread,
+       THREAD_KEY      = :p_thread,
+       THREAD_ALIGNED  = 'Y'
+ WHERE CASELLA_ID = :p_cid
+   AND LOWER(TRIM(MESSAGE_ID)) IN ({inClause})
+   AND (
+          NVL(TRIM(GMAIL_THREAD_ID), '#') <> :p_thread_cmp
+       OR NVL(TRIM(THREAD_KEY), '#') <> :p_thread_cmp
+       OR NVL(THREAD_ALIGNED, 'N') <> 'Y'
+   )";
+
+    await ExecuteThreadUpdateAsync(
+        conn,
+        updateInviate,
+        casellaId,
+        messageIds,
+        gmailThreadId,
+        ct);
+}
+private static async Task ExecuteThreadUpdateAsync(
+    OracleConnection conn,
+    string sql,
+    int casellaId,
+    IReadOnlyList<string> messageIds,
+    string gmailThreadId,
+    CancellationToken ct)
+{
+    await using var cmd = new OracleCommand(sql, conn)
+    {
+        BindByName = true
+    };
+
+    cmd.Parameters.Add(
+        "p_thread",
+        OracleDbType.Varchar2,
+        128).Value = gmailThreadId;
+
+    cmd.Parameters.Add(
+        "p_cid",
+        OracleDbType.Int32).Value = casellaId;
+
+    cmd.Parameters.Add(
+        "p_thread_cmp",
+        OracleDbType.Varchar2,
+        128).Value = gmailThreadId;
+
+    for (var index = 0;
+         index < messageIds.Count;
+         index++)
+    {
+        cmd.Parameters.Add(
+            $"p_mid_{index}",
+            OracleDbType.Varchar2,
+            500).Value = messageIds[index].ToLowerInvariant();
+    }
+
+    await cmd.ExecuteNonQueryAsync(ct);
+}
+private async Task<HashSet<string>>
+    LoadLinkedThreadIdentifiersAsync(
+        OracleConnection conn,
+        int casellaId,
+        IReadOnlyList<string> knownMessageIds,
+        CancellationToken ct)
+{
+    var result = new HashSet<string>(
+        StringComparer.OrdinalIgnoreCase);
+
+    if (knownMessageIds.Count == 0)
+        return result;
+
+    var conditions = knownMessageIds
+        .Select((_, index) => $@"
+(
+       LOWER(TRIM(MESSAGE_ID)) = :p_search_{index}
+    OR LOWER(TRIM(IN_REPLY_TO)) = :p_search_{index}
+    OR DBMS_LOB.INSTR(
+           LOWER(REFERENCES_HDR),
+           :p_search_{index}
+       ) > 0
+)")
+        .ToList();
+
+    var identifierConditions =
+        string.Join(" OR ", conditions);
+
+    var sql = $@"
+SELECT
+    TO_CLOB(MESSAGE_ID)     AS MESSAGE_ID,
+    TO_CLOB(IN_REPLY_TO)    AS IN_REPLY_TO,
+    TO_CLOB(REFERENCES_HDR) AS REFERENCES_HDR
+FROM SGAPP.EMAIL_RICEVUTE
+WHERE CASELLA_ID = :p_cid
+  AND ({identifierConditions})
+
+UNION ALL
+
+SELECT
+    TO_CLOB(MESSAGE_ID)     AS MESSAGE_ID,
+    TO_CLOB(IN_REPLY_TO)    AS IN_REPLY_TO,
+    TO_CLOB(REFERENCES_HDR) AS REFERENCES_HDR
+FROM SGAPP.EMAIL_INVIATE
+WHERE CASELLA_ID = :p_cid
+  AND ({identifierConditions})";
+
+    await using var cmd = new OracleCommand(sql, conn)
+    {
+        BindByName = true
+    };
+
+    cmd.Parameters.Add(
+        "p_cid",
+        OracleDbType.Int32).Value = casellaId;
+
+    for (var index = 0;
+         index < knownMessageIds.Count;
+         index++)
+    {
+        cmd.Parameters.Add(
+            $"p_search_{index}",
+            OracleDbType.Varchar2,
+            500).Value =
+                knownMessageIds[index].ToLowerInvariant();
+    }
+
+    await using var reader =
+        await cmd.ExecuteReaderAsync(ct);
+
+    while (await reader.ReadAsync(ct))
+    {
+        var messageId = ReadOracleText(reader, 0);
+        var inReplyTo = ReadOracleText(reader, 1);
+        var references = ReadOracleText(reader, 2);
+
+        AddNormalizedMessageId(result, messageId);
+        AddNormalizedMessageId(result, inReplyTo);
+
+        foreach (var reference in
+                 ExtractMessageIdsFromReferences(references))
+        {
+            AddNormalizedMessageId(result, reference);
+        }
+    }
+
+    return result;
+}
+private static void AddNormalizedMessageId(
+    HashSet<string> destination,
+    string? value)
+{
+    var normalized = NormalizeMessageId(value);
+
+    if (!string.IsNullOrWhiteSpace(normalized))
+        destination.Add(normalized);
+}
+private static string? ReadOracleText(
+    OracleDataReader reader,
+    int ordinal)
+{
+    if (reader.IsDBNull(ordinal))
+        return null;
+
+    var value = reader.GetValue(ordinal);
+
+    if (value is
+        Oracle.ManagedDataAccess.Types.OracleClob clob)
+    {
+        return clob.IsNull
+            ? null
+            : clob.Value;
+    }
+
+    return Convert.ToString(value);
+}
 
     private async Task<List<(int AllegatoId, string FileName, string Mime, string PartSpec)>> SaveSentAttachmentsMetadata(
     OracleConnection conn,

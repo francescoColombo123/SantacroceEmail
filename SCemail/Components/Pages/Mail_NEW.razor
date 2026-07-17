@@ -2480,119 +2480,16 @@ else
         if (page == null || page.Count == 0)
             return page ?? new();
 
-        var useReceivedOnlyCounts =
-            string.Equals(_folder, "inbox", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(_folder, "spam", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(_folder, "unassigned", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(_folder, "mailfollowed", StringComparison.OrdinalIgnoreCase);
+        var ids = page.Select(x => x.Id).Distinct().ToList();
+        var byId = await MailSvc.GetConversationCountsByThreadAsync(ids);
 
-        var keys = page
-            .Select(x => x.ThreadKey?.Trim().ToUpperInvariant())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        var fallbackCounts = new Dictionary<int, int>();
-
-        var casellaIdsForCount = (_caselleIds ?? new List<int>())
-            .Distinct()
-            .ToList();
-        var hasCasellaFilter = casellaIdsForCount.Count > 0;
-        var casellaInClause = hasCasellaFilter
-            ? string.Join(",", casellaIdsForCount.Select((_, i) => $":cid{i}"))
-            : "";
-        var casellaWhereClause = hasCasellaFilter
-            ? $" AND CASELLA_ID IN ({casellaInClause})"
-            : "";
-
-        await using var db = await DbFactory.CreateDbContextAsync();
-        await db.Database.OpenConnectionAsync();
-
-        if (keys.Count > 0)
-        {
-            var inClause = string.Join(",", keys.Select((_, i) => $":k{i}"));
-
-                        var sql = useReceivedOnlyCounts
-                                ? $@"
-SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
-FROM SGAPP.EMAIL_RICEVUTE
-WHERE NVL(ELIMINATO, 'N') = 'N'
-{casellaWhereClause}
-    AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
-GROUP BY UPPER(TRIM(THREAD_KEY))"
-                                : $@"
-SELECT THREAD_KEY, SUM(CNT) AS CNT
-FROM (
-    SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
-    FROM SGAPP.EMAIL_RICEVUTE
-    WHERE NVL(ELIMINATO, 'N') = 'N'
-{casellaWhereClause}
-      AND UPPER(TRIM(THREAD_KEY)) IN ({inClause})
-    GROUP BY UPPER(TRIM(THREAD_KEY))
-
-    UNION ALL
-
-    SELECT UPPER(TRIM(THREAD_KEY)) AS THREAD_KEY, COUNT(*) AS CNT
-    FROM SGAPP.EMAIL_INVIATE
-    WHERE UPPER(TRIM(THREAD_KEY)) IN ({inClause})
-    GROUP BY UPPER(TRIM(THREAD_KEY))
-)
-GROUP BY THREAD_KEY";
-
-            await using var cmd = db.Database.GetDbConnection().CreateCommand();
-            cmd.CommandText = sql;
-            cmd.CommandTimeout = 5;
-
-            for (int i = 0; i < keys.Count; i++)
+        return page
+            .Select(x =>
             {
-                var p = cmd.CreateParameter();
-                p.ParameterName = $"k{i}";
-                p.Value = keys[i]!;
-                cmd.Parameters.Add(p);
-            }
-
-            for (int i = 0; i < casellaIdsForCount.Count; i++)
-            {
-                var p = cmd.CreateParameter();
-                p.ParameterName = $"cid{i}";
-                p.Value = casellaIdsForCount[i];
-                cmd.Parameters.Add(p);
-            }
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
-            {
-                var key = reader.IsDBNull(0) ? "" : reader.GetString(0);
-                var count = reader.IsDBNull(1) ? 1 : Convert.ToInt32(reader.GetValue(1));
-
-                if (!string.IsNullOrWhiteSpace(key))
-                    counts[key] = count;
-            }
-        }
-
-        var noThreadKeyIds = page
-            .Where(x => string.IsNullOrWhiteSpace(x.ThreadKey))
-            .Select(x => x.Id)
-            .Distinct()
+                var count = byId.TryGetValue(x.Id, out var c) ? c : 1;
+                return x with { ThreadLen = Math.Max(count, 1) };
+            })
             .ToList();
-
-        foreach (var emailId in noThreadKeyIds)
-            fallbackCounts[emailId] = await CountThreadMessagesAsync(db, emailId);
-
-        return page.Select(x =>
-        {
-            var key = x.ThreadKey?.Trim().ToUpperInvariant();
-
-            var count = !string.IsNullOrWhiteSpace(key) && counts.TryGetValue(key, out var byThreadKey)
-                ? byThreadKey
-                : fallbackCounts.TryGetValue(x.Id, out var byHeaders)
-                    ? byHeaders
-                : 1;
-
-            return x with { ThreadLen = Math.Max(count, 1) };
-        }).ToList();
     }
 
     private async Task<int> CountThreadMessagesAsync(MailDbContext db, int emailId)
@@ -3505,49 +3402,43 @@ FROM (
         _postIts = await postItService.GetByUtenteAsync(_utente!);
     }
 
-    private async Task OpenEmailAndMarkRead(EmailListItem_NEW item, string? fromSection)
+    private Task OpenEmailAndMarkRead(
+    EmailListItem_NEW item,
+    string? fromSection)
+{
+    MarkEmailAsReadInAllLists(item.Id);
+    StateHasChanged();
+
+    var query = new Dictionary<string, string?>
     {
-        try
-        {
-            MarkEmailAsReadInAllLists(item.Id);
-            StateHasChanged();
+        ["fromFolder"] = _folder,
+        ["fromSection"] = fromSection,
+        ["assegnatoA"] = item.AssegnatoA
+    };
 
-            if (_folder == "mailfollowed")
-                await MailSvc.MarkEmailSeguitaAsReadAsync(item.Id, _utente!);
+    var idsCorrenti = string.IsNullOrWhiteSpace(fromSection)
+        ? _emails
+            .Select(x => x.Id)
+            .Distinct()
+            .ToList()
+        : _sezioniVm
+            .FirstOrDefault(s => s.Nome == fromSection)?
+            .Emails
+            .Select(x => x.Id)
+            .Distinct()
+            .ToList() ?? new List<int>();
 
-            await MailSvc.SegnaLettaAsync(item.Id, _utente!);
-            await MailSvc.SegnaNotificheVisteAsync(item.Id, _utente!);
+    if (idsCorrenti.Count > 0)
+        query["ids"] = string.Join(",", idsCorrenti);
 
-            var query = new Dictionary<string, string?>
-            {
-                ["fromFolder"] = _folder,
-                ["fromSection"] = fromSection,
-                ["assegnatoA"] = item.AssegnatoA
+    var url = QueryHelpers.AddQueryString(
+        $"/mail-detail/{item.Id}/{_cp}",
+        query);
 
-            };
+    Nav.NavigateTo(url);
 
-            var idsCorrenti = string.IsNullOrWhiteSpace(fromSection)
-                ? _emails.Select(x => x.Id).Distinct().ToList()
-                : _sezioniVm
-                    .FirstOrDefault(s => s.Nome == fromSection)?
-                    .Emails.Select(x => x.Id).Distinct().ToList() ?? new();
-
-            if (idsCorrenti.Count > 0)
-                query["ids"] = string.Join(",", idsCorrenti);
-
-            var url = QueryHelpers.AddQueryString(
-                $"/mail-detail/{item.Id}/{_cp}",
-                query);
-
-            Nav.NavigateTo(url);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"❌ Errore in OpenEmailAndMarkRead: {ex.Message}");
-            Snackbar.Add("Errore durante apertura email", Severity.Error);
-        }
-    }
-
+    return Task.CompletedTask;
+}
     private static async Task SafeForget(Func<Task> work)
     {
         try { await work(); }
