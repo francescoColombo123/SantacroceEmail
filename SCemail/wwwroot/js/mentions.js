@@ -43,22 +43,3 @@ window.mentionsInterop.scrollActiveIntoView = function () {
     }
 };
 
-window.composeInterop = window.composeInterop || {};
-
-window.composeInterop.replaceSignature = function (editorId, signatureHtml) {
-    const root = document.querySelector("#" + editorId + " .ql-editor");
-    if (!root) return;
-
-    root.querySelectorAll('[data-sc-signature="1"]').forEach(x => x.remove());
-
-    if (!signatureHtml || !signatureHtml.trim()) return;
-
-    const wrapper = document.createElement("div");
-    wrapper.setAttribute("data-sc-signature", "1");
-    wrapper.innerHTML = signatureHtml;
-
-    root.appendChild(document.createElement("br"));
-    root.appendChild(wrapper);
-
-    root.dispatchEvent(new Event("input", { bubbles: true }));
-};

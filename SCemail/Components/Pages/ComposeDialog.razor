@@ -203,7 +203,7 @@
         <div style="margin-top: 12px;">
             <label class="msg-label">Messaggio</label>
 
-            <div class="compose-editor-shell">
+           <div class="compose-editor-shell">
                 <div id="composeToolbar">
                     <button class="ql-bold"></button>
                     <button class="ql-italic"></button>
@@ -219,11 +219,13 @@
                 @if (!string.IsNullOrWhiteSpace(_firmaHtml))
                 {
                     <div class="compose-signature-box">
-                        @((MarkupString)NormalizeFirmaHtml(_firmaHtml))
+                        <div class="compose-signature-preview">
+                            @((MarkupString)NormalizeFirmaHtml(_firmaHtml))
+                        </div>
                     </div>
                 }
 
-                @if (!string.IsNullOrWhiteSpace(_quoteHtml))
+                @if (!IsForward && !string.IsNullOrWhiteSpace(GetEffectiveQuoteHtml()))
                 {
                     <div class="compose-gmail-quote">
                         <button type="button"
@@ -236,12 +238,29 @@
                         @if (_showQuoteDetails)
                         {
                             <div class="compose-quote-box">
-                                <div class="compose-quote-title">Messaggio precedente</div>
+                                <div class="compose-quote-title">
+                                    Messaggio precedente
+                                </div>
+
                                 <div class="compose-quote-body">
-                                    @((MarkupString)_quoteHtml)
+                                    @((MarkupString)GetEffectiveQuoteHtml())
                                 </div>
                             </div>
                         }
+                    </div>
+                }
+
+                @if (IsForward &&
+                    !string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+                {
+                    <div class="forward-original-wrapper">
+                        <div class="forward-original-label">
+                            Messaggio inoltrato
+                        </div>
+
+                        <div class="forward-original-content">
+                            @((MarkupString)ForwardOriginalHtml)
+                        </div>
                     </div>
                 }
             </div>
@@ -427,13 +446,13 @@
     }
 
     #editor .ql-container {
-        min-height: 330px !important;
-        height: 330px !important;
+        min-height: 190px !important;
+        height: 190px !important;
         border: none !important;
     }
 
     #editor .ql-editor {
-        min-height: 330px !important;
+        min-height: 190px !important;
         font-family: "Courier New", Courier, monospace !important;
         font-size: 14px;
         line-height: 1.5;
@@ -708,15 +727,15 @@
     }
 
     .compose-signature-box {
-        margin-top: 18px;
-        padding-top: 12px;
+        margin-top: 8px;
+        padding-top: 8px;
         color: #5f6368;
         font-size: 13px;
         border-top: 1px solid #e0e0e0;
     }
 
     .compose-signature-preview {
-        margin-top: 12px;
+        margin-top: 6px;
         font-family: "Courier New", Courier, monospace;
         font-size: 14px;
         line-height: 1.5;
@@ -833,7 +852,7 @@
     .compose-gmail-quote {
         border-top: 1px solid #eef0f3;
         background: #fff;
-        padding: 8px 14px 12px 14px;
+        padding: 6px 14px 8px 14px;
     }
 
     .gmail-quote-dots {
@@ -872,17 +891,15 @@
     }
 
     .compose-quote-body {
-        border-left: 2px solid #d0d7de;
-        padding-left: 12px;
-    }
-
-    .compose-quote-body {
-        font-family: "Courier New", Courier, monospace;
-        font-size: 14px;
-        line-height: 1.45;
+    border-left: 2px solid #d0d7de;
+    padding-left: 12px;
+    font-family: "Courier New", Courier, monospace;
+    font-size: 14px;
+    line-height: 1.45;
         white-space: normal;
-        word-break: break-word;
-    }
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
     
     .compose-layout {
         display: grid;
@@ -942,12 +959,12 @@
     }
 
     #editor .ql-container {
-        min-height: 260px !important;
-        height: 260px !important;
+        min-height: 190px !important;
+        height: 190px !important;
     }
 
     #editor .ql-editor {
-        min-height: 260px !important;
+        min-height: 190px !important;
     }
 
         #editor .ql-editor blockquote {
@@ -981,6 +998,67 @@
     }
 
     }
+    .forward-original-wrapper {
+    margin-top: 0;
+    border-top: 1px solid #e4e7ec;
+    background: #fff;
+    min-width: 0;
+}
+
+.forward-original-label {
+    padding: 9px 14px;
+    background: #f8fafc;
+    border-bottom: 1px solid #eaecf0;
+    color: #667085;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .35px;
+}
+
+.forward-original-content {
+    max-height: 380px;
+    padding: 14px 16px;
+    overflow: auto;
+    color: #202124;
+    background: #fff;
+    font-family: Arial, Helvetica, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.forward-original-content * {
+    box-sizing: border-box;
+}
+.forward-original-content table,
+.forward-original-content tbody,
+.forward-original-content tr,
+.forward-original-content td,
+.forward-original-content th {
+    white-space: normal;
+}
+.forward-original-content img {
+    max-width: 100% !important;
+    height: auto !important;
+}
+
+.forward-original-content table {
+    max-width: 100% !important;
+    border-collapse: collapse;
+}
+
+.forward-original-content td,
+.forward-original-content th {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.forward-original-content pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
     </style>
 
 @code {
@@ -1000,6 +1078,7 @@
     [Parameter] public string? Bcc { get; set; }
     [Parameter] public long? DraftId { get; set; }   
     [Parameter] public bool IsForward { get; set; }
+    [Parameter] public string? ForwardOriginalHtml { get; set; }
     [Parameter] public List<MailService_NEW.OutgoingAttachment_NEW>? ForwardAttachments { get; set; }
     private bool _showCc;
     private bool _showBcc;
@@ -1103,15 +1182,30 @@
                 }
             }
         }
-        if (DraftId.HasValue)
-        {
-            SplitDraftBody(CorpoIniziale ?? "");
-        }
-        else
-        {
-            _bodyHtml = "";
-            _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
-        }
+       if (DraftId.HasValue)
+            {
+                SplitDraftBody(CorpoIniziale ?? "");
+            }
+            else if (IsForward)
+            {
+                /*
+                * Nell'inoltro Quill parte vuoto.
+                * La firma viene aggiunta da initQuill.
+                * Il messaggio inoltrato rimane in ForwardOriginalHtml.
+                */
+                _bodyHtml = "";
+                _quoteHtml = "";
+                _showQuoteDetails = false;
+            }
+            else
+            {
+                /*
+                * Risposta / rispondi a tutti.
+                */
+                _bodyHtml = "";
+                _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
+                _showQuoteDetails = false;
+            }
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
         _allRecipients = (recenti ?? new List<string>())
             .Select(ParseAddressToChip)
@@ -1167,54 +1261,171 @@
         }
     }
     private void SplitDraftBody(string html)
+{
+    html ??= "";
+
+    // Formato bozza robusto (v2) con marker espliciti.
+    if (TrySplitDraftV2(html, out var bodyV2, out var quoteV2, out var forwardV2))
     {
-        html ??= "";
-
-        var m = Regex.Match(
-            html,
-            @"(?is)<hr[^>]*>\s*<div>\s*<(b|strong)>\s*Messaggio precedente:\s*</\1>\s*</div>\s*<blockquote[^>]*>(?<quote>[\s\S]*?)</blockquote>"
-        );
-
-        if (!m.Success)
-        {
-            m = Regex.Match(
-                html,
-                @"(?is)Messaggio precedente:\s*(?<quote>[\s\S]*)"
-            );
-        }
-
-        if (m.Success)
-        {
-            var quoteStart = m.Index;
-            var beforeQuote = html[..quoteStart];
-            var quotePart = m.Groups["quote"].Value;
-
-            _quoteHtml = quotePart.Trim();
-
-            var firmaMatch = Regex.Match(
-                beforeQuote,
-                @"(?is)(<br\s*/?>\s*){0,3}Cordiali\s+saluti[\s\S]*$"
-            );
-
-            if (firmaMatch.Success)
-            {
-                var onlyBody = beforeQuote[..firmaMatch.Index].Trim();
-                _bodyHtml = string.IsNullOrWhiteSpace(HtmlToPlain(onlyBody))
-                    ? ExtractBodyBeforeSignature(beforeQuote)
-                    : onlyBody;
-            }
-            else
-            {
-                _bodyHtml = beforeQuote.Trim();
-            }
-        }
-        else
-        {
-            _bodyHtml = html;
-            _quoteHtml = "";
-        }
-        _bodyHtml = RemoveTrailingSignatures(_bodyHtml);
+        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(bodyV2));
+        _quoteHtml = NormalizeComposeSpacing(quoteV2);
+        ForwardOriginalHtml = forwardV2;
+        IsForward = !string.IsNullOrWhiteSpace(forwardV2);
         _showQuoteDetails = false;
+        return;
+    }
+
+    // Legacy recente: body + quote separati in wrapper div.
+    var replyMatch = Regex.Match(
+        html,
+        @"(?is)
+          <div[^>]*data-compose-body\s*=\s*[""']true[""'][^>]*>
+              (?<body>[\s\S]*?)
+          </div>
+          \s*
+          (?:<div[^>]*data-compose-quote\s*=\s*[""']true[""'][^>]*>
+              (?<quote>[\s\S]*?)
+          </div>)?",
+        RegexOptions.IgnorePatternWhitespace
+    );
+
+    if (replyMatch.Success && !Regex.IsMatch(html, @"data-forward-original\s*=\s*[""']true[""']", RegexOptions.IgnoreCase))
+    {
+        IsForward = false;
+
+        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
+            replyMatch.Groups["body"].Value.Trim()
+        ));
+
+        _quoteHtml = replyMatch.Groups["quote"].Success
+            ? NormalizeComposeSpacing(replyMatch.Groups["quote"].Value.Trim())
+            : "";
+
+        _showQuoteDetails = false;
+        return;
+    }
+
+    /*
+     * Prima controlliamo se è una bozza di inoltro.
+     */
+    var forwardMatch = Regex.Match(
+        html,
+        @"(?is)
+          <div[^>]*data-compose-body\s*=\s*[""']true[""'][^>]*>
+              (?<body>[\s\S]*?)
+          </div>
+          \s*
+          <div[^>]*data-forward-original\s*=\s*[""']true[""'][^>]*>
+              (?<forward>[\s\S]*?)
+          </div>",
+        RegexOptions.IgnorePatternWhitespace
+    );
+
+    if (forwardMatch.Success)
+    {
+        IsForward = true;
+
+        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
+            forwardMatch.Groups["body"].Value.Trim()
+        ));
+
+        ForwardOriginalHtml = forwardMatch
+            .Groups["forward"]
+            .Value
+            .Trim();
+
+        _quoteHtml = "";
+        _showQuoteDetails = false;
+
+        return;
+    }
+
+    /*
+     * Vecchia gestione delle risposte.
+     */
+    var m = Regex.Match(
+        html,
+        @"(?is)<hr[^>]*>\s*
+          <div>\s*
+          <(b|strong)>\s*
+          Messaggio precedente:
+          \s*</\1>\s*
+          </div>\s*
+          <blockquote[^>]*>
+          (?<quote>[\s\S]*?)
+          </blockquote>",
+        RegexOptions.IgnorePatternWhitespace
+    );
+
+    if (!m.Success)
+    {
+        m = Regex.Match(
+            html,
+            @"(?is)Messaggio precedente:\s*(?<quote>[\s\S]*)"
+        );
+    }
+
+    if (m.Success)
+    {
+        var quoteStart = m.Index;
+        var beforeQuote = html[..quoteStart];
+        var quotePart = m.Groups["quote"].Value;
+
+        _quoteHtml = NormalizeComposeSpacing(quotePart.Trim());
+        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(beforeQuote.Trim())));
+    }
+    else
+    {
+        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(html)));
+        _quoteHtml = "";
+    }
+
+    IsForward = false;
+    _showQuoteDetails = false;
+}
+
+    private const string DraftV2Start = "<!--SC_DRAFT_V2-->";
+    private const string DraftBodyStart = "<!--SC_BODY_START-->";
+    private const string DraftBodyEnd = "<!--SC_BODY_END-->";
+    private const string DraftQuoteStart = "<!--SC_QUOTE_START-->";
+    private const string DraftQuoteEnd = "<!--SC_QUOTE_END-->";
+    private const string DraftForwardStart = "<!--SC_FORWARD_START-->";
+    private const string DraftForwardEnd = "<!--SC_FORWARD_END-->";
+
+    private static bool TryExtractBetween(string source, string startMarker, string endMarker, out string value)
+    {
+        value = "";
+
+        var start = source.IndexOf(startMarker, StringComparison.Ordinal);
+        if (start < 0)
+            return false;
+
+        start += startMarker.Length;
+
+        var end = source.IndexOf(endMarker, start, StringComparison.Ordinal);
+        if (end < 0)
+            return false;
+
+        value = source[start..end].Trim();
+        return true;
+    }
+
+    private static bool TrySplitDraftV2(string html, out string body, out string quote, out string forward)
+    {
+        body = "";
+        quote = "";
+        forward = "";
+
+        if (string.IsNullOrWhiteSpace(html) || !html.Contains(DraftV2Start, StringComparison.Ordinal))
+            return false;
+
+        if (!TryExtractBetween(html, DraftBodyStart, DraftBodyEnd, out body))
+            return false;
+
+        TryExtractBetween(html, DraftQuoteStart, DraftQuoteEnd, out quote);
+        TryExtractBetween(html, DraftForwardStart, DraftForwardEnd, out forward);
+
+        return true;
     }
 
     private static string HtmlToPlain(string? html)
@@ -1242,34 +1453,86 @@
         return html.Trim();
     }
     private async Task OnCasellaChanged(string? value)
+{
+    value = value?.Trim();
+
+    if (_isSwitchingCasella ||
+        _isSavingDraft ||
+        _isDisposed)
     {
-        value = value?.Trim();
-
-        if (_isSwitchingCasella || _isSavingDraft || _isDisposed)
-            return;
-
-        if (string.Equals(_selectedCasella, value, StringComparison.OrdinalIgnoreCase))
-            return;
-
-        _isSwitchingCasella = true;
-
-        try
-        {
-            _selectedCasella = value;
-
-            await LoadFirmaAsync();
-            await InvokeAsync(StateHasChanged);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Errore cambio casella/firma");
-            Snackbar.Add("Errore durante il cambio casella ❌", Severity.Error);
-        }
-        finally
-        {
-            _isSwitchingCasella = false;
-        }
+        return;
     }
+
+    if (string.Equals(
+        _selectedCasella,
+        value,
+        StringComparison.OrdinalIgnoreCase))
+    {
+        return;
+    }
+
+    _isSwitchingCasella = true;
+
+    try
+    {
+        _selectedCasella = value;
+
+        /*
+         * Carica la firma associata alla nuova casella.
+         */
+        await LoadFirmaAsync();
+
+        /*
+         * Aggiorna realmente la firma dentro Quill.
+         * StateHasChanged da solo non basta perché Quill
+         * gestisce autonomamente il proprio DOM.
+         */
+        if (_quillInitialized)
+        {
+            /*
+             * Firma separata dal contenuto editabile:
+             * non tocchiamo il DOM di Quill per evitare
+             * duplicazioni/perdita testo durante switch casella.
+             */
+            _lastInitFirma = _firmaHtml ?? "";
+        }
+        else
+        {
+            /*
+             * Se Quill non è ancora pronto,
+             * la nuova firma verrà inserita durante initQuill.
+             */
+            _pendingQuillInit = true;
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+    catch (JSDisconnectedException)
+    {
+        // Il dialog o il circuito Blazor si sta chiudendo.
+    }
+    catch (TaskCanceledException)
+    {
+        // Navigazione o chiusura in corso.
+    }
+    catch (Exception ex)
+    {
+        Logger.LogError(
+            ex,
+            "Errore cambio casella/firma. Casella={Casella}",
+            value
+        );
+
+        Snackbar.Add(
+            "Errore durante il cambio della firma ❌",
+            Severity.Error
+        );
+    }
+    finally
+    {
+        _isSwitchingCasella = false;
+    }
+}
     private async Task LoadFirmaAsync()
     {
         _firmaHtml = "";
@@ -1281,7 +1544,10 @@
                 _firmaHtml = await MailSvc.GetFirmaUtenteAsync(Utente, _selectedCasella);
             }
 
-            if (string.IsNullOrWhiteSpace(_firmaHtml))
+            // Fallback solo se non c'e' una casella selezionata.
+            // Se l'utente sceglie una casella senza firma, non dobbiamo mostrare
+            // la firma di un'altra casella.
+            if (string.IsNullOrWhiteSpace(_firmaHtml) && string.IsNullOrWhiteSpace(_selectedCasella))
             {
                 var defaultFrom = await MailSvc.GetEmailAddressByUsernameAsync(Utente);
 
@@ -1486,13 +1752,19 @@
             );
         }
 
-        var bodyNow = DraftId.HasValue
+         var bodyNow = DraftId.HasValue
             ? (_bodyHtml ?? "")
             : "<p><br></p>";
 
         var quoteNow = _quoteHtml ?? "";
-        await LoadFirmaAsync();
-        var firmaText = _firmaHtml ?? "";
+
+        /*
+        * Non ricaricare qui la firma.
+        * È già stata caricata in OnInitializedAsync
+        * oppure in OnCasellaChanged.
+        */
+        var firmaText = "";
+
         Logger.LogWarning(
             "INIT QUILL DEBUG - BodyLen={BodyLen}, FirmaLen={FirmaLen}, QuoteLen={QuoteLen}, Firma=[{Firma}]",
             bodyNow?.Length ?? 0,
@@ -1554,7 +1826,7 @@
         safe = Regex.Replace(
             safe,
             @"\b(GRUPPO\s+SANTACROCE|EUROCEREALI\s+SRL)\b",
-            @"<span class=""firma-brand"">$1</span>",
+            @"<span style=""color:#003366;font-weight:700;font-style:italic;"">$1</span>",
             RegexOptions.IgnoreCase
         );
 
@@ -1669,23 +1941,35 @@
 
     private bool _isClosing;
     private string BuildBodyForDraft()
+{
+    var body = BuildBodyWithSignature(_bodyHtml);
+
+    if (IsForward)
     {
-        var body = CleanBeforeSend(_bodyHtml);
-        body = RemoveTrailingSignatures(body);
+        if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+            return body;
 
-        var quote = _quoteHtml ?? "";
-        var result = body;
-
-        if (!string.IsNullOrWhiteSpace(quote))
-        {
-            result += "<br><br><hr><div><b>Messaggio precedente:</b></div>" +
-                      "<blockquote style='border-left:2px solid #ccc;margin-left:8px;padding-left:12px;'>" +
-                      quote +
-                      "</blockquote>";
-        }
-        _showQuoteDetails = false;
-        return result;
+        /*
+         * Per ora salviamo editor e inoltro nello stesso HTML.
+         * In futuro sarà meglio avere una colonna separata.
+         */
+        return DraftV2Start +
+               DraftBodyStart + body + DraftBodyEnd +
+               DraftForwardStart + ForwardOriginalHtml + DraftForwardEnd;
     }
+
+    var quote = GetEffectiveQuoteHtml();
+
+    if (string.IsNullOrWhiteSpace(quote))
+    {
+        return DraftV2Start +
+               DraftBodyStart + body + DraftBodyEnd;
+    }
+
+    return DraftV2Start +
+           DraftBodyStart + body + DraftBodyEnd +
+           DraftQuoteStart + quote + DraftQuoteEnd;
+}
     private static string RemoveTrailingSignatures(string? html)
     {
         if (string.IsNullOrWhiteSpace(html))
@@ -1770,21 +2054,49 @@
     private bool _isSwitchingCasella;
     private bool _isDisposed;
     private string BuildBodyForSend()
+{
+     var body = BuildBodyWithSignature(_bodyHtml);
+
+    if (IsForward)
     {
-        var body = CleanBeforeSend(_bodyHtml);
-        var firma = NormalizeFirmaHtml(_firmaHtml);
-        var quote = _quoteHtml ?? "";
+        if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+            return body;
 
-        var result = body;
+        return $@"
+<div style=""font-family:Arial,Helvetica,sans-serif;
+            font-size:14px;
+            line-height:1.5;
+            color:#202124;"">
 
-        if (!string.IsNullOrWhiteSpace(firma))
-            result += "<br><br>" + firma;
+    <div>
+        {body}
+    </div>
 
-        if (!string.IsNullOrWhiteSpace(quote))
-            result += "<br><br><hr><div><b>Messaggio precedente:</b></div><blockquote style='border-left:2px solid #ccc;margin-left:8px;padding-left:12px;'>" + quote + "</blockquote>";
-
-        return result;
+    <div style=""margin-top:18px;"">
+        {ForwardOriginalHtml}
+    </div>
+</div>";
     }
+
+    var quote = GetEffectiveQuoteHtml();
+
+    if (string.IsNullOrWhiteSpace(quote))
+        return body;
+
+    return body +
+           @"<br><br>
+             <hr style=""border:0;border-top:1px solid #dadce0;"">
+             <div style=""margin:10px 0 6px;color:#5f6368;font-weight:600;"">
+                 Messaggio precedente:
+             </div>
+             <blockquote style=""
+                 border-left:2px solid #ccc;
+                 margin:0 0 0 8px;
+                 padding-left:12px;
+                 color:#5f6368;"">" +
+           quote +
+           "</blockquote>";
+}
     private static string RemoveQuoteGarbage(string? input)
 
     {
@@ -1889,6 +2201,26 @@
             @"<span style=""color:#003366;font-weight:700;font-style:italic;"">$1</span>",
             RegexOptions.IgnoreCase
         );
+    }
+
+    private string BuildBodyWithSignature(string? bodyHtml)
+    {
+        var body = CleanBeforeSend(bodyHtml);
+        var signature = FixFirmaHtml(NormalizeFirmaHtml(_firmaHtml));
+
+        var styledBody = string.IsNullOrWhiteSpace(body)
+            ? ""
+            : @"<div data-compose-user-body=""true"" style=""font-family:'Courier New',Courier,monospace;font-size:14px;line-height:1.5;color:#202124;"">" +
+              body +
+              "</div>";
+
+        if (string.IsNullOrWhiteSpace(signature))
+            return styledBody;
+
+        return styledBody +
+               @"<br><br><table role=""presentation"" cellpadding=""0"" cellspacing=""0"" border=""0"" style=""border-collapse:collapse;"" data-compose-signature=""true""><tr><td style=""font-family:'Courier New',Courier,monospace;font-size:14px;line-height:1.5;color:#202124;padding:0;margin:0;"">" +
+               signature +
+               "</td></tr></table>";
     }
 
     private async Task SaveDraft()
@@ -2315,6 +2647,21 @@
 
         return s.Trim();
     }
+
+    private static string NormalizeComposeSpacing(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var s = html.Trim();
+
+        s = Regex.Replace(s, @"(?is)^(?:\s|<br\s*/?>|<p><br></p>|&nbsp;)+", "");
+        s = Regex.Replace(s, @"(?is)(?:\s|<br\s*/?>|<p><br></p>|&nbsp;)+$", "");
+        s = Regex.Replace(s, @"(?is)(<br\s*/?>\s*){3,}", "<br><br>");
+        s = Regex.Replace(s, @"(?is)(<p><br></p>\s*){2,}", "<p><br></p>");
+
+        return s.Trim();
+    }
     private static string NormalizeEmailValue(string? value)
     {
         return (value ?? "").Trim();
@@ -2389,32 +2736,34 @@
         _bccList = bcc;
     }
 
-    private bool HasDraftContent()
-    {
-        var cleanHtml = _bodyHtml ?? "";
+  private bool HasDraftContent()
+        {
+            var hasRecipients =
+                _toList.Any() ||
+                _ccList.Any() ||
+                _bccList.Any();
 
-        cleanHtml = Regex.Replace(
-            cleanHtml,
-            @"<[^>]*data-sc-signature=""1""[^>]*>[\s\S]*?</[^>]+>",
-            "",
-            RegexOptions.IgnoreCase);
+            var hasSubject =
+                !string.IsNullOrWhiteSpace(_composeSubject);
 
-        cleanHtml = Regex.Replace(
-            cleanHtml,
-            @"<blockquote[^>]*data-sc-quote=""1""[^>]*>[\s\S]*?</blockquote>",
-            "",
-            RegexOptions.IgnoreCase);
+            var hasBody =
+                !string.IsNullOrWhiteSpace(
+                    HtmlToPlain(StripComposeSignature(_bodyHtml)));
 
-        var bodyPlain = Regex.Replace(cleanHtml, "<.*?>", " ")
-            .Replace("&nbsp;", " ")
-            .Trim();
+            var hasForward =
+                IsForward &&
+                !string.IsNullOrWhiteSpace(
+                    ForwardOriginalHtml);
 
-        bodyPlain = Regex.Replace(bodyPlain, @"\s+", " ");
+            var hasAttachments =
+                _outgoing.Any();
 
-        return !string.IsNullOrWhiteSpace(bodyPlain)
-               || _outgoing.Any();
-    }
-
+            return hasRecipients ||
+                hasSubject ||
+                hasBody ||
+                hasForward ||
+                hasAttachments;
+        }
     private static string PrepareQuoteForEditor(string? html)
     {
         if (string.IsNullOrWhiteSpace(html))
@@ -2427,6 +2776,62 @@
         s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
 
         return s;
+    }
+
+    private string GetEffectiveQuoteHtml()
+    {
+        if (!string.IsNullOrWhiteSpace(_quoteHtml))
+            return _quoteHtml;
+
+        // Fallback solo in nuova risposta (non in bozza riaperta)
+        // per non riutilizzare accidentalmente il corpo bozza come quote.
+        if (!DraftId.HasValue && !string.IsNullOrWhiteSpace(CorpoIniziale))
+            return PrepareQuoteForEditor(CorpoIniziale);
+
+        return "";
+    }
+
+    private static string StripComposeSignature(string? html)
+    {
+        if (string.IsNullOrWhiteSpace(html))
+            return "";
+
+        var s = html;
+
+        s = Regex.Replace(
+            s,
+            @"(?is)<div[^>]*data-signature-start\s*=\s*[\""']true[\""'][^>]*>.*?</div>\s*<div[^>]*class\s*=\s*[\""'][^\""']*compose-signature[^\""']*[\""'][^>]*>.*?</div>\s*<div[^>]*data-signature-end\s*=\s*[\""']true[\""'][^>]*>.*?</div>",
+            ""
+        );
+
+        s = Regex.Replace(
+            s,
+            @"(?is)<div[^>]*class\s*=\s*[\""'][^\""']*compose-signature[^\""']*[\""'][^>]*>.*?</div>",
+            ""
+        );
+
+        s = Regex.Replace(
+            s,
+            @"(?is)<div[^>]*data-sc-signature\s*=\s*[\""']1[\""'][^>]*>.*?</div>",
+            ""
+        );
+
+        s = Regex.Replace(
+            s,
+            @"(?is)<div[^>]*data-compose-signature\s*=\s*[\""']true[\""'][^>]*>.*?</div>",
+            ""
+        );
+
+        s = Regex.Replace(
+            s,
+            @"(?is)<table[^>]*data-compose-signature\s*=\s*[\""']true[\""'][^>]*>[\s\S]*?</table>",
+            ""
+        );
+
+        s = Regex.Replace(s, @"(?is)(<br\s*/?>\s*){3,}", "<br><br>");
+        s = Regex.Replace(s, @"(?is)(?:\s|<br\s*/?>|<p><br></p>)+$", "");
+
+        return s.Trim();
     }
 
 }

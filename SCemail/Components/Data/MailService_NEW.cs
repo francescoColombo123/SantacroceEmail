@@ -907,18 +907,23 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
     await using var conn = await GetOpenConnectionAsync();
 
     const string seedSql = @"
-SELECT
-    CASELLA_ID,
-    NULLIF(TRIM(THREAD_KEY), '') AS THREAD_KEY,
-    NULLIF(TRIM(GMAIL_THREAD_ID), '') AS GMAIL_THREAD_ID,
-    NULLIF(TRIM(MESSAGE_ID), '') AS MESSAGE_ID
-FROM SGAPP.EMAIL_RICEVUTE
-WHERE ID = :emailId";
+    SELECT
+        CASELLA_ID,
+        LOWER(
+            TRIM(
+                COALESCE(
+                    NULLIF(TRIM(THREAD_KEY), ''),
+                    NULLIF(TRIM(GMAIL_THREAD_ID), ''),
+                    NULLIF(TRIM(MESSAGE_ID), ''),
+                    'SINGLE_R_' || TO_CHAR(ID)
+                )
+            )
+        ) AS RESOLVED_THREAD_KEY
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE ID = :emailId";
 
     int? casellaId = null;
-    string? threadKey = null;
-    string? gmailThreadId = null;
-    string? messageId = null;
+    string? resolvedThreadKey = null;
 
     await using (var seedCmd = new OracleCommand(seedSql, conn))
     {
@@ -938,17 +943,9 @@ WHERE ID = :emailId";
             ? null
             : reader.GetInt32(0);
 
-        threadKey = reader.IsDBNull(1)
-            ? null
-            : reader.GetString(1);
-
-        gmailThreadId = reader.IsDBNull(2)
-            ? null
-            : reader.GetString(2);
-
-        messageId = reader.IsDBNull(3)
-            ? null
-            : reader.GetString(3);
+        resolvedThreadKey = reader.IsDBNull(1)
+        ? null
+        : reader.GetString(1);
     }
 
     /*
@@ -996,26 +993,18 @@ FROM (
     LEFT JOIN SGAPP.CASELLEPOSTA cp
         ON cp.ID = r.CASELLA_ID
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND (:casellaId IS NULL OR r.CASELLA_ID = :casellaId)
-      AND (
-            (
-                :threadKey IS NOT NULL
-                AND r.THREAD_KEY = :threadKey
+    AND r.CASELLA_ID = :casellaId
+    AND LOWER(
+            TRIM(
+                COALESCE(
+                    NULLIF(TRIM(r.THREAD_KEY), ''),
+                    NULLIF(TRIM(r.GMAIL_THREAD_ID), ''),
+                    NULLIF(TRIM(r.MESSAGE_ID), ''),
+                    'SINGLE_R_' || TO_CHAR(r.ID)
+                )
             )
-         OR (
-                :threadKey IS NULL
-                AND :gmailThreadId IS NOT NULL
-                AND r.GMAIL_THREAD_ID = :gmailThreadId
-            )
-         OR (
-                :threadKey IS NULL
-                AND :gmailThreadId IS NULL
-                AND :messageId IS NOT NULL
-                AND r.MESSAGE_ID = :messageId
-            )
-      )
-
-    UNION ALL
+        ) = :resolvedThreadKey
+        UNION ALL
 
     SELECT
         i.ID AS ID,
@@ -1035,24 +1024,17 @@ FROM (
         TO_CLOB(i.THREAD_KEY) AS THREAD_KEY,
         TO_CLOB('I') AS TIPO
     FROM SGAPP.EMAIL_INVIATE i
-    WHERE (:casellaId IS NULL OR i.CASELLA_ID = :casellaId)
-      AND (
-            (
-                :threadKey IS NOT NULL
-                AND i.THREAD_KEY = :threadKey
+    WHERE i.CASELLA_ID = :casellaId
+  AND LOWER(
+        TRIM(
+            COALESCE(
+                NULLIF(TRIM(i.THREAD_KEY), ''),
+                NULLIF(TRIM(i.GMAIL_THREAD_ID), ''),
+                NULLIF(TRIM(i.MESSAGE_ID), ''),
+                'SINGLE_I_' || TO_CHAR(i.ID)
             )
-         OR (
-                :threadKey IS NULL
-                AND :gmailThreadId IS NOT NULL
-                AND i.GMAIL_THREAD_ID = :gmailThreadId
-            )
-         OR (
-                :threadKey IS NULL
-                AND :gmailThreadId IS NULL
-                AND :messageId IS NOT NULL
-                AND i.MESSAGE_ID = :messageId
-            )
-      )
+        )
+      ) = :resolvedThreadKey
 ) x
 ORDER BY x.DATA_EMAIL, x.ID";
 
@@ -1062,30 +1044,17 @@ ORDER BY x.DATA_EMAIL, x.ID";
     {
         cmd.BindByName = true;
 
-        cmd.Parameters
-            .Add("casellaId", OracleDbType.Int32)
-            .Value = casellaId.HasValue
-                ? casellaId.Value
-                : DBNull.Value;
+      cmd.Parameters
+    .Add("casellaId", OracleDbType.Int32)
+    .Value = casellaId.HasValue
+        ? casellaId.Value
+        : DBNull.Value;
 
-        cmd.Parameters
-            .Add("threadKey", OracleDbType.Varchar2, 500)
-            .Value = string.IsNullOrWhiteSpace(threadKey)
-                ? DBNull.Value
-                : threadKey;
-
-        cmd.Parameters
-            .Add("gmailThreadId", OracleDbType.Varchar2, 500)
-            .Value = string.IsNullOrWhiteSpace(gmailThreadId)
-                ? DBNull.Value
-                : gmailThreadId;
-
-        cmd.Parameters
-            .Add("messageId", OracleDbType.Varchar2, 500)
-            .Value = string.IsNullOrWhiteSpace(messageId)
-                ? DBNull.Value
-                : messageId;
-
+cmd.Parameters
+    .Add("resolvedThreadKey", OracleDbType.Varchar2, 500)
+    .Value = string.IsNullOrWhiteSpace(resolvedThreadKey)
+        ? DBNull.Value
+        : resolvedThreadKey;
         await using var reader =
             await cmd.ExecuteReaderAsync();
 
@@ -1145,6 +1114,29 @@ ORDER BY x.DATA_EMAIL, x.ID";
 
     return list;
 }
+private const string ReceivedThreadKeySql = @"
+LOWER(
+    TRIM(
+        COALESCE(
+            NULLIF(TRIM(r.THREAD_KEY), ''),
+            NULLIF(TRIM(r.GMAIL_THREAD_ID), ''),
+            NULLIF(TRIM(r.MESSAGE_ID), ''),
+            'SINGLE_R_' || TO_CHAR(r.ID)
+        )
+    )
+)";
+
+private const string SentThreadKeySql = @"
+LOWER(
+    TRIM(
+        COALESCE(
+            NULLIF(TRIM(i.THREAD_KEY), ''),
+            NULLIF(TRIM(i.GMAIL_THREAD_ID), ''),
+            NULLIF(TRIM(i.MESSAGE_ID), ''),
+            'SINGLE_I_' || TO_CHAR(i.ID)
+        )
+    )
+)";
 private static string NormalizeMessageId(
     string? value)
 {
@@ -2578,7 +2570,7 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
             return list;
         }
 
-        private async Task<Dictionary<int, int>> GetRealThreadCountsAsync(
+private async Task<Dictionary<int, int>> GetRealThreadCountsAsync(
     OracleConnection conn,
     List<int> emailIds)
 {
@@ -2587,64 +2579,87 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSizePlusOne ROWS ONLY";
     if (emailIds == null || emailIds.Count == 0)
         return result;
 
-    var ids = emailIds.Distinct().ToList();
+    var ids = emailIds
+        .Where(id => id > 0)
+        .Distinct()
+        .ToList();
+
+    if (ids.Count == 0)
+        return result;
+
     var inList = string.Join(",", ids);
-    var threadNormReceived = "NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || r.ID))))))";
-    var threadNormSent = "NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || i.ID))))))";
 
     var sql = $@"
 WITH seed AS (
     SELECT
         r.ID,
         r.CASELLA_ID,
-        {threadNormReceived} AS THREAD_KEY
+        {ReceivedThreadKeySql} AS RESOLVED_THREAD_KEY
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.ID IN ({inList})
 ),
-universe AS (
+thread_universe AS (
     SELECT
         r.CASELLA_ID,
-        {threadNormReceived} AS THREAD_KEY,
+        {ReceivedThreadKeySql} AS RESOLVED_THREAD_KEY,
         'R:' || TO_CHAR(r.ID) AS ROW_KEY
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND r.CASELLA_ID IN (SELECT DISTINCT s.CASELLA_ID FROM seed s WHERE s.CASELLA_ID IS NOT NULL)
-      AND {threadNormReceived} IN (SELECT DISTINCT s.THREAD_KEY FROM seed s WHERE s.THREAD_KEY IS NOT NULL)
+      AND EXISTS (
+          SELECT 1
+          FROM seed s
+          WHERE s.CASELLA_ID = r.CASELLA_ID
+            AND s.RESOLVED_THREAD_KEY = {ReceivedThreadKeySql}
+      )
 
     UNION ALL
 
     SELECT
         i.CASELLA_ID,
-        {threadNormSent} AS THREAD_KEY,
+        {SentThreadKeySql} AS RESOLVED_THREAD_KEY,
         'I:' || TO_CHAR(i.ID) AS ROW_KEY
     FROM SGAPP.EMAIL_INVIATE i
-    WHERE i.CASELLA_ID IN (SELECT DISTINCT s.CASELLA_ID FROM seed s WHERE s.CASELLA_ID IS NOT NULL)
-      AND {threadNormSent} IN (SELECT DISTINCT s.THREAD_KEY FROM seed s WHERE s.THREAD_KEY IS NOT NULL)
+    WHERE EXISTS (
+        SELECT 1
+        FROM seed s
+        WHERE s.CASELLA_ID = i.CASELLA_ID
+          AND s.RESOLVED_THREAD_KEY = {SentThreadKeySql}
+    )
 )
 SELECT
     s.ID,
-    CASE
-        WHEN s.THREAD_KEY IS NULL THEN 1
-        ELSE NVL(COUNT(DISTINCT u.ROW_KEY), 1)
-    END AS THREAD_LEN
+    GREATEST(COUNT(DISTINCT u.ROW_KEY), 1) AS THREAD_LEN
 FROM seed s
-LEFT JOIN universe u
-    ON u.CASELLA_ID = s.CASELLA_ID
-   AND u.THREAD_KEY = s.THREAD_KEY
-GROUP BY s.ID, s.THREAD_KEY";
+LEFT JOIN thread_universe u
+       ON u.CASELLA_ID = s.CASELLA_ID
+      AND u.RESOLVED_THREAD_KEY = s.RESOLVED_THREAD_KEY
+GROUP BY
+    s.ID,
+    s.CASELLA_ID,
+    s.RESOLVED_THREAD_KEY";
 
-    await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+    await using var cmd = new OracleCommand(sql, conn)
+    {
+        BindByName = true
+    };
+
     await using var reader = await cmd.ExecuteReaderAsync();
 
     while (await reader.ReadAsync())
     {
-        var id = reader.GetInt32(0);
-        var len = reader.IsDBNull(1) ? 1 : reader.GetInt32(1);
-        result[id] = len;
+        var emailId = reader.GetInt32(0);
+        var count = reader.IsDBNull(1)
+            ? 1
+            : Convert.ToInt32(reader.GetValue(1));
+
+        result[emailId] = Math.Max(count, 1);
     }
 
+    foreach (var id in ids)
+        result.TryAdd(id, 1);
+
     return result;
-}
+}   
         public async Task<bool> IsArchivedAsync(int emailId, string utente)
         {
             using var con = new OracleConnection(_connectionString);
@@ -2680,74 +2695,17 @@ GROUP BY s.ID, s.THREAD_KEY";
                 : string.Join("; ", utenti);
         }
 
-        public async Task<Dictionary<int, int>> GetConversationCountsByThreadAsync(List<int> emailIds)
-        {
-            var result = new Dictionary<int, int>();
+       public async Task<Dictionary<int, int>> GetConversationCountsByThreadAsync(
+    List<int> emailIds)
+{
+    if (emailIds == null || emailIds.Count == 0)
+        return new Dictionary<int, int>();
 
-            if (emailIds == null || emailIds.Count == 0)
-                return result;
+    await using var conn = new OracleConnection(_connectionString);
+    await conn.OpenAsync();
 
-            var ids = emailIds.Distinct().ToList();
-            var inList = string.Join(",", ids);
-            var threadNormReceived = "NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || r.ID))))))";
-            var threadNormSent = "NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || i.ID))))))";
-
-            await using var conn = new OracleConnection(_connectionString);
-            await conn.OpenAsync();
-
-            var sql = $@"
-WITH selected_mails AS (
-    SELECT
-        r.ID,
-        r.CASELLA_ID,
-        {threadNormReceived} AS THREAD_KEY
-    FROM SGAPP.EMAIL_RICEVUTE r
-    WHERE r.ID IN ({inList})
-),
-universe AS (
-    SELECT
-        r.CASELLA_ID,
-        {threadNormReceived} AS THREAD_KEY,
-        'R:' || TO_CHAR(r.ID) AS ROW_KEY
-    FROM SGAPP.EMAIL_RICEVUTE r
-    WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND r.CASELLA_ID IN (SELECT DISTINCT s.CASELLA_ID FROM selected_mails s WHERE s.CASELLA_ID IS NOT NULL)
-      AND {threadNormReceived} IN (SELECT DISTINCT s.THREAD_KEY FROM selected_mails s WHERE s.THREAD_KEY IS NOT NULL)
-
-    UNION ALL
-
-    SELECT
-        i.CASELLA_ID,
-        {threadNormSent} AS THREAD_KEY,
-        'I:' || TO_CHAR(i.ID) AS ROW_KEY
-    FROM SGAPP.EMAIL_INVIATE i
-    WHERE i.CASELLA_ID IN (SELECT DISTINCT s.CASELLA_ID FROM selected_mails s WHERE s.CASELLA_ID IS NOT NULL)
-      AND {threadNormSent} IN (SELECT DISTINCT s.THREAD_KEY FROM selected_mails s WHERE s.THREAD_KEY IS NOT NULL)
-)
-SELECT
-    s.ID,
-    CASE
-        WHEN s.THREAD_KEY IS NULL THEN 1
-        ELSE NVL(COUNT(DISTINCT u.ROW_KEY), 1)
-    END AS THREAD_LEN
-FROM selected_mails s
-LEFT JOIN universe u
-    ON u.CASELLA_ID = s.CASELLA_ID
-   AND u.THREAD_KEY = s.THREAD_KEY
-GROUP BY s.ID, s.THREAD_KEY";
-
-            await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-            await using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
-            {
-                var id = reader.GetInt32(0);
-                var len = reader.IsDBNull(1) ? 1 : reader.GetInt32(1);
-                result[id] = len;
-            }
-
-            return result;
-        }
+    return await GetRealThreadCountsAsync(conn, emailIds);
+}
 
         private static string MapFolderToUi(string dbFolder)
         {
@@ -3982,33 +3940,55 @@ ORDER BY s.ORDINE, s.NOME";
         {
             using var db = _dbFactory.CreateDbContext();
 
+            string NormalizeMsgId(string? value)
+            {
+                if (string.IsNullOrWhiteSpace(value))
+                    return "";
+
+                return value.Trim()
+                    .Trim('<', '>')
+                    .ToLowerInvariant();
+            }
+
+            string NormalizeKey(string? value)
+                => string.IsNullOrWhiteSpace(value)
+                    ? ""
+                    : value.Trim().ToLowerInvariant();
+
+            var utenteNorm = (utente ?? "").Trim();
+            var replyNorm = NormalizeMsgId(replyToMessageId);
+            var threadNorm = NormalizeKey(threadKey);
+
             EmailBozza? bozza = null;
 
             if (draftId.HasValue)
             {
                 bozza = await db.EmailBozze
-                    .FirstOrDefaultAsync(x => x.Id == draftId.Value && x.Utente == utente);
+                    .FirstOrDefaultAsync(x => x.Id == draftId.Value && x.Utente == utenteNorm);
             }
 
-            if (bozza == null && !string.IsNullOrWhiteSpace(replyToMessageId))
+            if (bozza == null && !string.IsNullOrWhiteSpace(replyNorm))
             {
-                bozza = await db.EmailBozze.FirstOrDefaultAsync(x =>
-                    x.Utente == utente &&
-                    x.ReplyToMessageId == replyToMessageId);
+                bozza = await db.EmailBozze
+                    .Where(x => x.Utente == utenteNorm && x.ReplyToMessageId != null)
+                    .OrderByDescending(x => x.LastSaved)
+                    .FirstOrDefaultAsync(x =>
+                        x.ReplyToMessageId!.Trim().Trim('<', '>').ToLower() == replyNorm);
             }
 
-            if (bozza == null && !string.IsNullOrWhiteSpace(threadKey))
+            if (bozza == null && !string.IsNullOrWhiteSpace(threadNorm))
             {
-                bozza = await db.EmailBozze.FirstOrDefaultAsync(x =>
-                    x.Utente == utente &&
-                    x.ThreadKey == threadKey);
+                bozza = await db.EmailBozze
+                    .Where(x => x.Utente == utenteNorm && x.ThreadKey != null)
+                    .OrderByDescending(x => x.LastSaved)
+                    .FirstOrDefaultAsync(x => x.ThreadKey!.Trim().ToLower() == threadNorm);
             }
 
             if (bozza == null)
             {
                 bozza = new EmailBozza
                 {
-                    Utente = utente
+                    Utente = utenteNorm
                 };
 
                 db.EmailBozze.Add(bozza);
@@ -4020,8 +4000,8 @@ ORDER BY s.ORDINE, s.NOME";
             bozza.Oggetto = subject;
             bozza.CorpoHtml = bodyHtml;
             bozza.CasellaMittente = fromAddress;
-            bozza.ThreadKey = threadKey;
-            bozza.ReplyToMessageId = replyToMessageId;
+            bozza.ThreadKey = string.IsNullOrWhiteSpace(threadKey) ? null : threadKey.Trim();
+            bozza.ReplyToMessageId = string.IsNullOrWhiteSpace(replyToMessageId) ? null : replyToMessageId.Trim();
             bozza.Letto = false;
             bozza.LastSaved = DateTime.Now;
 
@@ -4032,12 +4012,46 @@ ORDER BY s.ORDINE, s.NOME";
         public async Task<List<EmailBozza>> GetDraftsAsync(string utente, CancellationToken ct = default)
         {
             await using var db = _dbFactory.CreateDbContext();
-            return await db.EmailBozze
+
+            string NormalizeMsgId(string? value)
+                => string.IsNullOrWhiteSpace(value)
+                    ? ""
+                    : value.Trim().Trim('<', '>').ToLowerInvariant();
+
+            string NormalizeKey(string? value)
+                => string.IsNullOrWhiteSpace(value)
+                    ? ""
+                    : value.Trim().ToLowerInvariant();
+
+            var all = await db.EmailBozze
                 .AsNoTracking()
                 .Include(b => b.Allegati)
                 .Where(b => b.Utente == utente)
                 .OrderByDescending(b => b.LastSaved)
                 .ToListAsync(ct);
+
+            var deduped = all
+                .GroupBy(b =>
+                {
+                    var reply = NormalizeMsgId(b.ReplyToMessageId);
+                    if (!string.IsNullOrWhiteSpace(reply))
+                        return "R:" + reply;
+
+                    var thread = NormalizeKey(b.ThreadKey);
+                    if (!string.IsNullOrWhiteSpace(thread))
+                        return "T:" + thread;
+
+                    // bozze standalone (nuova mail) non vanno accorpate
+                    return "I:" + b.Id;
+                })
+                .Select(g => g
+                    .OrderByDescending(x => x.LastSaved)
+                    .ThenByDescending(x => x.Id)
+                    .First())
+                .OrderByDescending(x => x.LastSaved)
+                .ToList();
+
+            return deduped;
         }
 
 
@@ -4199,10 +4213,15 @@ ORDER BY s.ORDINE, s.NOME";
 
             var emailNorm = (emailCasella ?? "").Trim().ToLower();
             var usernameNorm = (username ?? "").Trim().ToLower();
+            var usernameShort = usernameNorm.Contains("@")
+                ? usernameNorm.Split('@')[0]
+                : usernameNorm;
 
             var casella = await db.CasellePosta
                 .AsNoTracking()
-                .FirstOrDefaultAsync(c => c.Email.ToLower() == emailNorm, ct);
+                .FirstOrDefaultAsync(c =>
+                    c.Email != null &&
+                    c.Email.Trim().ToLower() == emailNorm, ct);
 
             if (casella == null)
                 return "";
@@ -4210,7 +4229,9 @@ ORDER BY s.ORDINE, s.NOME";
             var abilitazione = await db.CasellaAbilitazioni
                 .AsNoTracking()
                 .FirstOrDefaultAsync(a =>
-                    a.Username.ToLower() == usernameNorm &&
+                    a.Username != null &&
+                    (a.Username.Trim().ToLower() == usernameNorm ||
+                     a.Username.Trim().ToLower() == usernameShort) &&
                     a.CasellaId == casella.Id, ct);
 
             if (abilitazione == null)
@@ -5652,9 +5673,19 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
         {
             await using var db = _dbFactory.CreateDbContext();
 
+            var utenteNorm = (utente ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(utenteNorm))
+                return new PagedResult<SentEmailListItemDto>(new(), 0);
+
+            var utenteShort = utenteNorm.Contains("@")
+                ? utenteNorm.Split('@')[0]
+                : utenteNorm;
+
             var caselleIds = await db.CasellaAbilitazioni
                 .AsNoTracking()
-                .Where(a => a.Username == utente)
+                .Where(a => a.Username != null &&
+                            (a.Username.Trim().ToLower() == utenteNorm ||
+                             a.Username.Trim().ToLower() == utenteShort))
                 .Select(a => a.CasellaId)
                 .Distinct()
                 .ToListAsync(ct);
@@ -5749,9 +5780,19 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
         {
             await using var db = _dbFactory.CreateDbContext();
 
+            var utenteNorm = (utente ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(utenteNorm))
+                return null;
+
+            var utenteShort = utenteNorm.Contains("@")
+                ? utenteNorm.Split('@')[0]
+                : utenteNorm;
+
             var caselleIds = await db.CasellaAbilitazioni
                 .AsNoTracking()
-                .Where(a => a.Username == utente)
+                .Where(a => a.Username != null &&
+                            (a.Username.Trim().ToLower() == utenteNorm ||
+                             a.Username.Trim().ToLower() == utenteShort))
                 .Select(a => a.CasellaId)
                 .Distinct()
                 .ToListAsync(ct);

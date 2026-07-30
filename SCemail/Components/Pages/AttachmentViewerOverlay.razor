@@ -394,60 +394,135 @@
     }
 
     private async Task LoadContextAsync(int attachmentId)
+{
+    if (!string.IsNullOrWhiteSpace(Src) && Id == 0)
     {
-        if (!string.IsNullOrWhiteSpace(Src) && Id == 0)
+        _attachments = new()
         {
-            _attachments = new()
-            {
-                new AttachmentMetaDto(
-                    0,
-                    "Anteprima allegato",
-                    GuessMimeFromSrc(Src)
-                )
-            };
+            new AttachmentMetaDto(
+                0,
+                "Anteprima allegato",
+                GuessMimeFromSrc(Src))
+        };
 
-            _currentIndex = 0;
-            _currentMeta = _attachments[0];
-            _loading = false;
-            return;
-        }
-        _loading = true;
+        _currentIndex = 0;
+        _currentMeta = _attachments[0];
+        _loading = false;
         _error = null;
-        _attachments = new();
-        _currentMeta = null;
-        _currentIndex = -1;
+        return;
+    }
 
-        try
-        {
-            var context = await Http.GetFromJsonAsync<AttachmentViewerContextDto>(
+    _loading = true;
+    _error = null;
+    _attachments = new();
+    _currentMeta = null;
+    _currentIndex = -1;
+    _lastRenderedPdfId = null;
+
+    try
+    {
+        var context =
+            await Http.GetFromJsonAsync<AttachmentViewerContextDto>(
                 $"/api/attachments/{attachmentId}/context{_querySuffix}");
 
-            if (context is null || context.Attachments is null || context.Attachments.Count == 0)
-            {
-                _error = "Metadati non disponibili.";
-                return;
-            }
-
-            _attachments = context.Attachments;
-            _currentIndex = _attachments.FindIndex(x => x.Id == context.CurrentId);
-
-            if (_currentIndex < 0)
-            {
-                _error = "Allegato corrente non trovato nel contesto.";
-                return;
-            }
-
-            _currentMeta = _attachments[_currentIndex];
-        }
-        catch (Exception ex)
+        if (context?.Attachments == null ||
+            context.Attachments.Count == 0)
         {
-            _error = ex.Message;
+            _error = "Metadati degli allegati non disponibili.";
+            return;
         }
-        finally
+
+        var loadedAttachments = context.Attachments
+            .GroupBy(x => x.Id)
+            .Select(group => group.First())
+            .ToList();
+
+        /*
+         * Gli Ids arrivano dalla pagina dettaglio e contengono
+         * esclusivamente gli allegati visualizzabili.
+         *
+         * Escludiamo quindi CID, immagini firma e altre risorse inline
+         * anche se il backend dovesse restituirle nel contesto.
+         */
+        if (Ids != null && Ids.Count > 0)
         {
-            _loading = false;
+            var allowedIds = Ids
+                .Where(id => id > 0)
+                .Distinct()
+                .ToHashSet();
+
+            loadedAttachments = loadedAttachments
+                .Where(x => allowedIds.Contains(x.Id))
+                .OrderBy(x =>
+                {
+                    var index = Ids.IndexOf(x.Id);
+
+                    return index >= 0
+                        ? index
+                        : int.MaxValue;
+                })
+                .ToList();
         }
+
+        /*
+         * Garantiamo che l'allegato cliccato sia presente.
+         * Se il backend non lo ha incluso, lo recuperiamo dal contesto
+         * originale prima di generare un errore.
+         */
+        var clickedAttachment = loadedAttachments
+            .FirstOrDefault(x => x.Id == attachmentId);
+
+        if (clickedAttachment == null)
+        {
+            clickedAttachment = context.Attachments
+                .FirstOrDefault(x => x.Id == attachmentId);
+
+            if (clickedAttachment != null)
+                loadedAttachments.Insert(0, clickedAttachment);
+        }
+
+        if (loadedAttachments.Count == 0)
+        {
+            _error = "Nessun allegato visualizzabile disponibile.";
+            return;
+        }
+
+        _attachments = loadedAttachments;
+
+        /*
+         * Punto fondamentale:
+         * apro sempre l'ID cliccato, non context.CurrentId.
+         */
+        _currentIndex = _attachments.FindIndex(
+            x => x.Id == attachmentId);
+
+        /*
+         * Fallback solo per compatibilità con eventuali vecchie chiamate.
+         */
+        if (_currentIndex < 0)
+        {
+            _currentIndex = _attachments.FindIndex(
+                x => x.Id == context.CurrentId);
+        }
+
+        if (_currentIndex < 0)
+            _currentIndex = 0;
+
+        _currentMeta = _attachments[_currentIndex];
     }
+    catch (HttpRequestException ex)
+    {
+        _error = $"Errore durante il caricamento: {ex.Message}";
+    }
+    catch (Exception ex)
+    {
+        _error = $"Impossibile aprire l'allegato: {ex.Message}";
+    }
+    finally
+    {
+        _loading = false;
+    }
+}
 
     private static string GuessMimeFromSrc(string src)
     {
@@ -502,28 +577,40 @@
 
         return mime ?? "application/octet-stream";
     }
-    private async Task GoPrevious()
-    {
-        if (!_hasPrevious)
-            return;
+    private Task GoPrevious()
+{
+    return !_hasPrevious
+        ? Task.CompletedTask
+        : ChangeAttachmentAsync(_currentIndex - 1);
+}
 
-        _currentIndex--;
-        _currentMeta = _attachments[_currentIndex];
-        _lastRenderedPdfId = null;
-        await InvokeAsync(StateHasChanged);
-    }
+private Task GoNext()
+{
+    return !_hasNext
+        ? Task.CompletedTask
+        : ChangeAttachmentAsync(_currentIndex + 1);
+}
+private async Task ChangeAttachmentAsync(int newIndex)
+{
+    if (newIndex < 0 || newIndex >= _attachments.Count)
+        return;
 
-    private async Task GoNext()
-    {
-        if (!_hasNext)
-            return;
+    if (newIndex == _currentIndex)
+        return;
 
-        _currentIndex++;
-        _currentMeta = _attachments[_currentIndex];
-        _lastRenderedPdfId = null;
-        await InvokeAsync(StateHasChanged);
-    }
+    _loading = true;
+    _error = null;
+    _lastRenderedPdfId = null;
 
+    await InvokeAsync(StateHasChanged);
+
+    _currentIndex = newIndex;
+    _currentMeta = _attachments[_currentIndex];
+
+    _loading = false;
+
+    await InvokeAsync(StateHasChanged);
+}
     private async Task Close()
     {
         _visible = false;

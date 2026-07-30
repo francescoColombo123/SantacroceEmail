@@ -159,9 +159,95 @@
                                             <span class="sent-badge">Inviata</span>
                                         }
                                     </div>
-                                    <div class="recips2" title="@BuildThreadRecipientsTooltip(mail)">
-                                        @BuildThreadRecipientsInline(mail)
-                                    </div>
+                                   @{
+    var recipientsExpanded = AreRecipientHeadersExpanded(mail);
+    var recipientSummary = GetRecipientSummary(mail);
+}
+
+<div class="mail-recipients">
+
+    <button type="button"
+            class="recipient-summary-btn"
+            title="Mostra i dettagli dei destinatari"
+            @onclick="@(() => ToggleRecipientHeaders(mail))">
+
+        <span class="recipient-type-chip">A</span>
+
+        <span class="recipient-summary-text">
+            @recipientSummary
+        </span>
+
+        <MudIcon Icon="@(recipientsExpanded
+                          ? Icons.Material.Filled.ArrowDropUp
+                          : Icons.Material.Filled.ArrowDropDown)"
+                 Size="Size.Small"
+                 Class="recipient-summary-icon" />
+    </button>
+
+    @if (recipientsExpanded)
+    {
+        <div class="recipient-details-panel">
+
+            <div class="recipient-details-row">
+                <span class="recipient-details-label">Da</span>
+
+                <div class="recipient-details-values">
+                    <span class="recipient-address">
+                        @GetSenderForRecipientPanel(mail)
+                    </span>
+                </div>
+            </div>
+
+            @{
+                var toDetails = ParseEmailsForDisplay(mail.Destinatari);
+                var ccDetails = ParseEmailsForDisplay(mail.Cc);
+                var bccDetails = ParseEmailsForDisplay(mail.Ccn);
+            }
+
+            @if (toDetails.Any())
+            {
+                <div class="recipient-details-row">
+                    <span class="recipient-details-label">A</span>
+
+                    <div class="recipient-details-values">
+                        @foreach (var recipient in toDetails)
+                        {
+                            <span class="recipient-address">@recipient</span>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (ccDetails.Any())
+            {
+                <div class="recipient-details-row">
+                    <span class="recipient-details-label">CC</span>
+
+                    <div class="recipient-details-values">
+                        @foreach (var recipient in ccDetails)
+                        {
+                            <span class="recipient-address">@recipient</span>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (bccDetails.Any())
+            {
+                <div class="recipient-details-row">
+                    <span class="recipient-details-label">CCN</span>
+
+                    <div class="recipient-details-values">
+                        @foreach (var recipient in bccDetails)
+                        {
+                            <span class="recipient-address">@recipient</span>
+                        }
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
                                 </div>
                             </div>
 
@@ -190,51 +276,101 @@
                             </div>
                         </div>
 
-                        <div class="gmail-body">
-                            @{
-                                var safe = PrepareHtmlForDisplayGmailLike(mail);
-                            }
+                       @{
+    var bodyParts = SplitCurrentAndQuotedBody(mail);
+    var quotedExpanded = IsQuotedMessageExpanded(mail);
+}
 
-                            <div class="mail-clean-body">
-                                @((MarkupString)safe)
-                            </div>
-                        </div>
-                        @if (mail.Allegati?.Any() == true)
-                        {
-                            <div class="gmail-attachments">
-                                <div class="attach-title">📎 Allegati:</div>
+<div class="gmail-body">
 
-                                <div class="attach-grid">
-                                    @foreach (var a in mail.Allegati)
-                                    {
-                                        var mime = NormalizeMime(a.MimeType, a.NomeFile);
+    <div class="mail-clean-body">
+        @((MarkupString)bodyParts.CurrentHtml)
+    </div>
 
-                                        <a class="attach-chip @(a.IsEmailEml ? "attach-chip-eml" : "")"
-                                           href="javascript:void(0)"
-                                           title="@a.NomeFile"
-                                           @onclick="@(async () => await OpenAttachmentOrEmailAsync(
-                                           a,
-                                                                                  NormalizeMime(a.MimeType, a.NomeFile),
-                                                                                  mail.Allegati.Select(x => x.Id).ToList()
-                                                                              ))" @onclick:stopPropagation="true">
+    @if (bodyParts.HasQuoted)
+    {
+        <div class="quoted-section">
 
-                            <MudIcon Icon="@(a.IsEmailEml? Icons.Material.Filled.Email : GetAttachmentIcon(a.NomeFile))"
-                                     Size="Size.Small"
-                                     Class="attach-icon" />
+            <button type="button"
+                    class="quoted-toggle @(quotedExpanded ? "expanded" : "")"
+                    title="@(quotedExpanded
+                        ? "Nascondi conversazione precedente"
+                        : "Mostra conversazione precedente")"
+                    @onclick="@(() => ToggleQuotedMessage(mail))">
 
-                            <span class="attach-name">@a.NomeFile</span>
-                            @if (a.IsEmailEml)
-                                {
-                                    <span class="eml-badge">Apri email</span>
-                                    <MudIcon Icon="@Icons.Material.Filled.OpenInNew"
-                                             Size="Size.Small"
-                                             Class="attach-open-icon" />
-                                }
-                            </a>
-                        }
-                    </div>
+                @if (quotedExpanded)
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.ExpandLess"
+                             Size="Size.Small" />
+                    <span>Nascondi cronologia</span>
+                }
+                else
+                {
+                    <span class="quoted-dots">
+                        <i></i>
+                        <i></i>
+                        <i></i>
+                    </span>
+                }
+            </button>
+
+            @if (quotedExpanded)
+            {
+                <div class="quoted-content">
+                    @((MarkupString)bodyParts.QuotedHtml)
                 </div>
-                                }
+            }
+        </div>
+    }
+</div>
+                       @{
+    var visibleAttachments = GetVisibleAttachments(mail);
+}
+
+@if (visibleAttachments.Any())
+{
+    <div class="gmail-attachments">
+        <div class="attach-title">📎 Allegati:</div>
+
+        <div class="attach-grid">
+            @foreach (var a in visibleAttachments)
+            {
+                var mime = NormalizeMime(a.MimeType, a.NomeFile);
+                var visibleIds = visibleAttachments
+                    .Select(x => x.Id)
+                    .Distinct()
+                    .ToList();
+
+                <a class="attach-chip @(a.IsEmailEml ? "attach-chip-eml" : "")"
+                   href="javascript:void(0)"
+                   title="@a.NomeFile"
+                   @onclick="@(async () => await OpenAttachmentOrEmailAsync(
+                       a,
+                       mime,
+                       visibleIds))"
+                   @onclick:stopPropagation="true">
+
+                    <MudIcon Icon="@(a.IsEmailEml
+                                      ? Icons.Material.Filled.Email
+                                      : GetAttachmentIcon(a.NomeFile))"
+                             Size="Size.Small"
+                             Class="attach-icon" />
+
+                    <span class="attach-name">@a.NomeFile</span>
+
+                    @if (a.IsEmailEml)
+                    {
+                        <span class="eml-badge">Apri email</span>
+
+                        <MudIcon Icon="@Icons.Material.Filled.OpenInNew"
+                                 Size="Size.Small"
+                                 Class="attach-open-icon" />
+                    }
+                </a>
+            }
+        </div>
+    </div>
+}
             </div>
                         }
 
@@ -497,9 +633,74 @@
             Nav.NavigateTo(Nav.Uri, forceLoad: true);
         }
     }
+    private List<string> ParseEmailsForCompactDisplay(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return new List<string>();
+
+    try
+    {
+        var addresses = MimeKit.InternetAddressList.Parse(raw);
+
+        return addresses.Mailboxes
+            .Select(mailbox =>
+            {
+                var name = (mailbox.Name ?? "").Trim();
+                var address = (mailbox.Address ?? "").Trim();
+
+                /*
+                 * Nell'intestazione compatta mostriamo:
+                 * Nome, quando presente.
+                 * Altrimenti indirizzo email.
+                 */
+                return !string.IsNullOrWhiteSpace(name)
+                    ? name
+                    : address;
+            })
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+    catch
+    {
+        return raw
+            .Split(
+                new[] { ';', ',', '\n', '\r' },
+                StringSplitOptions.RemoveEmptyEntries |
+                StringSplitOptions.TrimEntries
+            )
+            .Select(value =>
+            {
+                var match = Regex.Match(
+                    value,
+                    @"^\s*""?(?<name>.*?)""?\s*<(?<mail>[^>]+)>\s*$"
+                );
+
+                if (match.Success)
+                {
+                    var name = match.Groups["name"].Value.Trim();
+
+                    return !string.IsNullOrWhiteSpace(name)
+                        ? name
+                        : match.Groups["mail"].Value.Trim();
+                }
+
+                return value.Trim();
+            })
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+}
     private string PrepareHtmlForDisplay(EmailDetail_NEW mail)
     {
         var html = StripActiveContent(mail.CorpoHtml ?? "");
+
+        if (string.IsNullOrWhiteSpace(html))
+        {
+            var text = GetBodyVisibleAsTextOnlyCurrent(mail);
+            return TextToHtmlPreserve(text);
+        }
 
         html = ReplaceCidImagesWithAttachmentUrls(mail, html);
 
@@ -603,121 +804,123 @@
         cid = Uri.UnescapeDataString(cid);
         return cid.Trim().ToLowerInvariant();
     }
-    private static string HideQuotedPartsButKeepHtml(string html)
+   private static string HideQuotedPartsButKeepHtml(string html)
+{
+    if (string.IsNullOrWhiteSpace(html))
+        return "";
+
+    var s = html;
+
+    /*
+     * Nascondiamo solo le citazioni delle risposte.
+     * NON nascondiamo genericamente tutti i blockquote,
+     * perché gli inoltri possono essere contenuti proprio lì.
+     */
+
+    s = Regex.Replace(
+        s,
+        @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_quote[^""']*[""'][^>]*)>[\s\S]*?</div>",
+        @"<div $1 style=""display:none !important;""></div>",
+        RegexOptions.IgnoreCase
+    );
+
+    s = Regex.Replace(
+        s,
+        @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_extra[^""']*[""'][^>]*)>[\s\S]*?</div>",
+        @"<div $1 style=""display:none !important;""></div>",
+        RegexOptions.IgnoreCase
+    );
+
+    s = Regex.Replace(
+        s,
+        @"<div\b([^>]*class\s*=\s*[""'][^""']*moz-cite-prefix[^""']*[""'][^>]*)>[\s\S]*?</div>",
+        @"<div $1 style=""display:none !important;""></div>",
+        RegexOptions.IgnoreCase
+    );
+
+    /*
+     * Non tagliare gli inoltri.
+     * Taglia soltanto le classiche intestazioni di risposta.
+     */
+    s = CutHtmlFromReplyHeader(s);
+
+    return s.Trim();
+}
+   private static string CutHtmlFromReplyHeader(string html)
+{
+    if (string.IsNullOrWhiteSpace(html))
+        return "";
+
+    /*
+     * Tagliamo solo le risposte quotate.
+     *
+     * NON inserire:
+     * - Messaggio inoltrato
+     * - Forwarded message
+     * - Da:
+     * - Oggetto:
+     *
+     * perché possono appartenere al contenuto reale di un inoltro.
+     */
+    var markers = new[]
     {
-        if (string.IsNullOrWhiteSpace(html))
-            return "";
-
-        var s = html;
-
-        // Gmail: blocchi quotati veri, li nascondiamo ma NON tocchiamo il resto HTML/CSS
-        s = Regex.Replace(
-            s,
-            @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_quote[^""']*[""'][^>]*)>[\s\S]*?</div>",
-            @"<div $1 style=""display:none !important;""></div>",
-            RegexOptions.IgnoreCase
-        );
-
-        // Gmail extra quote
-        s = Regex.Replace(
-            s,
-            @"<div\b([^>]*class\s*=\s*[""'][^""']*gmail_extra[^""']*[""'][^>]*)>[\s\S]*?</div>",
-            @"<div $1 style=""display:none !important;""></div>",
-            RegexOptions.IgnoreCase
-        );
-
-        // Outlook / altri client: blockquote quotato
-        s = Regex.Replace(
-            s,
-            @"<blockquote\b([^>]*)>[\s\S]*?</blockquote>",
-            @"<blockquote $1 style=""display:none !important;""></blockquote>",
-            RegexOptions.IgnoreCase
-        );
-
-        // Mozilla Thunderbird
-        s = Regex.Replace(
-            s,
-            @"<div\b([^>]*class\s*=\s*[""'][^""']*moz-cite-prefix[^""']*[""'][^>]*)>[\s\S]*?</div>",
-            @"<div $1 style=""display:none !important;""></div>",
-            RegexOptions.IgnoreCase
-        );
-
-        // Se nel corpo c'è il classico header testuale, taglia da lì in poi.
-        // Però NON convertiamo in testo: manteniamo tutto l'HTML prima.
-        s = CutHtmlFromReplyHeader(s);
-
-        return s.Trim();
-    }
-
-    private static string CutHtmlFromReplyHeader(string html)
-    {
-        if (string.IsNullOrWhiteSpace(html))
-            return "";
-
-        var markers = new[]
-        {
         @"Il giorno\s+.+?\s+ha scritto:",
         @"On\s+.+?\s+wrote:",
-        @"Da:\s*.+",
-        @"Inviato:\s*.+",
-        @"Oggetto:\s*.+",
-        @"-{2,}\s*Messaggio originale\s*-{2,}",
-        @"-{2,}\s*Forwarded message\s*-{2,}"
+        @"-{2,}\s*Messaggio originale\s*-{2,}"
     };
 
-        var bestIndex = -1;
+    var bestIndex = -1;
 
-        foreach (var marker in markers)
+    foreach (var marker in markers)
+    {
+        var match = Regex.Match(
+            html,
+            marker,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline
+        );
+
+        if (match.Success && match.Index > 0)
         {
-            var m = Regex.Match(html, marker, RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            if (m.Success && m.Index > 0)
-            {
-                if (bestIndex == -1 || m.Index < bestIndex)
-                    bestIndex = m.Index;
-            }
+            if (bestIndex == -1 || match.Index < bestIndex)
+                bestIndex = match.Index;
         }
-
-        if (bestIndex > 0)
-            return html[..bestIndex];
-
-        return html;
     }
 
-    private static string CutQuotedTextOnly(string text)
+    return bestIndex > 0
+        ? html[..bestIndex].Trim()
+        : html.Trim();
+}
+private static string CutQuotedTextOnly(string text)
+{
+    if (string.IsNullOrWhiteSpace(text))
+        return "";
+
+    var s = text.Replace("\r", "");
+
+    var markers = new[]
     {
-        if (string.IsNullOrWhiteSpace(text))
-            return "";
-
-        var s = text.Replace("\r", "");
-
-        var markers = new[]
-        {
         @"(?im)^\s*Il giorno .+? ha scritto:\s*$",
         @"(?im)^\s*On .+? wrote:\s*$",
-        @"(?im)^\s*Da:\s+.+$",
-        @"(?im)^\s*Inviato:\s+.+$",
-        @"(?im)^\s*Oggetto:\s+.+$",
-        @"(?im)^\s*-{2,}\s*Messaggio originale\s*-{2,}\s*$",
-        @"(?im)^\s*-{2,}\s*Forwarded message\s*-{2,}\s*$"
+        @"(?im)^\s*-{2,}\s*Messaggio originale\s*-{2,}\s*$"
     };
 
-        var bestIndex = -1;
+    var bestIndex = -1;
 
-        foreach (var marker in markers)
+    foreach (var marker in markers)
+    {
+        var match = Regex.Match(s, marker);
+
+        if (match.Success && match.Index > 0)
         {
-            var m = Regex.Match(s, marker);
-            if (m.Success && m.Index > 0)
-            {
-                if (bestIndex == -1 || m.Index < bestIndex)
-                    bestIndex = m.Index;
-            }
+            if (bestIndex == -1 || match.Index < bestIndex)
+                bestIndex = match.Index;
         }
-
-        if (bestIndex > 0)
-            return s[..bestIndex].Trim();
-
-        return s.Trim();
     }
+
+    return bestIndex > 0
+        ? s[..bestIndex].Trim()
+        : s.Trim();
+}
     private static string RemoveUnresolvedCidImages(string html)
     {
         return Regex.Replace(
@@ -861,7 +1064,52 @@
 
         return from;
     }
+private List<AllegatoItem_NEW> GetVisibleAttachments(EmailDetail_NEW mail)
+{
+    if (mail.Allegati == null || mail.Allegati.Count == 0)
+        return new List<AllegatoItem_NEW>();
 
+    var html = mail.CorpoHtml ?? "";
+
+    var cidValues = Regex.Matches(
+            html,
+            @"cid:([^\""'\s>]+)",
+            RegexOptions.IgnoreCase)
+        .Select(match => NormalizeCidValue(match.Groups[1].Value))
+        .Where(cid => !string.IsNullOrWhiteSpace(cid))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    return mail.Allegati
+        .Where(allegato =>
+        {
+            if (allegato.IsEmailEml)
+                return true;
+
+            var mime = NormalizeMime(
+                allegato.MimeType,
+                allegato.NomeFile);
+
+            var isImage = mime.StartsWith(
+                "image/",
+                StringComparison.OrdinalIgnoreCase);
+
+            if (!isImage)
+                return true;
+
+            /*
+             * Se l'immagine è richiamata dal corpo tramite CID,
+             * è una risorsa inline/firma e non un allegato visibile.
+             */
+            var isCidImage = cidValues.Any(cid =>
+                CidMatchesAttachment(cid, allegato.NomeFile));
+
+            return !isCidImage;
+        })
+        .GroupBy(allegato => allegato.Id)
+        .Select(group => group.First())
+        .ToList();
+}
     private async Task<string> ResolveDisplayEmailAsync(EmailDetail_NEW mail)
     {
         var raw = ExtractEmailOnly(mail.Mittente);
@@ -1224,42 +1472,127 @@
 
         return parts.Count == 0 ? "" : string.Join("\n", parts);
     }
+private string GetRecipientSummary(EmailDetail_NEW mail)
+{
+    var recipients = ParseEmailsForDisplay(mail.Destinatari);
 
-    private List<string> ParseEmailsForDisplay(string? raw)
+    if (recipients.Count == 0)
+        return "nessun destinatario";
+
+    var firstRecipient = GetCompactRecipientLabel(recipients[0]);
+
+    if (recipients.Count == 1)
+        return firstRecipient;
+
+    return $"{firstRecipient} e altri {recipients.Count - 1}";
+}
+
+private static string GetCompactRecipientLabel(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return "";
+
+    var value = raw.Trim();
+
+    var match = Regex.Match(
+        value,
+        @"^\s*""?(?<name>.*?)""?\s*<(?<email>[^>]+)>\s*$"
+    );
+
+    if (!match.Success)
+        return value;
+
+    var name = match.Groups["name"].Value.Trim();
+    var email = match.Groups["email"].Value.Trim();
+
+    return !string.IsNullOrWhiteSpace(name)
+        ? name
+        : email;
+}
+
+private string GetSenderForRecipientPanel(EmailDetail_NEW mail)
+{
+    if (IsSentMail(mail))
     {
-        if (string.IsNullOrWhiteSpace(raw))
-            return new List<string>();
+        if (!string.IsNullOrWhiteSpace(mail.CasellaEmail))
+            return mail.CasellaEmail.Trim();
 
-        try
-        {
-            var list = MimeKit.InternetAddressList.Parse(raw);
-
-            return list.Mailboxes
-                .Select(m =>
-                {
-                    var name = (m.Name ?? "").Trim();
-                    var address = (m.Address ?? "").Trim();
-
-                    if (!string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(address))
-                        return $"{name} <{address}>";
-
-                    return address;
-                })
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
-        catch
-        {
-            return raw.Split(';', ',', '\n', '\r')
-                .Select(x => x.Trim())
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-        }
+        return "Io";
     }
 
+    if (!string.IsNullOrWhiteSpace(mail.Mittente))
+        return mail.Mittente.Trim();
 
+    return "(mittente sconosciuto)";
+}
+    private List<string> ParseEmailsForDisplay(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return new List<string>();
+
+    try
+    {
+        var list = MimeKit.InternetAddressList.Parse(raw);
+
+        return list.Mailboxes
+            .Select(mailbox =>
+            {
+                var name = (mailbox.Name ?? "").Trim();
+                var address = (mailbox.Address ?? "").Trim();
+
+                if (!string.IsNullOrWhiteSpace(name) &&
+                    !string.IsNullOrWhiteSpace(address))
+                {
+                    return $"{name} <{address}>";
+                }
+
+                return address;
+            })
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+    catch
+    {
+        var emailPattern =
+            @"(?:""(?<name>[^""]+)""|(?<name>[^,<;]+))?\s*<(?<email>[^>]+)>|(?<plain>[\w.\-+]+@[\w.\-]+\.[A-Za-z]{2,})";
+
+        var matches = Regex.Matches(
+            raw,
+            emailPattern,
+            RegexOptions.IgnoreCase
+        );
+
+        var result = new List<string>();
+
+        foreach (Match match in matches)
+        {
+            var plain = match.Groups["plain"].Value.Trim();
+
+            if (!string.IsNullOrWhiteSpace(plain))
+            {
+                result.Add(plain);
+                continue;
+            }
+
+            var name = match.Groups["name"].Value.Trim();
+            var email = match.Groups["email"].Value.Trim();
+
+            if (string.IsNullOrWhiteSpace(email))
+                continue;
+
+            result.Add(
+                !string.IsNullOrWhiteSpace(name)
+                    ? $"{name} <{email}>"
+                    : email
+            );
+        }
+
+        return result
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+}
     // ======================
     // FORWARD "GMAIL-LIKE" FULL CHAIN
     // ======================
@@ -1523,7 +1856,170 @@ private async Task LoadPageAsync()
         await InvokeAsync(StateHasChanged);
     }
 }
+private readonly HashSet<string> _expandedQuotedMessages = new();
+private readonly HashSet<string> _expandedRecipientHeaders = new();
 
+    private static string GetMessageUiKey(EmailDetail_NEW mail)
+{
+    var tipo = string.IsNullOrWhiteSpace(mail.Tipo)
+        ? "R"
+        : mail.Tipo.Trim().ToUpperInvariant();
+
+    return $"{tipo}_{mail.Id}";
+}
+private void ToggleQuotedMessage(EmailDetail_NEW mail)
+{
+    var key = GetMessageUiKey(mail);
+
+    if (!_expandedQuotedMessages.Add(key))
+        _expandedQuotedMessages.Remove(key);
+}
+
+private bool IsQuotedMessageExpanded(EmailDetail_NEW mail)
+{
+    return _expandedQuotedMessages.Contains(GetMessageUiKey(mail));
+}
+
+private void ToggleRecipientHeaders(EmailDetail_NEW mail)
+{
+    var key = GetMessageUiKey(mail);
+
+    if (!_expandedRecipientHeaders.Add(key))
+        _expandedRecipientHeaders.Remove(key);
+}
+
+private bool AreRecipientHeadersExpanded(EmailDetail_NEW mail)
+{
+    return _expandedRecipientHeaders.Contains(GetMessageUiKey(mail));
+}
+private sealed class VisibleMailBody
+{
+    public string CurrentHtml { get; init; } = "";
+    public string QuotedHtml { get; init; } = "";
+
+    public bool HasQuoted =>
+        !string.IsNullOrWhiteSpace(QuotedHtml);
+}
+private VisibleMailBody SplitCurrentAndQuotedBody(EmailDetail_NEW mail)
+{
+    var html = mail.CorpoHtml;
+
+    if (string.IsNullOrWhiteSpace(html))
+    {
+        var text = mail.CorpoTesto ?? "";
+
+        return SplitPlainTextBody(text);
+    }
+
+    html = StripActiveContent(html);
+    html = ReplaceCidImagesWithAttachmentUrls(mail, html);
+    html = RemoveUnresolvedCidImages(html);
+
+    return SplitHtmlBody(html);
+}  
+private static VisibleMailBody SplitHtmlBody(string html)
+{
+    if (string.IsNullOrWhiteSpace(html))
+        return new VisibleMailBody();
+
+    var candidates = new List<int>();
+
+    void Find(string pattern)
+    {
+        var match = Regex.Match(
+            html,
+            pattern,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline
+        );
+
+        if (match.Success && match.Index > 0)
+            candidates.Add(match.Index);
+    }
+
+    /*
+     * Blocchi strutturati dei client email.
+     */
+    Find(@"<div\b[^>]*class\s*=\s*[""'][^""']*gmail_quote[^""']*[""'][^>]*>");
+    Find(@"<div\b[^>]*class\s*=\s*[""'][^""']*gmail_extra[^""']*[""'][^>]*>");
+    Find(@"<blockquote\b[^>]*>");
+    Find(@"<div\b[^>]*class\s*=\s*[""'][^""']*moz-cite-prefix[^""']*[""'][^>]*>");
+
+    /*
+     * Intestazioni testuali di risposta o inoltro.
+     */
+    Find(@"Il giorno\s+.+?\s+ha scritto:");
+    Find(@"On\s+.+?\s+wrote:");
+    Find(@"-{2,}\s*Messaggio originale\s*-{2,}");
+    Find(@"-{2,}\s*Messaggio inoltrato\s*-{2,}");
+    Find(@"-{2,}\s*Forwarded message\s*-{2,}");
+
+    if (candidates.Count == 0)
+    {
+        return new VisibleMailBody
+        {
+            CurrentHtml = html.Trim()
+        };
+    }
+
+    var cutIndex = candidates.Min();
+
+    return new VisibleMailBody
+    {
+        CurrentHtml = html[..cutIndex].Trim(),
+        QuotedHtml = html[cutIndex..].Trim()
+    };
+}
+private static VisibleMailBody SplitPlainTextBody(string text)
+{
+    if (string.IsNullOrWhiteSpace(text))
+        return new VisibleMailBody();
+
+    var normalized = text
+        .Replace("\r\n", "\n")
+        .Replace("\r", "\n");
+
+    var patterns = new[]
+    {
+        @"(?im)^\s*Il giorno .+? ha scritto:\s*$",
+        @"(?im)^\s*On .+? wrote:\s*$",
+        @"(?im)^\s*-{2,}\s*Messaggio originale\s*-{2,}\s*$",
+        @"(?im)^\s*-{2,}\s*Messaggio inoltrato\s*-{2,}\s*$",
+        @"(?im)^\s*-{2,}\s*Forwarded message\s*-{2,}\s*$"
+    };
+
+    var indexes = patterns
+        .Select(pattern => Regex.Match(normalized, pattern))
+        .Where(match => match.Success && match.Index > 0)
+        .Select(match => match.Index)
+        .ToList();
+
+    if (indexes.Count == 0)
+    {
+        return new VisibleMailBody
+        {
+            CurrentHtml = TextToSafeHtml(normalized)
+        };
+    }
+
+    var cutIndex = indexes.Min();
+
+    return new VisibleMailBody
+    {
+        CurrentHtml = TextToSafeHtml(normalized[..cutIndex]),
+        QuotedHtml = TextToSafeHtml(normalized[cutIndex..])
+    };
+}
+
+private static string TextToSafeHtml(string? text)
+{
+    if (string.IsNullOrWhiteSpace(text))
+        return "";
+
+    return System.Net.WebUtility.HtmlEncode(text.Trim())
+        .Replace("\r\n", "\n")
+        .Replace("\r", "\n")
+        .Replace("\n", "<br>");
+}
 private void ParseNavigationParameters()
 {
     var uri = Nav.ToAbsoluteUri(Nav.Uri);
@@ -1950,60 +2446,91 @@ private void ParseNavigationParameters()
         return html;
     }
 
-    private async Task ForwardExternalFrom(EmailDetail_NEW msg)
+   private async Task ForwardExternalFrom(EmailDetail_NEW msg)
+{
+    if (msg is null)
+        return;
+
+    if (string.IsNullOrWhiteSpace(_utente))
     {
-        if (msg is null) return;
+        Snackbar.Add(
+            "Utente non valorizzato.",
+            Severity.Error);
 
-        if (string.IsNullOrWhiteSpace(_utente))
-        {
-            Snackbar.Add("Utente non valorizzato (cp mancante).", Severity.Error);
-            return;
-        }
+        return;
+    }
 
-        // testo Gmail-like
-        var forwardHtml = BuildForwardHtml(msg);
-        var forwardAttachments = await BuildForwardAttachmentsAsync(msg);
+    /*
+     * Il messaggio originale NON entrerà in Quill.
+     * Verrà mostrato separatamente nel ComposeDialog.
+     */
+    var forwardOriginalHtml = BuildForwardHtml(msg);
 
-        var parameters = new DialogParameters
-        {
-            ["Utente"] = _utente,
-            ["Oggetto"] = msg.Oggetto?.StartsWith("Fwd:", StringComparison.OrdinalIgnoreCase) == true
+    var forwardAttachments =
+        await BuildForwardAttachmentsAsync(msg);
+
+    var parameters = new DialogParameters
+    {
+        ["Utente"] = _utente,
+
+        ["Oggetto"] =
+            msg.Oggetto?.StartsWith(
+                "Fwd:",
+                StringComparison.OrdinalIgnoreCase) == true
                 ? msg.Oggetto
                 : "Fwd: " + (msg.Oggetto ?? ""),
 
-            ["CorpoIniziale"] = forwardHtml,
-            ["Destinatari"] = "",
+        /*
+         * Quill parte vuoto.
+         * La firma verrà caricata normalmente dal dialog.
+         */
+        ["CorpoIniziale"] = "",
 
-            ["IsForward"] = true,
-            ["ForwardAttachments"] = forwardAttachments,
+        /*
+         * Nuovo parametro:
+         * HTML originale separato dall'editor.
+         */
+        ["ForwardOriginalHtml"] = forwardOriginalHtml,
 
-            ["ReplyToMessageId"] = null,
-            ["References"] = null,
-            ["ThreadKey"] = null
-        };
+        ["Destinatari"] = "",
+        ["Cc"] = null,
+        ["Bcc"] = null,
 
-        var dialog = DialogService.Show<ComposeDialog>(
-            "Inoltra (esterno)",
-            parameters,
-            new DialogOptions
-            {
-                MaxWidth = MaxWidth.Large,
-                FullWidth = true,
-                CloseOnEscapeKey = false,
-                BackdropClick = false
-            });
+        ["IsForward"] = true,
+        ["ForwardAttachments"] = forwardAttachments,
 
-        var result = await dialog.Result;
+        ["ReplyToMessageId"] = null,
+        ["References"] = null,
+        ["ThreadKey"] = null
+    };
 
-        if (!result.Canceled && result.Data?.ToString() == "sent")
+    var dialog = DialogService.Show<ComposeDialog>(
+        "Inoltra (esterno)",
+        parameters,
+        new DialogOptions
         {
-            Snackbar.Add("Inoltro esterno inviato ✅", Severity.Success);
+            MaxWidth = MaxWidth.Large,
+            FullWidth = true,
+            CloseOnEscapeKey = false,
+            BackdropClick = false
+        });
 
-            await Task.Delay(600);
+    var result = await dialog.Result;
 
-            Nav.NavigateTo(Nav.Uri, forceLoad: true);
-        }
+    if (!result.Canceled &&
+        result.Data?.ToString() == "sent")
+    {
+        Snackbar.Add(
+            "Inoltro esterno inviato ✅",
+            Severity.Success);
+
+        await Task.Delay(600);
+
+        Nav.NavigateTo(
+            Nav.Uri,
+            forceLoad: true);
     }
+}
 
 
 
@@ -2602,47 +3129,225 @@ private void ParseNavigationParameters()
     }
 
 
-    private string BuildForwardHtml(EmailDetail_NEW selected)
-    {
-        var body = GetBodyVisibleAsText(selected);
-        var from = ExtractEmailOnly(selected.Mittente);
-        var to = ExtractEmailOnly(selected.Destinatari);
+   private string BuildForwardHtml(EmailDetail_NEW selected)
+{
+    var from = FormatNameEmailLikeGmail(selected.Mittente);
+    var to = FormatRecipientsForForward(selected.Destinatari);
+    var cc = FormatRecipientsForForward(selected.Cc);
 
-        var bodyHtml = Html(body)
-            .Replace("\r\n", "\n")
-            .Replace("\r", "\n")
-            .Replace("\n", "<br>");
+    var bodyHtml = GetForwardOriginalBodyHtml(selected);
 
-        return $@"
-<div style=""font-family:Arial,sans-serif;font-size:14px;color:#202124;line-height:1.45;"">
-    <div style=""margin:16px 0 10px 0;color:#5f6368;font-size:13px;"">
+    var ccRow = string.IsNullOrWhiteSpace(cc)
+        ? ""
+        : $@"
+<tr>
+    <td style=""font-weight:700;
+               vertical-align:top;
+               white-space:nowrap;
+               padding:2px 12px 2px 0;"">
+        CC:
+    </td>
+    <td style=""padding:2px 0;"">
+        {cc}
+    </td>
+</tr>";
+
+    return $@"
+<div style=""font-family:Arial,Helvetica,sans-serif;
+            font-size:14px;
+            line-height:1.5;
+            color:#202124;
+            width:100%;
+            box-sizing:border-box;"">
+
+    <div style=""margin:4px 0 12px;
+                color:#5f6368;
+                font-size:13px;"">
         ---------- Messaggio inoltrato ----------
     </div>
 
-    <table style=""font-size:13px;color:#3c4043;margin-bottom:14px;"">
+    <table role=""presentation""
+           cellpadding=""0""
+           cellspacing=""0""
+           border=""0""
+           style=""border-collapse:collapse;
+                  font-family:Arial,Helvetica,sans-serif;
+                  font-size:13px;
+                  line-height:1.5;
+                  color:#3c4043;
+                  margin-bottom:16px;"">
+
         <tr>
-            <td style=""font-weight:700;padding-right:8px;"">Da:</td>
-            <td>{Html(from)}</td>
+            <td style=""font-weight:700;
+                       vertical-align:top;
+                       white-space:nowrap;
+                       padding:2px 12px 2px 0;"">
+                Da:
+            </td>
+            <td style=""padding:2px 0;"">
+                {from}
+            </td>
         </tr>
+
         <tr>
-            <td style=""font-weight:700;padding-right:8px;"">Data:</td>
-            <td>{Html(FormatDateLikeGmail(selected.Data))}</td>
+            <td style=""font-weight:700;
+                       vertical-align:top;
+                       white-space:nowrap;
+                       padding:2px 12px 2px 0;"">
+                Data:
+            </td>
+            <td style=""padding:2px 0;"">
+                {Html(FormatDateLikeGmail(selected.Data))}
+            </td>
         </tr>
+
         <tr>
-            <td style=""font-weight:700;padding-right:8px;"">Oggetto:</td>
-            <td>{Html(selected.Oggetto)}</td>
+            <td style=""font-weight:700;
+                       vertical-align:top;
+                       white-space:nowrap;
+                       padding:2px 12px 2px 0;"">
+                Oggetto:
+            </td>
+            <td style=""padding:2px 0;"">
+                {Html(selected.Oggetto)}
+            </td>
         </tr>
+
         <tr>
-            <td style=""font-weight:700;padding-right:8px;"">A:</td>
-            <td>{Html(to)}</td>
+            <td style=""font-weight:700;
+                       vertical-align:top;
+                       white-space:nowrap;
+                       padding:2px 12px 2px 0;"">
+                A:
+            </td>
+            <td style=""padding:2px 0;"">
+                {to}
+            </td>
         </tr>
+
+        {ccRow}
     </table>
 
-    <div style=""border-left:2px solid #dadce0;padding-left:12px;color:#444;"">
+    <div style=""border-left:2px solid #dadce0;
+                margin:0;
+                padding-left:14px;
+                max-width:100%;
+                overflow-wrap:anywhere;"">
         {bodyHtml}
     </div>
 </div>";
+}
+private string GetForwardOriginalBodyHtml(
+    EmailDetail_NEW mail)
+{
+    if (!string.IsNullOrWhiteSpace(mail.CorpoHtml))
+    {
+        var html = mail.CorpoHtml;
+
+        html = StripActiveContent(html);
+
+        /*
+         * Trasforma i CID in URL leggibili prima
+         * di mostrare l'inoltro.
+         */
+        html = ReplaceCidImagesWithAttachmentUrls(
+            mail,
+            html);
+
+        html = RemoveUnresolvedCidImages(html);
+
+        return NormalizeForwardHtml(html);
     }
+
+    var text = mail.CorpoTesto ?? "";
+
+    return $@"
+<div style=""white-space:pre-wrap;
+            font-family:Arial,Helvetica,sans-serif;
+            font-size:14px;
+            line-height:1.5;
+            color:#202124;"">
+    {Html(text)}
+</div>";
+}
+
+private static string NormalizeForwardHtml(
+    string html)
+{
+    if (string.IsNullOrWhiteSpace(html))
+        return "";
+
+    var result = html;
+
+    result = Regex.Replace(
+        result,
+        @"<!DOCTYPE[^>]*>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    result = Regex.Replace(
+        result,
+        @"<head\b[^>]*>[\s\S]*?</head>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    result = Regex.Replace(
+        result,
+        @"</?html\b[^>]*>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    result = Regex.Replace(
+        result,
+        @"</?body\b[^>]*>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    /*
+     * Script e form non devono essere eseguiti.
+     */
+    result = Regex.Replace(
+        result,
+        @"<script\b[^>]*>[\s\S]*?</script>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    result = Regex.Replace(
+        result,
+        @"<form\b[^>]*>[\s\S]*?</form>",
+        "",
+        RegexOptions.IgnoreCase);
+
+    /*
+     * Evita layout larghissimi di Outlook.
+     */
+    result = Regex.Replace(
+        result,
+        @"width\s*:\s*\d+(?:px|pt)",
+        "max-width:100%",
+        RegexOptions.IgnoreCase);
+
+    result = Regex.Replace(
+        result,
+        @"width\s*=\s*[""']?\d+[""']?",
+        "",
+        RegexOptions.IgnoreCase);
+
+    return result.Trim();
+}
+
+private string FormatRecipientsForForward(
+    string? raw)
+{
+    var recipients =
+        ParseEmailsForDisplay(raw);
+
+    return recipients.Count == 0
+        ? ""
+        : string.Join(
+            ", ",
+            recipients.Select(Html));
+}
 
     private static readonly Regex _mentionRegex =
         new(@"@([a-z]\.[a-z0-9]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -3008,6 +3713,104 @@ private void ParseNavigationParameters()
         padding: 12px 14px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
+    .mail-recipients {
+    position: relative;
+    margin-top: 3px;
+    min-width: 0;
+    max-width: 720px;
+}
+
+.recipient-summary-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: #667085;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.2;
+    cursor: pointer;
+    text-align: left;
+}
+
+.recipient-summary-btn:hover {
+    background: #f2f4f7;
+    color: #344054;
+}
+
+.recipient-type-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 4px;
+    background: #eef2f6;
+    color: #475467;
+    font-size: 9px;
+    font-weight: 800;
+    flex-shrink: 0;
+}
+
+.recipient-summary-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recipient-summary-icon {
+    flex-shrink: 0;
+    color: #98a2b3;
+}
+
+.recipient-details-panel {
+    position: relative;
+    z-index: 10;
+    width: min(620px, calc(100vw - 100px));
+    margin-top: 7px;
+    padding: 10px 12px;
+    border: 1px solid #e4e7ec;
+    border-radius: 9px;
+    background: #ffffff;
+    box-shadow: 0 5px 16px rgba(16, 24, 40, 0.10);
+}
+
+.recipient-details-row {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 9px;
+    padding: 4px 0;
+    align-items: start;
+}
+
+.recipient-details-label {
+    color: #667085;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: right;
+    line-height: 1.4;
+}
+
+.recipient-details-values {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.recipient-address {
+    color: #1d2939;
+    font-size: 11px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
 
     .email-meta {
         display: flex;
@@ -3129,6 +3932,66 @@ private void ParseNavigationParameters()
         margin-right: 10px;
         font-size: 15px;
     }
+    .recipients-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-top: 4px;
+    min-width: 0;
+    max-width: 620px;
+}
+
+.recipient-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    height: 22px;
+}
+
+.recipient-row.secondary {
+    opacity: 0.88;
+}
+
+.recipient-label {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 5px;
+    background: #eef3f8;
+    color: #52606d;
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.35px;
+    flex-shrink: 0;
+}
+
+.recipient-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #667085;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.recipient-more {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: #e8f0fe;
+    color: #1a73e8;
+    font-size: 10px;
+    font-weight: 800;
+    flex-shrink: 0;
+}
 
     .meta {
         font-size: 14px;
@@ -3274,7 +4137,70 @@ private void ParseNavigationParameters()
         width: fit-content;
         border: 1px solid #dce7ff;
     }
+.quoted-section {
+    margin-top: 12px;
+}
 
+.quoted-toggle {
+    min-width: 42px;
+    height: 24px;
+    padding: 0 10px;
+    border: 1px solid #d8dee8;
+    border-radius: 7px;
+    background: #f1f3f4;
+    color: #5f6368;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    transition:
+        background-color 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.quoted-toggle:hover {
+    background: #e8eaed;
+    border-color: #c8cdd5;
+}
+
+.quoted-toggle.expanded {
+    background: #f8fafc;
+}
+
+.quoted-dots {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.quoted-dots i {
+    display: block;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.quoted-content {
+    margin-top: 10px;
+    padding: 12px 14px;
+    border-left: 3px solid #dadce0;
+    background: #fafafa;
+    color: #5f6368;
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.quoted-content img {
+    max-width: 100%;
+    height: auto;
+}
     .file-plus {
         cursor: pointer;
         color: #5a78ff;
@@ -3437,11 +4363,14 @@ private void ParseNavigationParameters()
         flex: 1 1 auto;
     }
 
-    .gmail-meta2 {
-        min-width: 0;
-        flex: 1 1 auto;
-    }
-
+  .gmail-meta2 {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
     .from2 {
         font-size: 16px;
         font-weight: 700;
@@ -3561,12 +4490,14 @@ private void ParseNavigationParameters()
         padding: 14px 18px 10px 18px;
         border-bottom: 1px solid #f0f0f0;
     }
-
-    .gmail-left2 {
-        display: flex;
-        align-items: flex-start;
-        gap: 12px;
-    }
+.gmail-left2 {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+}
 
     .gmail-meta2 {
         display: flex;
@@ -3582,11 +4513,12 @@ private void ParseNavigationParameters()
     }
 
     .from-email {
-        font-size: 15px;
-        font-weight: 700;
-        color: #202124;
-    }
-
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
     .sent-badge {
         font-size: 11px;
         font-weight: 700;

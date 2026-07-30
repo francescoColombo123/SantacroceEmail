@@ -1,4 +1,4 @@
-﻿window.destroyQuill = (editorId) => {
+window.destroyQuill = (editorId) => {
     const current = document.getElementById(editorId);
     if (!current) return;
 
@@ -45,7 +45,6 @@
 window.initFileDropZone = (element) => {
     if (!element) return;
 
-    // evita doppia registrazione se init chiamato più volte
     if (element.__dropzoneInit) return;
     element.__dropzoneInit = true;
 
@@ -70,6 +69,7 @@ window.initFileDropZone = (element) => {
         }
     });
 };
+
 const normalizeQuoteHtml = (quoteHtmlOrText) => {
     if (!quoteHtmlOrText) return "";
 
@@ -86,70 +86,241 @@ const normalizeQuoteHtml = (quoteHtmlOrText) => {
     return s.trim();
 };
 
-window.initQuill = (editorId, dotnetRef, bodyHtml, signatureText, quoteHtml) => {
+const encodeHtml = (s) =>
+    (s ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+
+function normalizeEditorHtml(value) {
+    let html = (value || "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .trim();
+
+    if (!html)
+        return "";
+
+    html = html.replace(/<script[\s\S]*?<\/script>/gi, "");
+    html = html.replace(/<style[\s\S]*?<\/style>/gi, "");
+    html = html.replace(/<!--[\s\S]*?-->/g, "");
+
+    const containsHtml = /<[a-z][\s\S]*?>/i.test(html);
+
+    if (!containsHtml) {
+        html = encodeHtml(html)
+            .replace(/\n\n/g, "<p><br></p>")
+            .replace(/\n/g, "<br>");
+    } else {
+        html = html.replace(/>(\s*\n+\s*)</g, "><");
+    }
+
+    html = html.replace(/(<br\s*\/?>\s*){4,}/gi, "<br><br>");
+    return html.trim();
+}
+
+function normalizeSignatureHtml(signatureHtml) {
+    let s = signatureHtml || "";
+
+    s = s
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .trim();
+
+    s = s.replace(/<script[\s\S]*?<\/script>/gi, "");
+    s = s.replace(/<style[\s\S]*?<\/style>/gi, "");
+    s = s.replace(/<!--[\s\S]*?-->/g, "");
+
+    s = s.replace(/<div\b[^>]*>/gi, "");
+    s = s.replace(/<\/div>/gi, "\n");
+
+    s = s.replace(/<p\b[^>]*>/gi, "");
+    s = s.replace(/<\/p>/gi, "\n");
+
+    s = s.replace(/<br\s*\/?>/gi, "\n");
+
+    s = s.replace(/\n{3,}/g, "\n\n");
+    s = s.replace(/\n/g, "<br>");
+
+    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
+    s = s.replace(/^(\s|<br\s*\/?>|&nbsp;)+/gi, "");
+    s = s.replace(/(\s|<br\s*\/?>|&nbsp;)+$/gi, "");
+
+    return s.trim();
+}
+
+function escapeRegExp(text) {
+    return (text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripKnownSignatureFromHtml(html, signatureHtml) {
+    if (!html || !html.trim())
+        return "";
+
+    const normalized = normalizeSignatureHtml(signatureHtml || "");
+    if (!normalized)
+        return html;
+
+    const escaped = escapeRegExp(normalized);
+    let s = html;
+
+    s = s.replace(
+        new RegExp(`<div[^>]*class\\s*=\\s*[\"'][^\"']*compose-signature[^\"']*[\"'][^>]*>\\s*(?:<br\\s*\\/?>\\s*)?${escaped}\\s*<\\/div>`, "gi"),
+        ""
+    );
+
+    s = s.replace(
+        new RegExp(`(?:<br\\s*\\/?>\\s*)?${escaped}(?:\\s|<br\\s*\\/?>|&nbsp;)*$`, "gi"),
+        ""
+    );
+
+    return s.trim();
+}
+
+function stripSignatureFromHtml(html) {
+    if (!html || !html.trim())
+        return "";
+
+    let s = html;
+
+    s = s.replace(
+        /<div[^>]*data-signature-start\s*=\s*["']true["'][^>]*>.*?<\/div>\s*<div[^>]*class\s*=\s*["'][^"']*compose-signature[^"']*["'][^>]*>.*?<\/div>\s*<div[^>]*data-signature-end\s*=\s*["']true["'][^>]*>.*?<\/div>/gis,
+        ""
+    );
+
+    s = s.replace(/<div[^>]*data-compose-signature\s*=\s*["']true["'][^>]*>.*?<\/div>/gis, "");
+    s = s.replace(/<div[^>]*data-sc-signature\s*=\s*["']1["'][^>]*>.*?<\/div>/gis, "");
+    s = s.replace(/<div[^>]*class\s*=\s*["'][^"']*compose-signature[^"']*["'][^>]*>.*?<\/div>/gis, "");
+
+    s = s.replace(/(<br\s*\/?>\s*){4,}$/gi, "<br><br>");
+
+    return s.trim();
+}
+
+window.initQuill = (
+    editorId,
+    dotnetRef,
+    bodyHtml,
+    signatureText,
+    quoteHtml
+) => {
     window.destroyQuill(editorId);
 
     const host = document.getElementById(editorId);
     if (!host) return;
 
+    const toolbar = document.getElementById("composeToolbar");
+
     const quill = new Quill(host, {
         theme: "snow",
         modules: {
-            toolbar: document.getElementById("composeToolbar")
+            toolbar: toolbar
         }
     });
 
     host.__quill = quill;
     host.__dotnetRef = dotnetRef;
 
-    const body = (bodyHtml || "").trim();
-    const firma = normalizeSignatureHtml(signatureText || "");
-    const quote = (quoteHtml || "").trim();
-    let html = body && body !== "<p><br></p>" ? body : "<p><br></p>";
-    quill.clipboard.dangerouslyPasteHTML(0, html, "api");
-    quill.setSelection(0, 0, "api");
+    const body = normalizeEditorHtml(bodyHtml || "");
+    const signature = normalizeSignatureHtml(signatureText || "");
+
+    const bodyWithoutSignature = stripKnownSignatureFromHtml(
+        stripSignatureFromHtml(body),
+        signature
+    );
+
+    let initialHtml =
+        bodyWithoutSignature &&
+        bodyWithoutSignature !== "<p><br></p>" &&
+        bodyWithoutSignature !== "<p></p>"
+            ? bodyWithoutSignature
+            : "<p><br></p>";
+
+    if (signature) {
+        initialHtml += `
+            <div class="compose-signature" data-compose-signature="true">
+                <br>${signature}
+            </div>
+        `;
+    }
+
+    quill.clipboard.dangerouslyPasteHTML(0, initialHtml, "api");
+    quill.setSelection(0, 0, "silent");
 
     const handler = () => {
         try {
             dotnetRef.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
-        } catch { }
+        } catch {
+        }
     };
 
     host.__quillHandler = handler;
     quill.on("text-change", handler);
     handler();
 
-    setTimeout(() => quill.focus(), 0);
+    setTimeout(() => {
+        try {
+            quill.setSelection(0, 0, "silent");
+            quill.focus();
+        } catch {
+        }
+    }, 0);
 };
-function normalizeSignatureHtml(signatureHtml) {
-    let s = signatureHtml || "";
 
-    s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
-
-    s = s.replace(/<\/div>/gi, "<br>");
-    s = s.replace(/<div[^>]*>/gi, "");
-    s = s.replace(/<\/p>/gi, "<br>");
-    s = s.replace(/<p[^>]*>/gi, "");
-
-    if (!/<br\s*\/?>/i.test(s)) {
-        s = s.replace(/\n/g, "<br>");
-    }
-
-    s = s.replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>");
-
-    return s.trim();
-}
 window.composeInterop = window.composeInterop || {};
 
-window.composeInterop.replaceSignature = function (editorId, signatureHtml) {
+window.composeInterop.replaceSignature = function (editorId, oldSignatureHtml, signatureHtml) {
     const host = document.getElementById(editorId);
     const quill = host?.__quill;
     const dotnetRef = host?.__dotnetRef;
 
-    if (!quill) return;
+    if (!quill)
+        return;
 
-    dotnetRef?.invokeMethodAsync("UpdateBodyHtml", quill.root.innerHTML || "");
+    const newSignature = normalizeSignatureHtml(signatureHtml || "");
+    const oldSignature = normalizeSignatureHtml(oldSignatureHtml || "");
+
+    const currentHtml = quill.root?.innerHTML || "";
+    let bodyWithoutSignature = stripSignatureFromHtml(currentHtml);
+
+    if (oldSignature) {
+        bodyWithoutSignature = stripKnownSignatureFromHtml(bodyWithoutSignature, oldSignature);
+    }
+
+    if (newSignature) {
+        bodyWithoutSignature = stripKnownSignatureFromHtml(bodyWithoutSignature, newSignature);
+    }
+
+    let nextHtml =
+        bodyWithoutSignature &&
+        bodyWithoutSignature !== "<p><br></p>" &&
+        bodyWithoutSignature !== "<p></p>"
+            ? bodyWithoutSignature
+            : "<p><br></p>";
+
+    if (newSignature) {
+        nextHtml += `
+            <div class="compose-signature" data-compose-signature="true">
+                <br>${newSignature}
+            </div>
+        `;
+    }
+
+    const prev = quill.getSelection();
+
+    quill.deleteText(0, quill.getLength(), "silent");
+    quill.clipboard.dangerouslyPasteHTML(0, nextHtml, "api");
+
+    if (prev) {
+        const maxIndex = Math.max(0, quill.getLength() - 1);
+        quill.setSelection(Math.min(prev.index, maxIndex), prev.length || 0, "silent");
+    }
+
+    dotnetRef
+        ?.invokeMethodAsync("UpdateBodyHtml", quill.root?.innerHTML || "")
+        .catch(() => { });
 };
+
 function normalizePlain(text) {
     return (text || "")
         .replace(/\r\n/g, "\n")
@@ -169,32 +340,29 @@ function plainToHtml(text) {
         .map(block => `<p>${encodeHtml(block).replace(/\n/g, "<br>")}</p>`)
         .join("");
 }
+
 function signatureToPlain(signatureHtml) {
     let s = signatureHtml || "";
 
     s = s.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
     s = s.replace(/<\s*br\s*\/?\s*>/gi, "\n");
     s = s.replace(/<\/\s*p\s*>/gi, "\n");
     s = s.replace(/<\/\s*div\s*>/gi, "\n");
-
     s = s.replace(/<[^>]+>/g, "");
 
     return normalizePlain(s);
 }
-
-const encodeHtml = (s) =>
-    (s ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
 
 window.composeInterop.getEditorHtml = function (editorId) {
     const host = document.getElementById(editorId);
     const quill = host?.__quill;
     return quill?.root?.innerHTML || "";
 };
+
 window.registerComposeAutoSaveClose = function (dotnetRef) {
+    // Keep the latest dialog reference (important when opening compose multiple times).
+    window.__composeAutoSaveDotnetRef = dotnetRef;
+
     if (window.__composeAutoSaveRegistered)
         return;
 
@@ -204,9 +372,12 @@ window.registerComposeAutoSaveClose = function (dotnetRef) {
     const closeOnce = () => {
         if (window.__composeAutoSaveBusy) return;
 
+        const ref = window.__composeAutoSaveDotnetRef;
+        if (!ref) return;
+
         window.__composeAutoSaveBusy = true;
 
-        dotnetRef.invokeMethodAsync("CloseFromJs")
+        ref.invokeMethodAsync("CloseFromJs")
             .finally(() => {
                 setTimeout(() => {
                     window.__composeAutoSaveBusy = false;
@@ -222,16 +393,20 @@ window.registerComposeAutoSaveClose = function (dotnetRef) {
 
     document.addEventListener("mousedown", function (e) {
         const dialog = document.querySelector(".mud-dialog");
+        const target = e.target;
+
+        if (!(target instanceof Element))
+            return;
 
         const isMudPopup =
-            e.target.closest(".mud-popover") ||
-            e.target.closest(".mud-list") ||
-            e.target.closest(".mud-menu") ||
-            e.target.closest(".mud-select");
+            target.closest(".mud-popover") ||
+            target.closest(".mud-list") ||
+            target.closest(".mud-menu") ||
+            target.closest(".mud-select");
 
         if (isMudPopup) return;
 
-        if (dialog && !dialog.contains(e.target)) {
+        if (dialog && !dialog.contains(target)) {
             closeOnce();
         }
     });
@@ -243,7 +418,6 @@ window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {
 
     if (!editorEl || !toolbarEl) return;
 
-    // toolbar HTML (puoi personalizzarla)
     toolbarEl.innerHTML = `
     <span class="ql-formats">
       <button class="ql-bold"></button>
@@ -271,6 +445,5 @@ window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {
         dotnetRef?.invokeMethodAsync("UpdateTaskHtml", html);
     });
 
-    // opzionale: salva istanza per cleanup
     editorEl.__quill = quill;
 };

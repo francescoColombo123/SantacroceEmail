@@ -1696,6 +1696,10 @@ else
         try
         {
             _sentDetail = await MailSvc.GetSentDetailAsync(id, _utente!);
+            if (_sentDetail is null)
+            {
+                Snackbar.Add("Dettaglio inviata non disponibile per l'utente corrente.", Severity.Warning);
+            }
         }
         finally
         {
@@ -2492,101 +2496,6 @@ else
             .ToList();
     }
 
-    private async Task<int> CountThreadMessagesAsync(MailDbContext db, int emailId)
-    {
-        const string sql = @"
-WITH base AS (
-    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
-    FROM SGAPP.EMAIL_RICEVUTE
-    WHERE ID = :id
-
-    UNION ALL
-
-    SELECT THREAD_KEY, MESSAGE_ID, IN_REPLY_TO, REFERENCES_HDR
-    FROM SGAPP.EMAIL_INVIATE
-    WHERE ID = :id
-),
-base_one AS (
-    SELECT
-        TRIM(THREAD_KEY) AS THREAD_KEY,
-        TRIM(MESSAGE_ID) AS MESSAGE_ID,
-        TRIM(IN_REPLY_TO) AS IN_REPLY_TO,
-        REFERENCES_HDR
-    FROM base
-    WHERE ROWNUM = 1
-),
-raw_thread AS (
-    SELECT 'R' AS TIPO, r.ID
-    FROM SGAPP.EMAIL_RICEVUTE r
-    CROSS JOIN base_one b
-    WHERE NVL(r.ELIMINATO, 'N') = 'N'
-      AND (
-            (
-                b.THREAD_KEY IS NOT NULL
-                AND b.THREAD_KEY <> ''
-                AND UPPER(TRIM(r.THREAD_KEY)) = UPPER(b.THREAD_KEY)
-            )
-         OR (
-                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
-                AND (
-                       UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
-                    OR UPPER(TRIM(r.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
-                    OR UPPER(TRIM(r.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
-                    OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
-                    OR INSTR(UPPER(NVL(r.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
-                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.MESSAGE_ID, '')))) > 0
-                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(r.IN_REPLY_TO, '')))) > 0
-                )
-            )
-      )
-
-    UNION ALL
-
-    SELECT 'I' AS TIPO, i.ID
-    FROM SGAPP.EMAIL_INVIATE i
-    CROSS JOIN base_one b
-    WHERE (
-            (
-                b.THREAD_KEY IS NOT NULL
-                AND b.THREAD_KEY <> ''
-                AND UPPER(TRIM(i.THREAD_KEY)) = UPPER(b.THREAD_KEY)
-            )
-         OR (
-                (b.THREAD_KEY IS NULL OR b.THREAD_KEY = '')
-                AND (
-                       UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.MESSAGE_ID)
-                    OR UPPER(TRIM(i.IN_REPLY_TO)) = UPPER(b.MESSAGE_ID)
-                    OR UPPER(TRIM(i.MESSAGE_ID)) = UPPER(b.IN_REPLY_TO)
-                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.MESSAGE_ID, ''))) > 0
-                    OR INSTR(UPPER(NVL(i.REFERENCES_HDR, '')), UPPER(NVL(b.IN_REPLY_TO, ''))) > 0
-                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.MESSAGE_ID, '')))) > 0
-                    OR INSTR(UPPER(NVL(b.REFERENCES_HDR, '')), UPPER(TRIM(NVL(i.IN_REPLY_TO, '')))) > 0
-                )
-            )
-    )
-)
-SELECT COUNT(*)
-FROM (
-    SELECT TIPO || ':' || TO_CHAR(ID) AS ROW_KEY
-    FROM raw_thread
-    GROUP BY TIPO || ':' || TO_CHAR(ID)
-)";
-
-        await using var cmd = db.Database.GetDbConnection().CreateCommand();
-        cmd.CommandText = sql;
-        cmd.CommandTimeout = 0;
-
-        var p = cmd.CreateParameter();
-        p.ParameterName = "id";
-        p.Value = emailId;
-        cmd.Parameters.Add(p);
-
-        var value = await cmd.ExecuteScalarAsync();
-
-        return value == null || value == DBNull.Value
-            ? 1
-            : Convert.ToInt32(value);
-    }
     private async Task NuovoPostIt()
     {
         var id = await postItService.AddAsync(_utente!, "Nuovo post-it…", "Nuovo post-it…");
@@ -2696,12 +2605,14 @@ FROM (
 
     private async Task Reply(EmailDetail_NEW msg)
     {
+        var quoteHtml = BuildReplyQuoteHtml(msg);
+
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
             ["Destinatari"] = msg.Mittente,
             ["Oggetto"] = "Re: " + (msg.Oggetto ?? ""),
-            ["CorpoIniziale"] = "",
+            ["CorpoIniziale"] = quoteHtml,
             ["ReplyToMessageId"] = msg.MessageId,
             ["CasellaMittente"] = msg.CasellaEmail
         };
@@ -2766,12 +2677,14 @@ FROM (
             .Where(x => !string.IsNullOrWhiteSpace(x))
             .Distinct());
 
+        var quoteHtml = BuildReplyQuoteHtml(msg);
+
         var parameters = new DialogParameters
         {
             ["Utente"] = _utente,
-            ["Destinatari"] = msg.Mittente,
+            ["Destinatari"] = destinatariTutti,
             ["Oggetto"] = "Re: " + (msg.Oggetto ?? ""),
-            ["CorpoIniziale"] = "",
+            ["CorpoIniziale"] = quoteHtml,
             ["ReplyToMessageId"] = msg.MessageId,
             ["CasellaMittente"] = msg.CasellaEmail
         };
@@ -2789,6 +2702,50 @@ FROM (
         var result = await dialog.Result;
         if (result.Data?.ToString() == "sent")
             Snackbar.Add("Risposta a Tutti inviata ✅", Severity.Success);
+    }
+
+    private static string HtmlEncode(string? s)
+        => System.Net.WebUtility.HtmlEncode(s ?? "");
+
+    private static string NormalizeReplyBodyHtml(string? html, string? text)
+    {
+        if (!string.IsNullOrWhiteSpace(html))
+        {
+            var s = html;
+            s = Regex.Replace(s, @"<script[\s\S]*?</script>", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<style[\s\S]*?</style>", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"<!--[\s\S]*?-->", "", RegexOptions.IgnoreCase);
+            return s;
+        }
+
+        var safe = HtmlEncode(text)
+            .Replace("\r\n", "\n")
+            .Replace("\r", "\n")
+            .Replace("\n", "<br>");
+
+        return safe;
+    }
+
+    private string BuildReplyQuoteHtml(EmailDetail_NEW original)
+    {
+        var from = ExtractEmail(original.Mittente);
+        var it = new System.Globalization.CultureInfo("it-IT");
+
+        var d = original.Data?.ToString("ddd d MMM yyyy", it) ?? "";
+        var t = original.Data?.ToString("HH:mm", it) ?? "";
+
+        var bodyHtml = NormalizeReplyBodyHtml(original.CorpoHtml, original.CorpoTesto);
+
+        return $@"
+<div style=""font-family:'Courier New',monospace;font-size:14px;line-height:1.45;color:#222;"">
+    <div>
+        Il giorno {HtmlEncode(d)} alle ore {HtmlEncode(t)} {HtmlEncode(from)} ha scritto:
+    </div>
+    <br>
+    <div>
+        {bodyHtml}
+    </div>
+</div>";
     }
 
     private async Task Archive(EmailListItem_NEW item)
@@ -3952,12 +3909,27 @@ FROM (
     }
 
     .mail-grid {
+        display: grid;
+        grid-template-columns: minmax(420px, 46%) minmax(0, 54%);
         flex: 1;
         min-height: 0;
         overflow: hidden !important;
     }
+
+    .mail-grid.detail-view {
+        grid-template-columns: minmax(420px, 46%) minmax(0, 54%);
+    }
+
     .mail-grid.full-list {
         grid-template-columns: 1fr;
+    }
+
+    .mail-grid.full-list .mail-detail {
+        display: none;
+    }
+
+    .mail-grid.detail-view .mail-list {
+        border-right: 1px solid #e6ebf5;
     }
 
     .mail-container,
