@@ -996,7 +996,7 @@ else
                                         {
                                             <a class="attach-chip"
                                                href="#"
-                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, msg.Allegati.Select(x => x.Id).ToList()))" "
+                                               @onclick="@(async () => await OpenAttachmentAsync(a.Id, a.MimeType, msg.Allegati.Select(x => x.Id).ToList(), ResolveAttachmentSourceFromTipo(msg.Tipo)))"
                                                @onclick:preventDefault="true"
                                                @onclick:stopPropagation="true">
                                                 <MudIcon Icon="@GetAttachmentIcon(a.NomeFile)" />
@@ -3683,10 +3683,19 @@ else
     private void GoToTask(int taskId)
     => Nav.NavigateTo($"/tasks-new?cp={Uri.EscapeDataString(_cp ?? "")}");
 
-    private Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
+    private static string? ResolveAttachmentSourceFromTipo(string? tipo)
+    {
+        return string.Equals(tipo, "I", StringComparison.OrdinalIgnoreCase)
+            ? "sent"
+            : null;
+    }
+
+    private Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids, string? src = null)
     {
         _attachmentViewerId = attachmentId;
-        _attachmentViewerSrc = null;
+        _attachmentViewerSrc = string.Equals(src, "sent", StringComparison.OrdinalIgnoreCase)
+            ? "sent"
+            : null;
         _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
         _showAttachmentViewer = true;
         StateHasChanged();

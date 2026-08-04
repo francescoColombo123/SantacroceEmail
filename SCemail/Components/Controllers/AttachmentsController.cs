@@ -88,6 +88,52 @@ namespace SCemail.Components.Controllers
             int CurrentId,
             List<AttachmentListItemDto> Attachments
         );
+
+        private static List<int> ParseIds(string? idsRaw)
+        {
+            if (string.IsNullOrWhiteSpace(idsRaw))
+                return new List<int>();
+
+            return idsRaw
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(x => int.TryParse(x, out var id) ? id : 0)
+                .Where(id => id > 0)
+                .Distinct()
+                .ToList();
+        }
+
+        private static List<AttachmentListItemDto> AlignContextAttachments(
+            List<AttachmentListItemDto> attachments,
+            int currentId,
+            List<int> requestedIds)
+        {
+            var unique = attachments
+                .GroupBy(x => x.Id)
+                .Select(group => group.First())
+                .ToList();
+
+            if (requestedIds.Count == 0)
+                return unique;
+
+            var orderMap = requestedIds
+                .Select((id, idx) => new { id, idx })
+                .GroupBy(x => x.id)
+                .ToDictionary(g => g.Key, g => g.First().idx);
+
+            var aligned = unique
+                .Where(x => orderMap.ContainsKey(x.Id))
+                .OrderBy(x => orderMap[x.Id])
+                .ToList();
+
+            if (!aligned.Any(x => x.Id == currentId))
+            {
+                var clicked = unique.FirstOrDefault(x => x.Id == currentId);
+                if (clicked is not null)
+                    aligned.Insert(0, clicked);
+            }
+
+            return aligned.Count > 0 ? aligned : unique;
+        }
         // === ALLEGATI EMAIL ===
 
         [HttpGet("{id:int}/meta")]
@@ -261,10 +307,13 @@ namespace SCemail.Components.Controllers
         public async Task<ActionResult<AttachmentViewerContextDto>> GetViewerContext(
     int id,
     [FromQuery] string? src,
+    [FromQuery] string? ids,
     CancellationToken ct)
         {
             try
             {
+                var requestedIds = ParseIds(ids);
+
                 if (string.Equals(src, "sent", StringComparison.OrdinalIgnoreCase))
                 {
                     var items = await _attRepo.GetSentAttachmentsOfSameEmailAsync(id, ct);
@@ -274,13 +323,15 @@ namespace SCemail.Components.Controllers
                     if (!items.Any(x => x.Id == id))
                         return NotFound();
 
-                    var result = new AttachmentViewerContextDto(
-                        id,
-                        items.Select(x => new AttachmentListItemDto(
+                    var mapped = items.Select(x => new AttachmentListItemDto(
                             x.Id,
                             x.NomeFile ?? "allegato",
                             string.IsNullOrWhiteSpace(x.MimeType) ? "application/octet-stream" : x.MimeType
-                        )).ToList()
+                        )).ToList();
+
+                    var result = new AttachmentViewerContextDto(
+                        id,
+                        AlignContextAttachments(mapped, id, requestedIds)
                     );
 
                     return Ok(result);
@@ -294,13 +345,15 @@ namespace SCemail.Components.Controllers
                     if (!items.Any(x => x.Id == id))
                         return NotFound();
 
-                    var result = new AttachmentViewerContextDto(
-                        id,
-                        items.Select(x => new AttachmentListItemDto(
+                    var mapped = items.Select(x => new AttachmentListItemDto(
                             (int)x.Id,
                             x.NomeFile ?? "allegato",
                             string.IsNullOrWhiteSpace(x.MimeType) ? "application/octet-stream" : x.MimeType
-                        )).ToList()
+                        )).ToList();
+
+                    var result = new AttachmentViewerContextDto(
+                        id,
+                        AlignContextAttachments(mapped, id, requestedIds)
                     );
 
                     return Ok(result);

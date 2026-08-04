@@ -340,6 +340,7 @@
                     .Select(x => x.Id)
                     .Distinct()
                     .ToList();
+                    var attachmentSrc = ResolveAttachmentSource(mail);
 
                 <a class="attach-chip @(a.IsEmailEml ? "attach-chip-eml" : "")"
                    href="javascript:void(0)"
@@ -347,7 +348,8 @@
                    @onclick="@(async () => await OpenAttachmentOrEmailAsync(
                        a,
                        mime,
-                       visibleIds))"
+                       visibleIds,
+                       attachmentSrc))"
                    @onclick:stopPropagation="true">
 
                     <MudIcon Icon="@(a.IsEmailEml
@@ -2103,7 +2105,14 @@ private void ParseNavigationParameters()
     private int _attachmentViewerId;
     private string? _attachmentViewerSrc;
     private List<int> _attachmentViewerIds = new();
-    private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids)
+    private static string? ResolveAttachmentSource(EmailDetail_NEW mail)
+    {
+        return string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase)
+            ? "sent"
+            : null;
+    }
+
+    private async Task OpenAttachmentAsync(int attachmentId, string? mimeType, List<int> ids, string? src = null)
     {
         Console.WriteLine($"CLICK ALLEGATO ID = {attachmentId}");
 
@@ -2120,7 +2129,11 @@ private void ParseNavigationParameters()
 
         if (!previewable)
         {
-            await JS.InvokeVoidAsync("openNewTab", $"/api/attachments/{attachmentId}/download");
+            var downloadUrl = string.Equals(src, "sent", StringComparison.OrdinalIgnoreCase)
+                ? $"/api/attachments/{attachmentId}/downloadInternal"
+                : $"/api/attachments/{attachmentId}/download";
+
+            await JS.InvokeVoidAsync("openNewTab", downloadUrl);
             return;
         }
 
@@ -2128,14 +2141,16 @@ private void ParseNavigationParameters()
         await InvokeAsync(StateHasChanged);
 
         _attachmentViewerId = attachmentId;
-        _attachmentViewerSrc = null;
+        _attachmentViewerSrc = string.Equals(src, "sent", StringComparison.OrdinalIgnoreCase)
+            ? "sent"
+            : null;
         _attachmentViewerIds = ids?.Distinct().ToList() ?? new List<int> { attachmentId };
 
         _showAttachmentViewer = true;
         await InvokeAsync(StateHasChanged);
     }
 
-    private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids)
+    private async Task OpenAttachmentOrEmailAsync(AllegatoItem_NEW a, string? mimeType, List<int> ids, string? src)
     {
         var nome = a.NomeFile ?? "";
         var mime = NormalizeMime(mimeType, nome);
@@ -2158,7 +2173,7 @@ private void ParseNavigationParameters()
             return;
         }
 
-        await OpenAttachmentAsync(a.Id, mime, ids);
+        await OpenAttachmentAsync(a.Id, mime, ids, src);
     }
     private Task CloseAttachmentViewer()
     {
