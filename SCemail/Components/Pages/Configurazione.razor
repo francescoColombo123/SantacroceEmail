@@ -174,8 +174,15 @@
                             <label class="form-label">Provider</label>
                             <select class="form-select" @onchange="OnProviderChanged">
                                 <option value="Gmail" selected="@("Gmail" == form.Provider)">Gmail</option>
-                                <option value="Aruba" selected="@("Aruba" == form.Provider)">Aruba</option>
-                                <option value="Aruba-IMAPS" selected="@("Aruba-IMAPS" == form.Provider)">ARUBA - IMAPS</option>
+                                <option value="Aruba - imap"
+                                        selected="@("Aruba - imap" == form.Provider)">
+                                    Aruba - imap
+                                </option>
+
+                                <option value="Aruba - imaps"
+                                        selected="@("Aruba - imaps" == form.Provider)">
+                                    Aruba - imaps
+                                </option>
 
                                 <option value="Legalmail" selected="@("Legalmail" == form.Provider)">Legalmail</option>
                                 <option value="InterfreePEC" selected="@("InterfreePEC" == form.Provider)">Interfree PEC</option>
@@ -608,7 +615,9 @@
         _refreshTimer?.Dispose();
     }
 
-    private static (string Host, int Port, string UseSsl) ResolveImapSettings(string provider, string email)
+    private static (string Host, int Port, string UseSsl) ResolveImapSettings(
+     string provider,
+     string email)
     {
         provider = (provider ?? "").Trim();
         email = (email ?? "").Trim().ToLowerInvariant();
@@ -616,17 +625,11 @@
         if (provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
             return ("imap.gmail.com", 993, "Y");
 
-        if (provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase))
+        if (provider.Equals("Aruba - imaps", StringComparison.OrdinalIgnoreCase))
             return ("imaps.pec.aruba.it", 993, "Y");
 
-        if (provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase))
-        {
-            var host = email.Contains("pec", StringComparison.OrdinalIgnoreCase)
-                ? "imaps.pec.aruba.it"
-                : "imap.aruba.it";
-
-            return (host, 993, "Y");
-        }
+        if (provider.Equals("Aruba - imap", StringComparison.OrdinalIgnoreCase))
+            return ("imap.aruba.it", 993, "Y");
 
         if (provider.Equals("Legalmail", StringComparison.OrdinalIgnoreCase))
             return ("mbox.cert.legalmail.it", 993, "Y");

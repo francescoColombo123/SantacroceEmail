@@ -2090,7 +2090,7 @@ else
         _sentSelectedId = null;
         _sentDetail = null;
         _sentSearch = null;
-
+       
         // drafts
         _draftIndex = 0;
         _hasMoreDrafts = true;
@@ -2128,7 +2128,19 @@ else
         _folder = q.TryGetValue("folder", out var f) ? f.ToString().ToLower() : "inbox";
 
         ResetFolderState();
+        _searchWord = q.TryGetValue("searchWord", out var sw)
+            ? sw.ToString()
+            : null;
 
+        _addrInput = q.TryGetValue("address", out var addr)
+            ? addr.ToString()
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(_addrInput))
+        {
+            _selectedAddressChip = new RecipientChip(_addrInput, null);
+            _lastAppliedAddressFilter = _addrInput;
+        }
         _allUsers = await MailSvc.GetUserListAsync();
 
         _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
@@ -3362,40 +3374,45 @@ else
     private Task OpenEmailAndMarkRead(
     EmailListItem_NEW item,
     string? fromSection)
-{
-    MarkEmailAsReadInAllLists(item.Id);
-    StateHasChanged();
-
-    var query = new Dictionary<string, string?>
     {
-        ["fromFolder"] = _folder,
-        ["fromSection"] = fromSection,
-        ["assegnatoA"] = item.AssegnatoA
-    };
+        MarkEmailAsReadInAllLists(item.Id);
+        StateHasChanged();
 
-    var idsCorrenti = string.IsNullOrWhiteSpace(fromSection)
-        ? _emails
-            .Select(x => x.Id)
-            .Distinct()
-            .ToList()
-        : _sezioniVm
-            .FirstOrDefault(s => s.Nome == fromSection)?
-            .Emails
-            .Select(x => x.Id)
-            .Distinct()
-            .ToList() ?? new List<int>();
+        var query = new Dictionary<string, string?>
+        {
+            ["fromFolder"] = _folder,
+            ["fromSection"] = fromSection,
+            ["assegnatoA"] = item.AssegnatoA,
 
-    if (idsCorrenti.Count > 0)
-        query["ids"] = string.Join(",", idsCorrenti);
+            // conserva i filtri
+            ["searchWord"] = _searchWord,
+            ["address"] = _selectedAddressChip?.Email
+                        ?? _addrInput
+        };
 
-    var url = QueryHelpers.AddQueryString(
-        $"/mail-detail/{item.Id}/{_cp}",
-        query);
+        var idsCorrenti = string.IsNullOrWhiteSpace(fromSection)
+            ? _emails
+                .Select(x => x.Id)
+                .Distinct()
+                .ToList()
+            : _sezioniVm
+                .FirstOrDefault(s => s.Nome == fromSection)?
+                .Emails
+                .Select(x => x.Id)
+                .Distinct()
+                .ToList() ?? new List<int>();
 
-    Nav.NavigateTo(url);
+        if (idsCorrenti.Count > 0)
+            query["ids"] = string.Join(",", idsCorrenti);
 
-    return Task.CompletedTask;
-}
+        var url = QueryHelpers.AddQueryString(
+            $"/mail-detail/{item.Id}/{_cp}",
+            query);
+
+        Nav.NavigateTo(url);
+
+        return Task.CompletedTask;
+    }
     private static async Task SafeForget(Func<Task> work)
     {
         try { await work(); }

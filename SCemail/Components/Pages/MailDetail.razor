@@ -62,6 +62,7 @@
 
                 <div class="head-actions">
 
+
                     @if (!string.IsNullOrWhiteSpace(_assegnatoA))
                     {
                         <div class="assigned-badge" title="@_assegnatoA">
@@ -77,6 +78,7 @@
                                        Class="head-action-btn"
                                        OnClick="@DeleteCurrentEmail" />
                     }
+                    
                     <MudIconButton Icon="@Icons.Material.Filled.Report"
                                    Title="Metti mittente in blacklist"
                                    Color="Color.Error"
@@ -269,9 +271,9 @@
                                                    Title="Inoltra (esterno)"
                                                    OnClick="@(() => ForwardExternalFrom(mail))" />
 
-                                    <MudIconButton Icon="@Icons.Material.Filled.MenuBook"
-                                                   Title="Leggi da qui"
-                                                   OnClick="@(() => ReadFromHere(mail))" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.Print"
+                                                   Title="Stampa"
+                                                   OnClick="@(() => PrintEmail(mail))" />
                                 </div>
                             </div>
                         </div>
@@ -543,12 +545,68 @@
     }
     private string? _fromFolder;
     private string? _fromSection;
-
+    private string? _fromSearchWord;
+    private string? _fromAddress;
     private List<int> _navIds = new();
     private int _currentNavIndex = -1;
 
     private bool HasPrevious => _currentNavIndex > 0;
     private bool HasNext => _currentNavIndex >= 0 && _currentNavIndex < _navIds.Count - 1;
+    private async Task PrintEmail(EmailDetail_NEW mail)
+    {
+        if (mail == null)
+            return;
+
+        var bodyParts = SplitCurrentAndQuotedBody(mail);
+
+        // Corpo corrente sempre stampato
+        var bodyHtml = bodyParts.CurrentHtml;
+
+        // Se i tre pallini sono aperti,
+        // stampa anche la conversazione precedente
+        if (bodyParts.HasQuoted)
+        {
+            if (IsQuotedMessageExpanded(mail))
+            {
+                // Pallini APERTI: stampa anche la conversazione precedente
+                bodyHtml += $@"
+            <div class=""print-quoted"">
+                {bodyParts.QuotedHtml}
+            </div>";
+            }
+            else
+            {
+                // Pallini CHIUSI: comportamento Gmail
+                bodyHtml += @"
+            <div class=""print-quoted-hidden"">
+                [Testo tra virgolette nascosto]
+            </div>";
+            }
+        }
+
+        var message = new
+        {
+            sender = GetMailHeaderSender(mail),
+            to = mail.Destinatari ?? "",
+            cc = mail.Cc ?? "",
+            bcc = mail.Ccn ?? "",
+            date = mail.Data?.ToString("dd/MM/yyyy HH:mm") ?? "",
+            bodyHtml,
+
+            attachments = GetVisibleAttachments(mail)
+                .Select(a => new
+                {
+                    name = a.NomeFile ?? "Allegato"
+                })
+                .ToList()
+        };
+
+        await JS.InvokeVoidAsync(
+            "printSingleEmail",
+            mail.Oggetto ?? "(nessun oggetto)",
+            message
+        );
+    }
 
     private int? PreviousId => HasPrevious ? _navIds[_currentNavIndex - 1] : null;
     private int? NextId => HasNext ? _navIds[_currentNavIndex + 1] : null;
@@ -2038,7 +2096,17 @@ private void ParseNavigationParameters()
         out var section)
         ? section.ToString()
         : null;
+        _fromSearchWord = query.TryGetValue(
+        "searchWord",
+        out var searchWord)
+        ? searchWord.ToString()
+        : null;
 
+        _fromAddress = query.TryGetValue(
+            "address",
+            out var address)
+            ? address.ToString()
+            : null;
     _navIds = new List<int>();
     _currentNavIndex = -1;
 
@@ -2629,6 +2697,12 @@ private void ParseNavigationParameters()
         if (!string.IsNullOrWhiteSpace(_fromSection))
             query["fromSection"] = _fromSection;
 
+        if (!string.IsNullOrWhiteSpace(_fromSearchWord))
+            query["searchWord"] = _fromSearchWord;
+
+        if (!string.IsNullOrWhiteSpace(_fromAddress))
+            query["address"] = _fromAddress;
+
         if (_navIds.Count > 0)
             query["ids"] = string.Join(",", _navIds);
 
@@ -2645,13 +2719,24 @@ private void ParseNavigationParameters()
 
     private void GoBack()
     {
-        // Torno alla folder, e se ho una sezione ci “atterro”
-        var url = string.IsNullOrWhiteSpace(_fromFolder)
-            ? $"/mail-new?cp={Cp}"
-            : $"/mail-new?cp={Cp}&folder={_fromFolder}";
+        var query = new Dictionary<string, string?>();
+
+        if (!string.IsNullOrWhiteSpace(Cp))
+            query["cp"] = Cp;
+
+        if (!string.IsNullOrWhiteSpace(_fromFolder))
+            query["folder"] = _fromFolder;
+
+        if (!string.IsNullOrWhiteSpace(_fromSearchWord))
+            query["searchWord"] = _fromSearchWord;
+
+        if (!string.IsNullOrWhiteSpace(_fromAddress))
+            query["address"] = _fromAddress;
+
+        var url = QueryHelpers.AddQueryString("/mail-new", query);
 
         if (!string.IsNullOrWhiteSpace(_fromSection))
-            url += $"#{_fromSection}";   // <-- ancora allo specifico div
+            url += $"#{Uri.EscapeDataString(_fromSection)}";
 
         Nav.NavigateTo(url);
     }

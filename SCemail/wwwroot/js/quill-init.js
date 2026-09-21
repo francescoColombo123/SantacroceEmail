@@ -1,4 +1,4 @@
-window.destroyQuill = (editorId) => {
+﻿window.destroyQuill = (editorId) => {
     const current = document.getElementById(editorId);
     if (!current) return;
 
@@ -446,4 +446,523 @@ window.initQuillTask = (editorId, toolbarId, dotnetRef, initialHtml) => {
     });
 
     editorEl.__quill = quill;
+};
+
+window.printSingleEmail = function (subject, mail) {
+
+    if (!mail) {
+        alert("Nessuna email da stampare.");
+        return;
+    }
+
+    // Apre una pagina about:blank dedicata alla stampa
+    const win = window.open(
+        "",
+        "_blank",
+        "width=1000,height=800"
+    );
+
+    if (!win) {
+        alert("Il browser ha bloccato la finestra di stampa.");
+        return;
+    }
+
+    const escapeHtml = value => {
+        if (value === null || value === undefined)
+            return "";
+
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    };
+
+
+    // =========================
+    // DESTINATARI
+    // =========================
+
+    let recipients = "";
+
+    if (mail.to) {
+        recipients += `
+            <div class="recipient">
+                <strong>A:</strong> ${escapeHtml(mail.to)}
+            </div>`;
+    }
+
+    if (mail.cc) {
+        recipients += `
+            <div class="recipient">
+                <strong>Cc:</strong> ${escapeHtml(mail.cc)}
+            </div>`;
+    }
+
+    if (mail.bcc) {
+        recipients += `
+            <div class="recipient">
+                <strong>Ccn:</strong> ${escapeHtml(mail.bcc)}
+            </div>`;
+    }
+
+
+    // =========================
+    // ALLEGATI
+    // =========================
+
+    let attachments = "";
+
+    if (mail.attachments && mail.attachments.length > 0) {
+
+        attachments = `
+            <div class="attachments">
+
+                ${mail.attachments
+                .map(a => `
+                        <span class="attachment">
+                            📎 ${escapeHtml(a.name)}
+                        </span>
+                    `)
+                .join("")}
+
+            </div>`;
+    }
+
+
+    // =========================
+    // OGGETTO
+    // =========================
+
+    const safeSubject = escapeHtml(
+        subject || "(nessun oggetto)"
+    );
+
+
+    // =========================
+    // CONTENUTO MAIL
+    // =========================
+
+    const content = `
+        <section class="message">
+
+            <header class="message-header">
+
+                <div class="header-row">
+
+                    <strong class="sender">
+                        ${escapeHtml(mail.sender)}
+                    </strong>
+
+                    <span class="date">
+                        ${escapeHtml(mail.date)}
+                    </span>
+
+                </div>
+
+                ${recipients}
+
+            </header>
+
+
+            <div class="message-body">
+                ${mail.bodyHtml || ""}
+            </div>
+
+
+            ${attachments}
+
+        </section>
+    `;
+
+
+    // =========================
+    // DOCUMENTO DI STAMPA
+    // =========================
+
+    const printDocument = win.document;
+
+    printDocument.open();
+
+    printDocument.write(`
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+    <meta charset="utf-8">
+
+    <title>${safeSubject}</title>
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+
+            background: white;
+            color: #202124;
+        }
+
+
+        body {
+            font-family: Arial, Helvetica, sans-serif;
+
+            font-size: 13px;
+            line-height: 1.5;
+
+            padding: 25px;
+        }
+
+
+        .print-container {
+            width: 100%;
+        }
+
+
+        /* =========================
+           OGGETTO
+           ========================= */
+
+        .subject {
+
+            font-size: 20px;
+            font-weight: 600;
+
+            margin: 0 0 20px 0;
+
+            padding-bottom: 10px;
+
+            border-bottom: 1px solid #dadce0;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        /* =========================
+           MAIL
+           ========================= */
+
+        .message {
+            width: 100%;
+        }
+
+
+        .message-header {
+            margin-bottom: 18px;
+        }
+
+
+        .header-row {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: flex-start;
+
+            gap: 20px;
+        }
+
+
+        .sender {
+
+            font-size: 14px;
+
+            font-weight: 600;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        .date {
+
+            color: #5f6368;
+
+            white-space: nowrap;
+
+            font-size: 12px;
+        }
+
+
+        .recipient {
+
+            margin-top: 2px;
+
+            color: #5f6368;
+
+            font-size: 12px;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        /* =========================
+           CORPO EMAIL
+           ========================= */
+
+        .message-body {
+
+            margin-top: 15px;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        .message-body img {
+
+            max-width: 100% !important;
+
+            height: auto !important;
+        }
+
+
+        .message-body table {
+
+            max-width: 100% !important;
+        }
+
+
+        .message-body pre {
+
+            white-space: pre-wrap !important;
+
+            overflow-wrap: anywhere;
+        }
+
+
+        /* =========================
+           CITAZIONE APERTA
+           ========================= */
+
+        .print-quoted {
+
+            margin-top: 12px;
+        }
+
+
+        /* =========================
+           CITAZIONE CHIUSA
+           ========================= */
+
+        .print-quoted-hidden {
+
+            margin-top: 6px;
+
+            color: #5f6368;
+
+            font-size: 11px;
+        }
+
+
+        /* =========================
+           ALLEGATI
+           ========================= */
+
+        .attachments {
+
+            display: flex;
+
+            flex-wrap: wrap;
+
+            gap: 8px;
+
+            margin-top: 20px;
+
+            padding-top: 12px;
+
+            border-top: 1px solid #eeeeee;
+        }
+
+
+        .attachment {
+
+            display: inline-block;
+
+            border: 1px solid #dadce0;
+
+            border-radius: 16px;
+
+            padding: 5px 10px;
+
+            font-size: 12px;
+        }
+
+
+        /* =========================
+           PAGINA
+           ========================= */
+
+        @page {
+
+            size: auto;
+
+            margin: 15mm;
+        }
+
+
+        /* =========================
+           STAMPA
+           ========================= */
+
+        @media print {
+
+            body {
+
+                padding: 0;
+            }
+
+
+            .message-header,
+            .attachments,
+            img {
+
+                break-inside: avoid;
+
+                page-break-inside: avoid;
+            }
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+    <main class="print-container">
+
+        <h1 class="subject">
+            ${safeSubject}
+        </h1>
+
+        ${content}
+
+    </main>
+
+</body>
+
+</html>
+    `);
+
+
+    printDocument.close();
+
+
+    // =========================
+    // STAMPA
+    // =========================
+
+    let printed = false;
+
+
+    const printNow = () => {
+
+        if (printed)
+            return;
+
+
+        printed = true;
+
+
+        setTimeout(() => {
+
+            try {
+
+                win.focus();
+
+                win.print();
+
+            }
+            catch (error) {
+
+                console.error(
+                    "Errore durante la stampa:",
+                    error
+                );
+            }
+
+        }, 250);
+    };
+
+
+    // =========================
+    // ASPETTA LE IMMAGINI
+    // =========================
+
+    const images = Array.from(
+        printDocument.images
+    );
+
+
+    // Nessuna immagine:
+    // possiamo stampare subito
+
+    if (images.length === 0) {
+
+        printNow();
+
+        return;
+    }
+
+
+    let pending = images.length;
+
+
+    const imageFinished = () => {
+
+        pending--;
+
+        if (pending <= 0) {
+
+            printNow();
+        }
+    };
+
+
+    images.forEach(img => {
+
+        if (img.complete) {
+
+            imageFinished();
+
+        }
+        else {
+
+            img.addEventListener(
+                "load",
+                imageFinished,
+                {
+                    once: true
+                }
+            );
+
+
+            img.addEventListener(
+                "error",
+                imageFinished,
+                {
+                    once: true
+                }
+            );
+        }
+    });
+
+
+    // Sicurezza:
+    // se qualche immagine non termina il caricamento,
+    // stampa comunque dopo 3 secondi
+
+    setTimeout(
+        printNow,
+        3000
+    );
 };

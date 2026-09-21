@@ -16,19 +16,29 @@
         <div class="compose-layout">
     <div class="compose-main">
 
-        <!-- Mittente -->
-                <MudSelect T="string" Label="Da"
-                           Value="_selectedCasella"
-                           ValueChanged="OnCasellaChanged"
-                           FullWidth="true"
-                           Dense="true"
-                           Margin="Margin.Dense"
-                           Disabled="_fromLocked">
-            @foreach (var mail in _caselleDisponibili)
-            {
-                <MudSelectItem Value="@mail">@mail</MudSelectItem>
-            }
-        </MudSelect>
+                <!-- ========================== DA ========================== -->
+                <div class="compose-header-row">
+                    <div class="compose-header-label">Da:</div>
+
+                    <div class="compose-header-value">
+                        <MudSelect T="string"
+                                   Value="_selectedCasella"
+                                   ValueChanged="OnCasellaChanged"
+                                   Dense="true"
+                                   Margin="Margin.None"
+                                   Variant="Variant.Text"
+                                   FullWidth="true"
+                                   Disabled="_fromLocked"
+                                   Class="compose-from-select">
+
+                            @foreach (var mail in _caselleDisponibili)
+                            {
+                                <MudSelectItem Value="@mail">@mail</MudSelectItem>
+                            }
+
+                        </MudSelect>
+                    </div>
+                </div>
 
         <!-- ==========================  A  ========================== -->
         <div class="recipient-container" @ref="_toBoxRef">
@@ -191,14 +201,27 @@
 
         }
 
-        <!-- Oggetto -->
-        <MudTextField T="string"
-                        Label="Oggetto"
-                        Dense="true"
-                        Margin="Margin.Dense"
-                        FullWidth="true"
-                        Class="subject-big"
-                        @bind-Value="_composeSubject" />
+                <!-- ========================== OGGETTO ========================== -->
+                <div class="compose-header-row compose-subject-row">
+
+                    <div class="compose-header-label">
+                        Oggetto:
+                    </div>
+
+                    <div class="compose-header-value">
+
+                        <MudTextField T="string"
+                                      @bind-Value="_composeSubject"
+                                      Placeholder="Inserisci oggetto..."
+                                      Variant="Variant.Text"
+                                      Margin="Margin.None"
+                                      Dense="true"
+                                      FullWidth="true"
+                                      Class="compose-subject-input" />
+
+                    </div>
+
+                </div>
         <!-- Editor -->
         <div style="margin-top: 12px;">
             <label class="msg-label">Messaggio</label>
@@ -406,6 +429,7 @@
     </DialogContent>
 
     <DialogActions>
+
         <MudButton Color="Color.Primary"
                    Variant="Variant.Filled"
                    StartIcon="@Icons.Material.Filled.Send"
@@ -416,25 +440,27 @@
 
         <MudButton OnClick="CloseAndSaveDraft"
                    Variant="Variant.Text"
+                   StartIcon="@Icons.Material.Filled.Close"
                    Disabled="IsBusy">
-            Chiudi
+            Chiudi e salva
         </MudButton>
-        @if (DraftId.HasValue)
-        {
-            <MudButton Color="Color.Error"
-                       Variant="Variant.Outlined"
-                       StartIcon="@Icons.Material.Filled.Delete"
-                       OnClick="DeleteCurrentDraft"
-                       Disabled="_uploadingAttachments">
-                Elimina bozza
-            </MudButton>
-        }
+
         <MudButton Color="Color.Secondary"
                    Variant="Variant.Outlined"
+                   StartIcon="@Icons.Material.Filled.Save"
                    OnClick="SaveDraft"
                    Disabled="IsBusy">
-            💾 Salva bozza
+            Salva bozza
         </MudButton>
+
+        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                       Color="Color.Error"
+                       Variant="Variant.Outlined"
+                       Size="Size.Medium"
+                       OnClick="DiscardAndClose"
+                       Disabled="IsBusy"
+                       Title="Esci senza salvare" />
+
     </DialogActions>
 </MudDialog>
 
@@ -1059,6 +1085,147 @@
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
+    /* =========================================================
+       COMPOSER COMPATTO - STILE GMAIL
+       ========================================================= */
+
+    .compose-header-row {
+        display: flex;
+        align-items: center;
+        min-height: 34px;
+        border-bottom: 1px solid #e5e7eb;
+        padding: 0 6px;
+    }
+
+    .compose-header-label {
+        width: 70px;
+        min-width: 70px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #5f6368;
+    }
+
+    .compose-header-value {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .compose-from-select {
+        margin: 0 !important;
+    }
+
+        .compose-from-select .mud-input {
+            margin: 0 !important;
+        }
+
+        .compose-from-select .mud-input-control {
+            margin: 0 !important;
+        }
+
+    .compose-subject-row {
+        margin-top: 0 !important;
+    }
+
+    .compose-subject-input {
+        margin: 0 !important;
+    }
+
+        .compose-subject-input .mud-input {
+            margin: 0 !important;
+        }
+
+        .compose-subject-input .mud-input-control {
+            margin: 0 !important;
+        }
+
+
+    /* =========================================================
+       EDITOR PIÙ GRANDE
+       ========================================================= */
+
+    #editor .ql-container {
+        min-height: 360px !important;
+        height: 360px !important;
+    }
+
+    #editor .ql-editor {
+        min-height: 360px !important;
+        height: 360px !important;
+        overflow-y: auto !important;
+    }
+
+
+    /* riduciamo spazio prima del messaggio */
+    .msg-label {
+        margin-top: 6px !important;
+        margin-bottom: 4px !important;
+    }
+    /* =========================================================
+       DIALOG NUOVA EMAIL PIÙ GRANDE
+       ========================================================= */
+
+    .mud-dialog {
+        width: 96vw !important;
+        max-width: 1650px !important;
+        height: 88vh !important;
+        max-height: 88vh !important;
+    }
+
+    .mud-dialog-content {
+        height: calc(88vh - 120px) !important;
+        max-height: none !important;
+        overflow-y: auto !important;
+    }
+
+    /* Layout interno */
+    .compose-layout {
+        height: 100%;
+        grid-template-columns: minmax(0, 1fr) 300px !important;
+    }
+
+    /* Parte principale della mail */
+    .compose-main {
+        min-width: 0;
+        height: 100%;
+    }
+
+    /* Editor molto più grande */
+    #editor .ql-container {
+        min-height: 48vh !important;
+        height: 48vh !important;
+    }
+
+    #editor .ql-editor {
+        min-height: 48vh !important;
+        height: 48vh !important;
+        overflow-y: auto !important;
+    }
+
+    /* Colonna allegati */
+    .compose-side {
+        min-width: 280px;
+    }
+    /* DIALOG NUOVA EMAIL - GRANDE E LARGO */
+    .mud-dialog {
+        width: 96vw !important;
+        min-width: 96vw !important;
+        max-width: 96vw !important;
+        height: 88vh !important;
+        max-height: 88vh !important;
+    }
+
+    /* forza anche il contenitore MudBlazor */
+    .mud-dialog-container .mud-dialog {
+        width: 96vw !important;
+        min-width: 96vw !important;
+        max-width: 96vw !important;
+    }
+
+    /* sfrutta la larghezza disponibile */
+    .compose-layout {
+        width: 100% !important;
+        grid-template-columns: minmax(0, 1fr) 300px !important;
+    }
     </style>
 
 @code {
@@ -1728,14 +1895,20 @@
     {
         if (firstRender)
         {
-            await JSRuntime.InvokeVoidAsync("initFileDropZone", _dropZoneRef);
+            await JSRuntime.InvokeVoidAsync(
+                "initFileDropZone",
+                _dropZoneRef
+            );
 
-            _dotnetRef ??= DotNetObjectReference.Create(this);
+            _dotnetRef ??=
+                DotNetObjectReference.Create(this);
 
             await JSRuntime.InvokeVoidAsync(
                 "registerComposeAutoSaveClose",
                 _dotnetRef
             );
+
+            StartAutoSave();
         }
 
         if (!_pendingQuillInit)
@@ -1791,7 +1964,66 @@
         _quillInitialized = true;
         _pendingQuillInit = false;
     }
-    
+    private void StartAutoSave()
+    {
+        if (_autoSaveTask is not null)
+            return;
+
+        _autoSaveCts =
+            new CancellationTokenSource();
+
+        var token = _autoSaveCts.Token;
+
+        _autoSaveTask = AutoSaveLoopAsync(token);
+    }
+
+    private async Task AutoSaveLoopAsync(
+    CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(
+                TimeSpan.FromSeconds(AutoSaveSeconds)
+            );
+
+            while (await timer.WaitForNextTickAsync(
+                       cancellationToken))
+            {
+                if (_isDisposed ||
+                    _isClosing ||
+                    _isSavingDraft ||
+                    _uploadingAttachments)
+                {
+                    continue;
+                }
+
+                await InvokeAsync(async () =>
+                {
+                    if (_isDisposed ||
+                        _isClosing ||
+                        _isSavingDraft)
+                    {
+                        return;
+                    }
+
+                    await SaveDraftInternal(
+                        showNotification: false
+                    );
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Normale quando il composer viene chiuso.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Errore autosave bozza"
+            );
+        }
+    }
     private static string NormalizeFirmaHtml(string? html)
     {
         if (string.IsNullOrWhiteSpace(html))
@@ -1992,55 +2224,167 @@
             return;
 
         _isClosing = true;
-        _isSavingDraft = true;
 
         try
         {
             if (_uploadingAttachments)
             {
-                Snackbar.Add("Attendi il completamento del caricamento allegati.", Severity.Warning);
+                Snackbar.Add(
+                    "Attendi il completamento del caricamento allegati.",
+                    Severity.Warning
+                );
+
+                _isClosing = false;
                 return;
             }
 
             await CancelPendingInternal();
 
-            _bodyHtml = _bodyHtml?.Trim() ?? "";
+            // Recupera sempre il contenuto aggiornato di Quill
+            await SyncEditorBodyAsync();
 
+            // Se non c'è assolutamente nulla da salvare,
+            // chiudiamo semplicemente.
             if (!HasDraftContent())
             {
                 await SafeDestroyEditor();
-                MudDialog.Close(DialogResult.Ok("draft-empty"));
+
+                MudDialog.Close(
+                    DialogResult.Ok("draft-empty")
+                );
+
                 return;
             }
 
+            var saved = await SaveDraftInternal(
+                showNotification: false
+            );
+
+            if (!saved)
+            {
+                _isClosing = false;
+                return;
+            }
+
+            await SafeDestroyEditor();
+
+            MudDialog.Close(
+                DialogResult.Ok("draft")
+            );
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Errore chiusura e salvataggio bozza"
+            );
+
+            Snackbar.Add(
+                "Errore nel salvataggio della bozza ❌",
+                Severity.Error
+            );
+
+            _isClosing = false;
+        }
+    }
+    private async Task<bool> SaveDraftInternal(
+    bool showNotification = true)
+    {
+        if (_isSavingDraft || _isDisposed)
+            return false;
+
+        if (_uploadingAttachments)
+            return false;
+
+        _isSavingDraft = true;
+
+        try
+        {
+            await SyncEditorBodyAsync();
+
+            _bodyHtml = _bodyHtml?.Trim() ?? "";
+
+            // Non creiamo bozze completamente vuote.
+            if (!HasDraftContent())
+                return true;
+
             _draftId = await MailSvc.SaveDraftAsync(
                 utente: Utente,
-                to: string.Join(";", ChipsToEmails(_toList)),
-                cc: string.Join(";", ChipsToEmails(_ccList)),
-                ccn: string.Join(";", ChipsToEmails(_bccList)),
+                to: string.Join(
+                    ";",
+                    ChipsToEmails(_toList)
+                ),
+                cc: string.Join(
+                    ";",
+                    ChipsToEmails(_ccList)
+                ),
+                ccn: string.Join(
+                    ";",
+                    ChipsToEmails(_bccList)
+                ),
                 subject: _composeSubject,
-               bodyHtml: BuildBodyForDraft(),
+                bodyHtml: BuildBodyForDraft(),
                 draftId: _draftId,
                 fromAddress: _selectedCasella,
                 threadKey: ThreadKey,
                 replyToMessageId: ReplyToMessageId
             );
 
-            await SafeDestroyEditor();
-            MudDialog.Close(DialogResult.Ok("draft"));
+
+            return true;
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Errore salvataggio bozza");
-            Snackbar.Add("Errore nel salvataggio della bozza ❌", Severity.Error);
-            _isClosing = false;
+            Logger.LogError(
+                ex,
+                "Errore salvataggio bozza"
+            );
+
+            if (showNotification)
+            {
+                Snackbar.Add(
+                    "Errore nel salvataggio della bozza ❌",
+                    Severity.Error
+                );
+            }
+
+            return false;
         }
         finally
         {
             _isSavingDraft = false;
         }
     }
+    private async Task SyncEditorBodyAsync()
+    {
+        if (!_quillInitialized || _isDisposed)
+            return;
 
+        try
+        {
+            _bodyHtml = await JSRuntime.InvokeAsync<string>(
+                "composeInterop.getEditorHtml",
+                "editor"
+            );
+
+            _bodyHtml ??= "";
+        }
+        catch (JSDisconnectedException)
+        {
+            // Dialog/circuito in chiusura.
+        }
+        catch (TaskCanceledException)
+        {
+            // Chiusura o navigazione.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(
+                ex,
+                "Impossibile sincronizzare Quill durante il salvataggio bozza"
+            );
+        }
+    }
     private RecipientChip CreateRecipientFromText(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -2051,6 +2395,10 @@
     }
     private long? _draftId;
     private bool _isSavingDraft;
+    private CancellationTokenSource? _autoSaveCts;
+    private Task? _autoSaveTask;
+
+    private const int AutoSaveSeconds = 60;
     private bool _isSwitchingCasella;
     private bool _isDisposed;
     private string BuildBodyForSend()
@@ -2225,7 +2573,67 @@
 
     private async Task SaveDraft()
     {
-        await CloseAndSaveDraft();
+        if (_isSavingDraft ||
+            _isClosing ||
+            _isDisposed)
+        {
+            return;
+        }
+
+        await SaveDraftInternal(
+            showNotification: true
+        );
+    }
+
+    private async Task DiscardAndClose()
+    {
+        if (_isClosing || _isDisposed)
+            return;
+
+        _isClosing = true;
+
+        try
+        {
+            await CancelPendingInternal();
+
+            /*
+             * Se esiste già una bozza,
+             * la eliminiamo dal DB.
+             *
+             * Usiamo _draftId e NON DraftId,
+             * perché una nuova mail potrebbe essere
+             * stata creata dall'autosave.
+             */
+            if (_draftId.HasValue)
+            {
+                await MailSvc.DeleteDraftAsync(
+                    _draftId.Value,
+                    Utente
+                );
+
+                _draftId = null;
+            }
+
+            await SafeDestroyEditor();
+
+            MudDialog.Close(
+                DialogResult.Ok("draft-discarded")
+            );
+        }
+        catch (Exception ex)
+        {
+            _isClosing = false;
+
+            Logger.LogError(
+                ex,
+                "Errore eliminazione/scarto bozza"
+            );
+
+            Snackbar.Add(
+                "Errore durante l'eliminazione della bozza ❌",
+                Severity.Error
+            );
+        }
     }
 
     private static string FormatFileSize(long bytes)
@@ -2571,13 +2979,32 @@
     {
         _isDisposed = true;
 
+        if (_autoSaveCts is not null)
+        {
+            try
+            {
+                _autoSaveCts.Cancel();
+            }
+            catch
+            {
+            }
+
+            _autoSaveCts.Dispose();
+            _autoSaveCts = null;
+        }
+
         await CancelPendingInternal();
 
         try
         {
-            await JSRuntime.InvokeVoidAsync("destroyQuill", "editor");
+            await JSRuntime.InvokeVoidAsync(
+                "destroyQuill",
+                "editor"
+            );
         }
-        catch { }
+        catch
+        {
+        }
 
         _dotnetRef?.Dispose();
     }

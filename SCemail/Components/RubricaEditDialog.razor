@@ -1,43 +1,453 @@
 ﻿@using Microsoft.EntityFrameworkCore
 @using SCemail.Components.Data
+@using System.Globalization
+@using System.Text.RegularExpressions
+
 @inject IDbContextFactory<MailDbContext> DbFactory
+@inject ISnackbar Snackbar
 
 <MudDialog>
     <DialogContent>
-        <MudTextField Label="Nome" @bind-Value="Model.FirstName" />
-        <MudTextField Label="Secondo nome" @bind-Value="Model.MiddleName" />
-        <MudTextField Label="Cognome" @bind-Value="Model.LastName" />
-        <MudTextField Label="Email" Value="Model.Email" Disabled="true" />
+
+        <MudGrid Spacing="2">
+
+            @* =========================
+               CODICE CLIENTE
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudNumericField T="long?"
+                                 Label="Codice cliente"
+                                 @bind-Value="Model.CodiceCliente"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 HelperText="Facoltativo - solo numerico"
+                                 Immediate="true" />
+            </MudItem>
+
+            @* =========================
+               TITOLO
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudSelect T="string"
+                           Label="Titolo"
+                           @bind-Value="Model.Titolo"
+                           Variant="Variant.Outlined"
+                           Margin="Margin.Dense"
+                           Clearable="true">
+
+                    <MudSelectItem T="string" Value="@("")">
+                        Vuoto
+                    </MudSelectItem>
+
+                    <MudSelectItem T="string" Value="@("Dott.")">
+                        Dott.
+                    </MudSelectItem>
+
+                    <MudSelectItem T="string" Value="@("Dott.ssa")">
+                        Dott.ssa
+                    </MudSelectItem>
+
+                    <MudSelectItem T="string" Value="@("Avv.")">
+                        Avv.
+                    </MudSelectItem>
+
+                </MudSelect>
+            </MudItem>
+
+
+            @* =========================
+               NOME
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudTextField T="string"
+                              Label="Nome"
+                              @bind-Value="Model.FirstName"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               COGNOME
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudTextField T="string"
+                              Label="Cognome"
+                              @bind-Value="Model.LastName"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               INFORMAZIONE CONTATTI AZIENDALI
+               ========================= *@
+            <MudItem xs="12">
+
+                <MudAlert Severity="Severity.Info"
+                          Variant="Variant.Outlined"
+                          Dense="true">
+
+                    <b>Contatti aziendali non nominativi</b>
+                    (es. Centralino, Laboratorio, Ufficio):
+
+                    <br />
+
+                    <b>Nome:</b> indicare l'azienda
+
+                    <br />
+
+                    <b>Cognome:</b> indicare il reparto
+                    (Ufficio / Laboratorio / Centralino / ...)
+
+                    <br />
+
+                    <b>Azienda:</b> indicare la ragione sociale completa
+
+                </MudAlert>
+
+            </MudItem>
+
+
+            @* =========================
+               AZIENDA
+               ========================= *@
+            <MudItem xs="12">
+                <MudTextField T="string"
+                              Label="Azienda"
+                              @bind-Value="Model.Azienda"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               SECONDO NOME
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudTextField T="string"
+                              Label="Secondo nome"
+                              @bind-Value="Model.MiddleName"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               EMAIL
+               ========================= *@
+            <MudItem xs="12" sm="6">
+                <MudTextField T="string"
+                              Label="Email"
+                              Value="Model.Email"
+                              Disabled="true"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense" />
+            </MudItem>
+
+
+            @* =========================
+               TELEFONO UFFICIO
+               ========================= *@
+            <MudItem xs="12" sm="4">
+                <MudTextField T="string"
+                              Label="Telefono ufficio"
+                              @bind-Value="Model.TelefonoUfficio"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Placeholder="+39..."
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               TELEFONO CELLULARE
+               ========================= *@
+            <MudItem xs="12" sm="4">
+                <MudTextField T="string"
+                              Label="Telefono cellulare"
+                              @bind-Value="Model.TelefonoCellulare"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Placeholder="+39..."
+                              Immediate="true" />
+            </MudItem>
+
+
+            @* =========================
+               TELEFONO PRIVATO
+               ========================= *@
+            <MudItem xs="12" sm="4">
+                <MudTextField T="string"
+                              Label="Telefono privato"
+                              @bind-Value="Model.TelefonoPrivato"
+                              Variant="Variant.Outlined"
+                              Margin="Margin.Dense"
+                              Placeholder="+39..."
+                              Immediate="true" />
+            </MudItem>
+
+        </MudGrid>
+
     </DialogContent>
 
+
     <DialogActions>
-        <MudButton Variant="Variant.Text" OnClick="Cancel">Annulla</MudButton>
-        <MudButton Color="Color.Success" Variant="Variant.Filled" OnClick="Save">Salva</MudButton>
+
+        <MudButton Variant="Variant.Text"
+                   OnClick="Cancel">
+            Annulla
+        </MudButton>
+
+        <MudButton Color="Color.Success"
+                   Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.Save"
+                   OnClick="Save"
+                   Disabled="_saving">
+            Salva
+        </MudButton>
+
     </DialogActions>
+
 </MudDialog>
 
-@code {
-    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
-    [Parameter] public RubricaContatto Model { get; set; } = new();
 
-    private void Cancel() => MudDialog.Cancel();
+@code {
+
+    [CascadingParameter]
+    IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter]
+    public RubricaContatto Model { get; set; } = new();
+
+    private bool _saving;
+
+
+    protected override void OnInitialized()
+    {
+        // Titolo di default = vuoto
+        Model.Titolo ??= "";
+    }
+
+
+    private void Cancel()
+    {
+        MudDialog.Cancel();
+    }
+
 
     private async Task Save()
     {
-        await using var db = DbFactory.CreateDbContext();
-        var entity = await db.RubricaContatti.FirstOrDefaultAsync(x => x.Id == Model.Id);
-        if (entity == null)
-        {
-            MudDialog.Cancel();
+        if (_saving)
             return;
+
+        _saving = true;
+
+        try
+        {
+            // ==========================================
+            // NORMALIZZAZIONE TESTI
+            // ==========================================
+
+            Model.FirstName =
+                NormalizeWords(Model.FirstName);
+
+            Model.LastName =
+                NormalizeWords(Model.LastName);
+
+            Model.MiddleName =
+                NormalizeOptionalWords(Model.MiddleName);
+
+            Model.Azienda =
+                NormalizeOptionalWords(Model.Azienda);
+
+
+            // Titolo vuoto se non selezionato
+            Model.Titolo =
+                string.IsNullOrWhiteSpace(Model.Titolo)
+                    ? ""
+                    : Model.Titolo.Trim();
+
+
+            // ==========================================
+            // NORMALIZZAZIONE TELEFONI
+            // ==========================================
+
+            Model.TelefonoUfficio =
+                NormalizePhone(Model.TelefonoUfficio);
+
+            Model.TelefonoCellulare =
+                NormalizePhone(Model.TelefonoCellulare);
+
+            Model.TelefonoPrivato =
+                NormalizePhone(Model.TelefonoPrivato);
+
+
+            // ==========================================
+            // RECUPERO CONTATTO DAL DB
+            // ==========================================
+
+            await using var db =
+                DbFactory.CreateDbContext();
+
+            var entity =
+                await db.RubricaContatti
+                    .FirstOrDefaultAsync(
+                        x => x.Id == Model.Id
+                    );
+
+
+            if (entity == null)
+            {
+                Snackbar.Add(
+                    "Contatto non trovato.",
+                    Severity.Error
+                );
+
+                return;
+            }
+
+
+            // ==========================================
+            // AGGIORNAMENTO CAMPI
+            // ==========================================
+
+            entity.CodiceCliente =
+                Model.CodiceCliente;
+
+            entity.Titolo =
+                Model.Titolo;
+
+            entity.FirstName =
+                Model.FirstName;
+
+            entity.MiddleName =
+                Model.MiddleName;
+
+            entity.LastName =
+                Model.LastName;
+
+            entity.Azienda =
+                Model.Azienda;
+
+            // Email volutamente non modificabile
+            // entity.Email = Model.Email;
+
+            entity.TelefonoUfficio =
+                Model.TelefonoUfficio;
+
+            entity.TelefonoCellulare =
+                Model.TelefonoCellulare;
+
+            entity.TelefonoPrivato =
+                Model.TelefonoPrivato;
+
+
+            await db.SaveChangesAsync();
+
+
+            Snackbar.Add(
+                "Contatto salvato correttamente.",
+                Severity.Success
+            );
+
+
+            MudDialog.Close(
+                DialogResult.Ok(true)
+            );
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(
+                $"Errore durante il salvataggio: {ex.Message}",
+                Severity.Error
+            );
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+
+    // =========================================================
+    // NORMALIZZAZIONE TESTO
+    // =========================================================
+
+    private static string NormalizeWords(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+
+        var textInfo =
+            CultureInfo
+                .GetCultureInfo("it-IT")
+                .TextInfo;
+
+        return textInfo.ToTitleCase(
+            value
+                .Trim()
+                .ToLowerInvariant()
+        );
+    }
+
+
+    private static string? NormalizeOptionalWords(
+        string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return NormalizeWords(value);
+    }
+
+
+    // =========================================================
+    // NORMALIZZAZIONE NUMERI TELEFONICI
+    // =========================================================
+
+    private static string? NormalizePhone(
+        string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone))
+            return null;
+
+        phone = phone.Trim();
+
+
+        // Rimuove spazi, -, (, )
+        phone = Regex.Replace(
+            phone,
+            @"[\s\-\(\)]",
+            ""
+        );
+
+
+        // L'utente ha specificato già un prefisso
+        // es: +30, +33, +44...
+        if (phone.StartsWith("+"))
+            return phone;
+
+
+        // Trasforma:
+        //
+        // 0039 -> +39
+        // 0030 -> +30
+        // 0044 -> +44
+
+        if (phone.StartsWith("00"))
+        {
+            return "+" + phone[2..];
         }
 
-        entity.FirstName = Model.FirstName;
-        entity.MiddleName = Model.MiddleName;
-        entity.LastName = Model.LastName;
 
-        await db.SaveChangesAsync();
+        // Nessun prefisso specificato:
+        // aggiungiamo automaticamente +39
 
-        MudDialog.Close(DialogResult.Ok(true));
+        return "+39" + phone;
     }
 }

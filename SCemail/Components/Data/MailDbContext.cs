@@ -92,19 +92,130 @@ namespace SCemail.Components.Data
             {
                 entity.ToTable("RUBRICA_CONTATTI", "SGAPP");
 
+                // =========================
+                // CHIAVE PRIMARIA
+                // =========================
+
                 entity.HasKey(e => e.Id);
 
-                entity.Property(e => e.Id).HasColumnName("ID");
-                entity.Property(e => e.FirstName).HasColumnName("FIRST_NAME");
-                entity.Property(e => e.MiddleName).HasColumnName("MIDDLE_NAME");
-                entity.Property(e => e.LastName).HasColumnName("LAST_NAME");
-                entity.Property(e => e.Email).HasColumnName("EMAIL").IsRequired();
-                entity.Property(e => e.CreatedAt).HasColumnName("CREATED_AT");
+                entity.Property(e => e.Id)
+                      .HasColumnName("ID");
+
+
+                // =========================
+                // CODICE CLIENTE
+                // =========================
+
+                entity.Property(e => e.CodiceCliente)
+                      .HasColumnName("CODICE_CLIENTE");
+
+
+                // =========================
+                // TITOLO
+                // =========================
+
+                entity.Property(e => e.Titolo)
+                      .HasColumnName("TITOLO")
+                      .HasMaxLength(20)
+                      .IsRequired(false);
+
+
+                // =========================
+                // NOME
+                // =========================
+
+                entity.Property(e => e.FirstName)
+                      .HasColumnName("FIRST_NAME")
+                      .HasMaxLength(100)
+                      .IsRequired(false);
+
+
+                // =========================
+                // SECONDO NOME
+                // =========================
+
+                entity.Property(e => e.MiddleName)
+                      .HasColumnName("MIDDLE_NAME")
+                      .HasMaxLength(100)
+                      .IsRequired(false);
+
+
+                // =========================
+                // COGNOME
+                // =========================
+
+                entity.Property(e => e.LastName)
+                      .HasColumnName("LAST_NAME")
+                      .HasMaxLength(100)
+                      .IsRequired(false);
+
+
+                // =========================
+                // AZIENDA
+                // =========================
+
+                entity.Property(e => e.Azienda)
+                      .HasColumnName("AZIENDA")
+                      .HasMaxLength(255)
+                      .IsRequired(false);
+
+
+                // =========================
+                // EMAIL
+                // IMPORTANTE: NON PIÙ REQUIRED
+                // =========================
+
+                entity.Property(e => e.Email)
+                      .HasColumnName("EMAIL")
+                      .HasMaxLength(255)
+                      .IsRequired(false);
+
+
+                // =========================
+                // TELEFONO UFFICIO
+                // =========================
+
+                entity.Property(e => e.TelefonoUfficio)
+                      .HasColumnName("TELEFONO_UFFICIO")
+                      .HasMaxLength(50)
+                      .IsRequired(false);
+
+
+                // =========================
+                // TELEFONO CELLULARE
+                // =========================
+
+                entity.Property(e => e.TelefonoCellulare)
+                      .HasColumnName("TELEFONO_CELLULARE")
+                      .HasMaxLength(50)
+                      .IsRequired(false);
+
+
+                // =========================
+                // TELEFONO PRIVATO
+                // =========================
+
+                entity.Property(e => e.TelefonoPrivato)
+                      .HasColumnName("TELEFONO_PRIVATO")
+                      .HasMaxLength(50)
+                      .IsRequired(false);
+
+
+                // =========================
+                // DATA CREAZIONE
+                // =========================
+
+                entity.Property(e => e.CreatedAt)
+                      .HasColumnName("CREATED_AT");
+
+
+                // =========================
+                // INDICE EMAIL
+                // =========================
 
                 entity.HasIndex(e => e.Email)
                       .HasDatabaseName("UX_RUBRICA_EMAIL")
                       .IsUnique();
-
             });
 
 
