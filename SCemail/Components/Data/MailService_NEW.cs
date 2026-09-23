@@ -4513,19 +4513,190 @@ CancellationToken ct = default)
                 }
             }
 
+            // 6 - CONFIGURAZIONE SMTP
+            string smtpHost;
+            int smtpPort;
+            SecureSocketOptions socketOptions;
+
+            var provider = (casella.Provider ?? "").Trim();
+
+            if (provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
+            {
+                smtpHost = "smtp.gmail.com";
+                smtpPort = 587;
+                socketOptions = SecureSocketOptions.StartTls;
+            }
+            else if (provider.StartsWith("Aruba", StringComparison.OrdinalIgnoreCase))
+            {
+                // Aruba PEC
+                if (provider.Contains("IMAPS", StringComparison.OrdinalIgnoreCase) ||
+                    casella.Email.Contains("@pec.", StringComparison.OrdinalIgnoreCase))
+                {
+                    smtpHost = "smtps.pec.aruba.it";
+                    smtpPort = 465;
+                    socketOptions = SecureSocketOptions.SslOnConnect;
+                }
+                else
+                {
+                    // Aruba ordinaria
+                    smtpHost = "smtps.aruba.it";
+                    smtpPort = 465;
+                    socketOptions = SecureSocketOptions.SslOnConnect;
+                }
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"Provider '{casella.Provider}' non gestito");
+            }
+
+            _logger.LogInformation(
+                "SMTP configurato Provider={Provider}, Host={Host}, Port={Port}, Email={Email}",
+                provider,
+                smtpHost,
+                smtpPort,
+                casella.Email);
+
+
+            // ======================================================
+            // HEADER THREADING
+            // ======================================================
+
+            message.Headers.RemoveAll(HeaderId.InReplyTo);
+            message.Headers.RemoveAll(HeaderId.References);
+
+            if (!string.IsNullOrWhiteSpace(cleanInReplyTo))
+            {
+                message.Headers.Add(
+                    HeaderId.InReplyTo,
+                    $"<{cleanInReplyTo}>");
+            }
+
+            if (refs.Any())
+            {
+                message.Headers.Add(
+                    HeaderId.References,
+                    string.Join(" ", refs.Select(x => $"<{x}>"))
+                );
+            }
+
+            _logger.LogInformation(
+                "SMTP FINAL In-Reply-To={InReplyTo}",
+                message.Headers["In-Reply-To"]);
+
+            _logger.LogInformation(
+                "SMTP FINAL References={References}",
+                message.Headers["References"]);
+
+
+            // ======================================================
+            // INVIO REALE SMTP
+            // ======================================================
+
+            using var client = new SmtpClient
+            {
+                Timeout = 10000
+            };
+
+            try
+            {
+                _logger.LogInformation(
+                    "Connessione SMTP {Host}:{Port}...",
+                    smtpHost,
+                    smtpPort);
+
+                await client.ConnectAsync(
+                    smtpHost,
+                    smtpPort,
+                    socketOptions,
+                    ct);
+
+                _logger.LogInformation(
+                    "Connessione SMTP riuscita. Autenticazione {Email}...",
+                    casella.Email);
+
+                await client.AuthenticateAsync(
+                    casella.Email,
+                    casella.Password,
+                    ct);
+
+                _logger.LogInformation(
+                    "Autenticazione SMTP riuscita. Invio email...");
+
+                // QUESTA È LA VERA SPEDIZIONE
+                await client.SendAsync(message, ct);
+
+                _logger.LogInformation(
+                    "SMTP OK - Email realmente inviata. MessageId={MessageId}",
+                    message.MessageId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "ERRORE SMTP - Email NON inviata. Provider={Provider}, Host={Host}, Email={Email}",
+                    provider,
+                    smtpHost,
+                    casella.Email);
+
+                // IMPORTANTE:
+                // se SMTP fallisce, NON viene salvato niente in EMAIL_INVIATE
+                throw;
+            }
+            finally
+            {
+                if (client.IsConnected)
+                {
+                    try
+                    {
+                        await client.DisconnectAsync(true, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "Errore durante la disconnessione SMTP");
+                    }
+                }
+            }
+
+
+            // ======================================================
+            // SMTP RIUSCITO -> ORA SALVIAMO NEL DATABASE
+            // ======================================================
+
             db.EmailInviate.Add(inviata);
+
             await db.SaveChangesAsync(ct);
-            _logger.LogInformation("?? Email inviata salvata ID={Id}, MessageId={MsgId}, ThreadKey={ThreadKey}",
-                inviata.Id, inviata.MessageId, inviata.ThreadKey);
+
+            _logger.LogInformation(
+                "Email realmente inviata e salvata nel DB. ID={Id}, MessageId={MsgId}, ThreadKey={ThreadKey}",
+                inviata.Id,
+                inviata.MessageId,
+                inviata.ThreadKey);
+
+
+            // ======================================================
+            // SALVATAGGIO ALLEGATI SU FILE SYSTEM
+            // SOLO DOPO INVIO SMTP RIUSCITO
+            // ======================================================
+
             if (inviata.Allegati is { Count: > 0 })
             {
                 var basePath = _attachmentsOpt.Value.BasePath;
+
                 if (string.IsNullOrWhiteSpace(basePath))
-                    throw new InvalidOperationException("Attachments:BasePath non configurato");
+                {
+                    _logger.LogError(
+                        "Email ID={Id} inviata correttamente, ma Attachments:BasePath non è configurato",
+                        inviata.Id);
+
+                    throw new InvalidOperationException(
+                        "Attachments:BasePath non configurato");
+                }
 
                 foreach (var al in inviata.Allegati)
                 {
-                    // usa il NomeFile + Content salvati nel DB entity
                     var rel = await SaveSentAttachmentAsync(
                         basePath: basePath,
                         casellaId: casella.Id,
@@ -4540,63 +4711,22 @@ CancellationToken ct = default)
 
                 await db.SaveChangesAsync(ct);
 
-                _logger.LogInformation("?? Allegati inviati salvati su FS per EmailId={Id} CasellaId={CasellaId}",
-                    inviata.Id, casella.Id);
+                _logger.LogInformation(
+                    "Allegati inviati salvati su FS. EmailId={Id}, CasellaId={CasellaId}",
+                    inviata.Id,
+                    casella.Id);
             }
 
-            // 6?? SMTP
-            string smtpHost; int smtpPort; SecureSocketOptions socketOptions;
-            if (casella.Provider.Equals("Gmail", StringComparison.OrdinalIgnoreCase))
-                (smtpHost, smtpPort, socketOptions) = ("smtp.gmail.com", 587, SecureSocketOptions.StartTls);
-            else if (casella.Provider.Equals("Aruba", StringComparison.OrdinalIgnoreCase)
-                  || casella.Provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase))
-            {
-                if (casella.Provider.Equals("Aruba-IMAPS", StringComparison.OrdinalIgnoreCase)
-                    || casella.Email.Contains("@pec.", StringComparison.OrdinalIgnoreCase))
-                {
-                    // PEC Aruba
-                    smtpHost = "smtps.pec.aruba.it";
-                    smtpPort = 465;
-                    socketOptions = SecureSocketOptions.SslOnConnect;
-                }
-                else
-                {
-                    // Email Aruba ordinaria
-                    smtpHost = "smtps.aruba.it";
-                    smtpPort = 465;
-                    socketOptions = SecureSocketOptions.SslOnConnect;
-                }
-            }
 
-            else
-                throw new InvalidOperationException($"Provider {casella.Provider} non gestito");
+            // ======================================================
+            // FINE
+            // ======================================================
 
-            using var client = new SmtpClient { Timeout = 10000 };
-            await client.ConnectAsync(smtpHost, smtpPort, socketOptions, ct);
-            await client.AuthenticateAsync(casella.Email, casella.Password, ct);
-
-            message.Headers.RemoveAll(HeaderId.InReplyTo);
-            message.Headers.RemoveAll(HeaderId.References);
-
-            if (!string.IsNullOrWhiteSpace(cleanInReplyTo))
-            {
-                message.Headers.Add(HeaderId.InReplyTo, $"<{cleanInReplyTo}>");
-            }
-
-            if (refs.Any())
-            {
-                message.Headers.Add(
-                    HeaderId.References,
-                    string.Join(" ", refs.Select(x => $"<{x}>"))
-                );
-            }
-
-            _logger.LogWarning("SMTP FINAL In-Reply-To = {Header}", message.Headers["In-Reply-To"]);
-            _logger.LogWarning("SMTP FINAL References = {Header}", message.Headers["References"]);
-            await client.SendAsync(message, ct);
-            await client.DisconnectAsync(true, ct);
-
-            _logger.LogInformation("?? Email inviata da {From} ({Display}) a {To}", casella.Email, nomeMittente, to);
+            _logger.LogInformation(
+                "Email inviata correttamente da {From} ({Display}) a {To}",
+                casella.Email,
+                nomeMittente,
+                to);
         }
 
 
