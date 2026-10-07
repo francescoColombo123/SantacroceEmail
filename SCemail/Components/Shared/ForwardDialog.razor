@@ -201,6 +201,7 @@
         public string? MentionsComment { get; init; }
         public List<string> MentionedUsers { get; init; } = new();
         public bool FollowMe { get; init; } 
+        public DateTime AssignedDate { get; init; }
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -381,7 +382,8 @@
             AssignedComment = _assignedComment,
             MentionsComment = _mentionsComment,
             MentionedUsers = _mentionedUsers.ToList(),
-            FollowMe = false
+            FollowMe = false,
+            AssignedDate = DateTime.Today
         };
 
         MudDialog.Close(DialogResult.Ok(result));
@@ -395,7 +397,9 @@
             AssignedComment = _assignedComment,
             MentionsComment = _mentionsComment,
             MentionedUsers = _mentionedUsers.ToList(),
-            FollowMe = true
+            FollowMe = true,
+            AssignedDate = DateTime.Today
+
         };
 
         MudDialog.Close(DialogResult.Ok(result));

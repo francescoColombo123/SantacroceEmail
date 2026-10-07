@@ -12,11 +12,15 @@
 @inject IDbContextFactory<MailDbContext> DbFactory
 @inject IEmailTasksClient TaskClient
 @inject MailService_NEW MailSvc
-
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
 @code {
     private string? _cp;
     private string? _utente;
-
+    private List<string> _adminUsers = new();
+    private string? _cleanupUser;
+    private DateTime? _cleanupDate;
+    private bool _cleaningAssignments;
     private int _assegnateCount;
     private int _nuoveDaLeggereCount;
 
@@ -98,7 +102,84 @@
             ? $"SINGLE_{id}"
             : threadKey.Trim();
     }
+    private async Task CleanOldAssignmentsAsync()
+    {
+        // Sicurezza anche lato metodo
+        if (!IsAdmin)
+        {
+            Snackbar.Add(
+                "Operazione consentita solo agli amministratori.",
+                Severity.Error);
 
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_cleanupUser) ||
+            !_cleanupDate.HasValue)
+        {
+            Snackbar.Add(
+                "Seleziona un utente e una data.",
+                Severity.Warning);
+
+            return;
+        }
+
+        var user = _cleanupUser.Trim().ToLowerInvariant();
+        var data = _cleanupDate.Value.Date;
+
+        var conferma = await DialogService.ShowMessageBox(
+            "Conferma pulizia assegnazioni",
+            $"Vuoi pulire tutte le assegnazioni fino al {data:dd/MM/yyyy}?",
+            yesText: "Sì, pulisci",
+            cancelText: "Annulla"
+        );
+
+        if (conferma != true)
+            return;
+
+        _cleaningAssignments = true;
+
+        try
+        {
+            await using var db =
+                await DbFactory.CreateDbContextAsync();
+
+            var assegnazioni = await db.EmailAssegnazione
+                .Where(a =>
+                    a.Utente != null &&
+                    a.Utente.ToLower() == user &&
+                    a.DataAssegnazione != null &&
+                    a.DataAssegnazione <= data)
+                .ToListAsync();
+
+            if (assegnazioni.Count == 0)
+            {
+                Snackbar.Add(
+                    $"Nessuna assegnazione da pulire per {user}.",
+                    Severity.Info);
+
+                return;
+            }
+
+            db.EmailAssegnazione.RemoveRange(assegnazioni);
+
+            await db.SaveChangesAsync();
+
+            Snackbar.Add(
+                $"{assegnazioni.Count} assegnazioni eliminate per {user} fino al {data:dd/MM/yyyy}.",
+                Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(
+                $"Errore durante la pulizia delle assegnazioni: {ex.Message}",
+                Severity.Error);
+        }
+        finally
+        {
+            _cleaningAssignments = false;
+        }
+    }
     protected override async Task OnInitializedAsync()
     {
         var q = QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
@@ -132,6 +213,15 @@
         if (!IsAdmin)
             qCaselleErrore = qCaselleErrore.Where(c => caselleIdsQuery.Contains(c.Id));
 
+        if (IsAdmin)
+        {
+            _adminUsers = (await AccessiSrv.GetUserListAsync())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim().ToLowerInvariant())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x)
+                .ToList();
+        }
         _caselleErrore = await qCaselleErrore
             .Where(c => c.Email != null)
             .Select(c => c.Email!)
@@ -278,6 +368,22 @@
         _taskApertiCount = _taskBadges?.AssignedUnreadTotal ?? 0;
     }
 
+    private Task<IEnumerable<string>> SearchCleanupUsers(
+    string value,
+    CancellationToken ct)
+    {
+        IEnumerable<string> result = _adminUsers;
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            result = result.Where(x =>
+                x.Contains(
+                    value.Trim(),
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        return Task.FromResult(result);
+    }
     private string RubricaHref =>
     string.IsNullOrWhiteSpace(_cp)
         ? "/rubrica"
@@ -408,6 +514,59 @@ string.IsNullOrWhiteSpace(_cp)
             }
         </div>
     </div>
+
+    @if (IsAdmin)
+    {
+        <MudPaper Class="cleanup-box" Elevation="0">
+
+            <div class="cleanup-header">
+                <MudIcon Icon="@Icons.Material.Filled.CleaningServices"
+                         Size="Size.Small" />
+
+                <span>Pulizia assegnazioni</span>
+            </div>
+
+            <div class="cleanup-controls">
+
+                <MudAutocomplete T="string"
+                                 Label="Utente"
+                                 @bind-Value="_cleanupUser"
+                                 SearchFunc="SearchCleanupUsers"
+                                 ToStringFunc="@(x => x ?? string.Empty)"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 Dense="true"
+                                 Clearable="true"
+                                 ResetValueOnEmptyText="true"
+                                 CoerceText="true"
+                                 MaxItems="10"
+                                 Class="cleanup-user" />
+
+                <MudDatePicker Label="Fino al"
+                               @bind-Date="_cleanupDate"
+                               DateFormat="dd/MM/yyyy"
+                               Editable="true"
+                               Clearable="true"
+                               MaxDate="@DateTime.Today"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Class="cleanup-date" />
+
+                <MudButton Color="Color.Error"
+                           Variant="Variant.Filled"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.CleaningServices"
+                           Disabled="@(_cleaningAssignments ||
+                                                              string.IsNullOrWhiteSpace(_cleanupUser) ||
+                                                              !_cleanupDate.HasValue)"
+                       OnClick="CleanOldAssignmentsAsync">
+                Pulisci
+            </MudButton>
+
+            </div>
+
+        </MudPaper>
+        }
 
     @if (_showCaselleAlert)
     {
@@ -735,6 +894,50 @@ string.IsNullOrWhiteSpace(_cp)
         box-shadow: 0 0 0 0 rgba(229,57,53,.7);
         animation: pulseDot 1.6s infinite;
         flex-shrink: 0;
+    }
+
+    .cleanup-box {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 14px;
+        margin-bottom: 12px;
+        background: #fff;
+        border: 1px solid #d9deea;
+        border-radius: 12px;
+    }
+
+    .cleanup-header {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #1c2f55;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .cleanup-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+    }
+
+    .cleanup-user {
+        width: 280px;
+    }
+
+    .cleanup-date {
+        width: 185px;
+    }
+
+    @@media (max-width: 900px) {
+        .cleanup-box, .cleanup-controls
+
+    {
+        flex-wrap: wrap;
+    }
+
     }
 
     @@keyframes pulseDot {

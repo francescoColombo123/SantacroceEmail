@@ -1680,7 +1680,7 @@ RETURNING ID INTO :p_id";
 
             if (CheckRuleMatch(message, mittLike, destLike, oggLike, currentMailbox))
             {
-                await AssignEmail(conn, emailId, utenti, soloInvio, ct);
+                await AssignEmail(conn, emailId, utenti, soloInvio, emailDateRome.Date, ct);
                 _logger.LogInformation("📥 Applicata regola {Id} per email '{Subj}'", id, message.Subject);
             }
         }
@@ -1967,7 +1967,7 @@ SELECT ID
         return null;
     }
 
-    private async Task AssignEmail(OracleConnection conn, int emailId, string? utenti, bool soloInvio, CancellationToken ct)
+    private async Task AssignEmail(OracleConnection conn, int emailId, string? utenti, bool soloInvio, DateTime dataAssegnazione, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(utenti))
             return;
@@ -1976,11 +1976,37 @@ SELECT ID
 
         const string sql = @"
 MERGE INTO SGAPP.EMAIL_ASSEGNAZIONI t
-USING (SELECT :p_eid AS EMAIL_ID, :p_user AS UTENTE, :p_solo AS SOLO_INVIO FROM dual) s
-ON (t.EMAIL_ID = s.EMAIL_ID AND t.UTENTE = s.UTENTE AND t.SOLO_INVIO = s.SOLO_INVIO)
+USING (
+    SELECT :p_eid AS EMAIL_ID,
+           :p_user AS UTENTE,
+           :p_solo AS SOLO_INVIO,
+           :p_data AS DATA_ASSEGNAZIONE
+    FROM dual
+) s
+ON (
+    t.EMAIL_ID = s.EMAIL_ID
+    AND t.UTENTE = s.UTENTE
+    AND t.SOLO_INVIO = s.SOLO_INVIO
+)
+WHEN MATCHED THEN
+    UPDATE SET
+        t.DATA_ASSEGNAZIONE = NVL(
+            t.DATA_ASSEGNAZIONE,
+            s.DATA_ASSEGNAZIONE
+        )
 WHEN NOT MATCHED THEN
-  INSERT (EMAIL_ID, UTENTE, SOLO_INVIO)
-  VALUES (s.EMAIL_ID, s.UTENTE, s.SOLO_INVIO)";
+    INSERT (
+        EMAIL_ID,
+        UTENTE,
+        SOLO_INVIO,
+        DATA_ASSEGNAZIONE
+    )
+    VALUES (
+        s.EMAIL_ID,
+        s.UTENTE,
+        s.SOLO_INVIO,
+        s.DATA_ASSEGNAZIONE
+    )";
 
         foreach (var u in arr)
         {
@@ -1988,6 +2014,7 @@ WHEN NOT MATCHED THEN
             cmd.Parameters.Add("p_eid", OracleDbType.Int32).Value = emailId;
             cmd.Parameters.Add("p_user", OracleDbType.Varchar2, 200).Value = u;
             cmd.Parameters.Add("p_solo", OracleDbType.Char, 1).Value = soloInvio ? "Y" : "N";
+            cmd.Parameters.Add("p_data", OracleDbType.Date).Value = dataAssegnazione;
             await cmd.ExecuteNonQueryAsync(ct);
         }
     }
@@ -2077,7 +2104,7 @@ WHEN NOT MATCHED THEN
 
                 if (mittOk && destOk && oggOk)
                 {
-                    await AssignEmail(conn, e.Id, r.Utenti, r.SoloInvio, ct);
+                    await AssignEmail(conn, e.Id, r.Utenti, r.SoloInvio, DateTime.Today, ct);
                     _logger.LogInformation("♻️ Applicata regola {R} su email ID={E} (oggetto='{O}')", r.Id, e.Id, e.Ogg);
                 }
             }

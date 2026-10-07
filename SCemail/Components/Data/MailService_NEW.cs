@@ -2095,7 +2095,9 @@ WHERE ID_EMAIL = :p_eid
                 const string sqlAssegna = @"
 MERGE INTO SGAPP.EMAIL_ASSEGNAZIONI t
 USING (
-    SELECT :p_eid AS EMAIL_ID, :p_user AS UTENTE, :p_solo AS SOLO_INVIO
+    SELECT :p_eid AS EMAIL_ID,
+           :p_user AS UTENTE,
+           :p_solo AS SOLO_INVIO
     FROM DUAL
 ) s
 ON (
@@ -2103,10 +2105,22 @@ ON (
     AND UPPER(t.UTENTE) = UPPER(s.UTENTE)
 )
 WHEN MATCHED THEN
-    UPDATE SET t.SOLO_INVIO = s.SOLO_INVIO
+    UPDATE SET
+        t.SOLO_INVIO = s.SOLO_INVIO,
+        t.DATA_ASSEGNAZIONE = TRUNC(SYSDATE)
 WHEN NOT MATCHED THEN
-    INSERT (EMAIL_ID, UTENTE, SOLO_INVIO)
-    VALUES (s.EMAIL_ID, s.UTENTE, s.SOLO_INVIO)";
+    INSERT (
+        EMAIL_ID,
+        UTENTE,
+        SOLO_INVIO,
+        DATA_ASSEGNAZIONE
+    )
+    VALUES (
+        s.EMAIL_ID,
+        s.UTENTE,
+        s.SOLO_INVIO,
+        TRUNC(SYSDATE)
+    )";
 
                 await using (var cmd = new OracleCommand(sqlAssegna, conn))
                 {
