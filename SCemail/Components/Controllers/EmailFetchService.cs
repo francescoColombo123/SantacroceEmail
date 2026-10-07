@@ -15,11 +15,12 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-
+using SCemail.Services;
 public class EmailFetchService : BackgroundService
 {
     private readonly IConfiguration _config;
     private readonly ILogger<EmailFetchService> _logger;
+    private readonly IOfficePreviewQueue _officePreviewQueue;
     public bool IsNightNow() => IsNightWindow();
 
     // Quante mail max per cartella ad ogni passata (fairness)
@@ -35,16 +36,25 @@ public class EmailFetchService : BackgroundService
     private static readonly ConcurrentDictionary<int, SemaphoreSlim> _ensureLocks = new();
 
     public EmailFetchService(
-        IConfiguration config,
-        ILogger<EmailFetchService> logger)
+    IConfiguration config,
+    ILogger<EmailFetchService> logger,
+    IOfficePreviewQueue officePreviewQueue)
     {
         _config = config;
         _logger = logger;
-        _attachmentsBasePath = _config.GetValue<string>("Attachments:BasePath")
-            ?? Path.Combine(AppContext.BaseDirectory, "attachments");
+        _officePreviewQueue = officePreviewQueue;
 
-        _attachmentsBasePath = _attachmentsBasePath.Trim();
-        Directory.CreateDirectory(_attachmentsBasePath);
+        _attachmentsBasePath =
+            _config.GetValue<string>("Attachments:BasePath")
+            ?? Path.Combine(
+                AppContext.BaseDirectory,
+                "attachments");
+
+        _attachmentsBasePath =
+            _attachmentsBasePath.Trim();
+
+        Directory.CreateDirectory(
+            _attachmentsBasePath);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -1200,6 +1210,54 @@ return Convert.ToInt32(
             throw;
         }
     }
+    private void QueueOfficePreview(
+    int attachmentId,
+    string relativePath,
+    bool sent)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return;
+
+        try
+        {
+            var fullPath =
+                Path.GetFullPath(
+                    Path.Combine(
+                        _attachmentsBasePath,
+                        relativePath));
+
+            if (!File.Exists(fullPath))
+                return;
+
+            var queued =
+                _officePreviewQueue.TryEnqueue(
+                    attachmentId,
+                    fullPath,
+                    sent
+                        ? "sent"
+                        : "received");
+
+            if (queued)
+            {
+                _logger.LogInformation(
+                    "Preview Office accodata. AttachmentId={AttachmentId}, Sent={Sent}, File={File}",
+                    attachmentId,
+                    sent,
+                    fullPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            /*
+             * La preview non deve MAI rompere
+             * il download della posta.
+             */
+            _logger.LogWarning(
+                ex,
+                "Impossibile accodare preview Office AttachmentId={AttachmentId}",
+                attachmentId);
+        }
+    }
     private async Task TouchExistingEmail(
      OracleConnection conn,
      int emailId,
@@ -2345,24 +2403,64 @@ WHEN NOT MATCHED THEN
         }
     }
 
-    private static async Task UpdateAttachmentPathAsync(
-    OracleConnection conn, int allegatoId, string relPath, long size, bool force, CancellationToken ct)
+    private async Task UpdateAttachmentPathAsync(
+    OracleConnection conn,
+    int allegatoId,
+    string relPath,
+    long size,
+    bool force,
+    CancellationToken ct)
     {
-        var sql = force ? @"
+        var sql = force
+            ? @"
 UPDATE SGAPP.EMAIL_ALLEGATI
-   SET FILE_PATH = :p_path, FILE_SIZE = :p_size
+   SET FILE_PATH = :p_path,
+       FILE_SIZE = :p_size
  WHERE ID = :p_id"
-        : @"
+            : @"
 UPDATE SGAPP.EMAIL_ALLEGATI
-   SET FILE_PATH = :p_path, FILE_SIZE = :p_size
+   SET FILE_PATH = :p_path,
+       FILE_SIZE = :p_size
  WHERE ID = :p_id
    AND FILE_PATH IS NULL";
 
-        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-        cmd.Parameters.Add("p_path", OracleDbType.Varchar2, 1024).Value = relPath;
-        cmd.Parameters.Add("p_size", OracleDbType.Int64).Value = size;
-        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
+        await using var cmd =
+            new OracleCommand(
+                sql,
+                conn)
+            {
+                BindByName = true
+            };
+
+        cmd.Parameters
+            .Add(
+                "p_path",
+                OracleDbType.Varchar2,
+                1024)
+            .Value = relPath;
+
+        cmd.Parameters
+            .Add(
+                "p_size",
+                OracleDbType.Int64)
+            .Value = size;
+
+        cmd.Parameters
+            .Add(
+                "p_id",
+                OracleDbType.Int32)
+            .Value = allegatoId;
+
         await cmd.ExecuteNonQueryAsync(ct);
+
+        /*
+         * Il file è stato salvato e il DB aggiornato.
+         * Da qui in poi può partire la preview.
+         */
+        QueueOfficePreview(
+            allegatoId,
+            relPath,
+            sent: false);
     }
 
 
@@ -2898,12 +2996,12 @@ SELECT a.ID AS ALLEGATO_ID,
         await client.DisconnectAsync(true, ct);
     }
 
-    private static async Task UpdateAttachmentPathIfMissingAsync(
-        OracleConnection conn,
-        int allegatoId,
-        string relPath,
-        long size,
-        CancellationToken ct)
+    private async Task UpdateAttachmentPathIfMissingAsync(
+     OracleConnection conn,
+     int allegatoId,
+     string relPath,
+     long size,
+     CancellationToken ct)
     {
         const string upd = @"
 UPDATE SGAPP.EMAIL_ALLEGATI
@@ -2912,12 +3010,39 @@ UPDATE SGAPP.EMAIL_ALLEGATI
  WHERE ID = :p_id
    AND FILE_PATH IS NULL";
 
-        await using var cmd = new OracleCommand(upd, conn) { BindByName = true };
-        cmd.Parameters.Add("p_path", OracleDbType.Varchar2, 1024).Value = relPath;
-        cmd.Parameters.Add("p_size", OracleDbType.Int64).Value = size;
-        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
+        await using var cmd =
+            new OracleCommand(
+                upd,
+                conn)
+            {
+                BindByName = true
+            };
+
+        cmd.Parameters
+            .Add(
+                "p_path",
+                OracleDbType.Varchar2,
+                1024)
+            .Value = relPath;
+
+        cmd.Parameters
+            .Add(
+                "p_size",
+                OracleDbType.Int64)
+            .Value = size;
+
+        cmd.Parameters
+            .Add(
+                "p_id",
+                OracleDbType.Int32)
+            .Value = allegatoId;
 
         await cmd.ExecuteNonQueryAsync(ct);
+
+        QueueOfficePreview(
+            allegatoId,
+            relPath,
+            sent: false);
     }
 
     private static string ExtractEmailAddress(string? raw)
@@ -3655,7 +3780,7 @@ SELECT ID, NOME_FILE, MIME_TYPE, PART_SPEC
         }
     }
 
-    private static async Task UpdateSentAttachmentPathAsync(
+    private async Task UpdateSentAttachmentPathAsync(
     OracleConnection conn,
     int allegatoId,
     string relPath,
@@ -3669,12 +3794,39 @@ UPDATE SGAPP.INVIATA_ALLEGATI
  WHERE ID = :p_id
    AND PATH IS NULL";
 
-        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
-        cmd.Parameters.Add("p_path", OracleDbType.Varchar2, 1024).Value = relPath;
-        cmd.Parameters.Add("p_size", OracleDbType.Int64).Value = size;
-        cmd.Parameters.Add("p_id", OracleDbType.Int32).Value = allegatoId;
+        await using var cmd =
+            new OracleCommand(
+                sql,
+                conn)
+            {
+                BindByName = true
+            };
+
+        cmd.Parameters
+            .Add(
+                "p_path",
+                OracleDbType.Varchar2,
+                1024)
+            .Value = relPath;
+
+        cmd.Parameters
+            .Add(
+                "p_size",
+                OracleDbType.Int64)
+            .Value = size;
+
+        cmd.Parameters
+            .Add(
+                "p_id",
+                OracleDbType.Int32)
+            .Value = allegatoId;
 
         await cmd.ExecuteNonQueryAsync(ct);
+
+        QueueOfficePreview(
+            allegatoId,
+            relPath,
+            sent: true);
     }
 
     private async Task<List<(int AllegatoId, int EmailId, int CasellaId, string FolderPath, long MessageUid, string FileName, string Mime, string PartSpec)>>

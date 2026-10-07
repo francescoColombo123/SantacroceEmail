@@ -934,7 +934,27 @@ else
                                             </div>
                                         }
                                     </div>
+                                    <div class="sent-detail-actions">
+
+                                        <MudIconButton Icon="@Icons.Material.Filled.Reply"
+                                                       Title="Rispondi"
+                                                       OnClick="@(() => ReplySent(_sentDetail))" />
+
+                                        <MudIconButton Icon="@Icons.Material.Filled.ReplyAll"
+                                                       Title="Rispondi a tutti"
+                                                       OnClick="@(() => ReplyAllSent(_sentDetail))" />
+
+                                        <MudIconButton Icon="@Icons.Material.Filled.Send"
+                                                       Title="Inoltra (esterno)"
+                                                       OnClick="@(() => ForwardSent(_sentDetail))" />
+
+                                        <MudIconButton Icon="@Icons.Material.Filled.Print"
+                                                       Title="Stampa"
+                                                       OnClick="@(() => PrintSent(_sentDetail))" />
+
+                                    </div>
                                 </div>
+                                
                                 <div class="mail-body">
                                     @((MarkupString)(_sentDetail.CorpoHtml ?? _sentDetail.CorpoTesto ?? ""))
 
@@ -3506,6 +3526,264 @@ else
         _focusPostItTitle = false;
     }
 
+    private async Task ReplySent(
+    SentEmailDetailDto msg)
+    {
+        if (msg is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(_utente))
+        {
+            Snackbar.Add(
+                "Utente non valorizzato.",
+                Severity.Error);
+
+            return;
+        }
+
+        var fromCasella =
+            ExtractEmail(
+                msg.CasellaMittente);
+
+        if (string.IsNullOrWhiteSpace(
+            fromCasella))
+        {
+            Snackbar.Add(
+                "Casella mittente non trovata per questa email inviata.",
+                Severity.Warning);
+
+            return;
+        }
+
+        /*
+         * Essendo una mail INVIATA,
+         * non dobbiamo rispondere a noi stessi.
+         *
+         * Rispondi = primo destinatario A.
+         */
+        var (to, _, _) =
+            SentDetail_Recipients(msg);
+
+        var replyTo =
+            to.FirstOrDefault();
+
+        if (string.IsNullOrWhiteSpace(
+            replyTo))
+        {
+            Snackbar.Add(
+                "Nessun destinatario disponibile per la risposta.",
+                Severity.Warning);
+
+            return;
+        }
+
+        var parameters =
+            new DialogParameters
+            {
+                ["Utente"] =
+                    _utente,
+
+                ["Oggetto"] =
+                    EnsureSubjectPrefix(
+                        msg.Oggetto,
+                        "Re:"),
+
+                ["CorpoIniziale"] =
+                    BuildSentReplyQuoteHtml(msg),
+
+                /*
+                 * Manteniamo la stessa casella
+                 * dalla quale era partita
+                 * l'email originale.
+                 */
+                ["CasellaMittente"] =
+                    fromCasella,
+
+                ["Destinatari"] =
+                    replyTo,
+
+                ["Cc"] = null,
+                ["Bcc"] = null,
+
+                /*
+                 * SentEmailDetailDto non espone
+                 * al momento i dati di threading
+                 * presenti in EmailDetail_NEW.
+                 */
+                ["ReplyToMessageId"] = null,
+                ["References"] = null,
+                ["ThreadKey"] = null
+            };
+
+        var dialog =
+            DialogService.Show<ComposeDialog>(
+                "Rispondi",
+                parameters,
+                new DialogOptions
+                {
+                    MaxWidth =
+                        MaxWidth.Medium,
+
+                    FullWidth = true,
+                    CloseOnEscapeKey = false,
+                    BackdropClick = false
+                });
+
+        var result =
+            await dialog.Result;
+
+        if (!result.Canceled &&
+            result.Data?.ToString() == "sent")
+        {
+            Snackbar.Add(
+                "Risposta inviata ✅",
+                Severity.Success);
+
+            await LoadMoreSentAsync(
+                reset: true);
+        }
+    }
+
+    private async Task ReplyAllSent(
+    SentEmailDetailDto msg)
+    {
+        if (msg is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(_utente))
+        {
+            Snackbar.Add(
+                "Utente non valorizzato.",
+                Severity.Error);
+
+            return;
+        }
+
+        var fromCasella =
+            ExtractEmail(
+                msg.CasellaMittente);
+
+        if (string.IsNullOrWhiteSpace(
+            fromCasella))
+        {
+            Snackbar.Add(
+                "Casella mittente non trovata per questa email inviata.",
+                Severity.Warning);
+
+            return;
+        }
+
+        var (to, cc, _) =
+            SentDetail_Recipients(msg);
+
+        /*
+         * Evitiamo che la nostra casella
+         * finisca fra i destinatari.
+         */
+        to = to
+            .Where(x =>
+                !string.Equals(
+                    x,
+                    fromCasella,
+                    StringComparison.OrdinalIgnoreCase))
+            .Distinct(
+                StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        cc = cc
+            .Where(x =>
+                !string.Equals(
+                    x,
+                    fromCasella,
+                    StringComparison.OrdinalIgnoreCase))
+            .Where(x =>
+                !to.Contains(
+                    x,
+                    StringComparer.OrdinalIgnoreCase))
+            .Distinct(
+                StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (to.Count == 0 &&
+            cc.Count == 0)
+        {
+            Snackbar.Add(
+                "Nessun destinatario disponibile per 'Rispondi a tutti'.",
+                Severity.Warning);
+
+            return;
+        }
+
+        var parameters =
+            new DialogParameters
+            {
+                ["Utente"] =
+                    _utente,
+
+                ["Oggetto"] =
+                    EnsureSubjectPrefix(
+                        msg.Oggetto,
+                        "Re:"),
+
+                ["CorpoIniziale"] =
+                    BuildSentReplyQuoteHtml(msg),
+
+                ["CasellaMittente"] =
+                    fromCasella,
+
+                ["Destinatari"] =
+                    string.Join(
+                        "; ",
+                        to),
+
+                ["Cc"] =
+                    cc.Count > 0
+                        ? string.Join(
+                            "; ",
+                            cc)
+                        : null,
+
+                /*
+                 * NON ripristiniamo automaticamente
+                 * i CCN originali.
+                 */
+                ["Bcc"] = null,
+
+                ["ReplyToMessageId"] = null,
+                ["References"] = null,
+                ["ThreadKey"] = null
+            };
+
+        var dialog =
+            DialogService.Show<ComposeDialog>(
+                "Rispondi a tutti",
+                parameters,
+                new DialogOptions
+                {
+                    MaxWidth =
+                        MaxWidth.Large,
+
+                    FullWidth = true,
+                    CloseOnEscapeKey = false,
+                    BackdropClick = false
+                });
+
+        var result =
+            await dialog.Result;
+
+        if (!result.Canceled &&
+            result.Data?.ToString() == "sent")
+        {
+            Snackbar.Add(
+                "Risposta a tutti inviata ✅",
+                Severity.Success);
+
+            await LoadMoreSentAsync(
+                reset: true);
+        }
+    }
+
+
     private async Task NewEmail()
     {
         var parameters = new DialogParameters { ["Utente"] = _utente };
@@ -3522,6 +3800,361 @@ else
             Snackbar.Add("Email inviata ✅", Severity.Success);
     }
 
+    private async Task ForwardSent(
+    SentEmailDetailDto msg)
+    {
+        if (msg is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(_utente))
+        {
+            Snackbar.Add(
+                "Utente non valorizzato.",
+                Severity.Error);
+
+            return;
+        }
+
+        var fromCasella =
+            ExtractEmail(
+                msg.CasellaMittente);
+
+        if (string.IsNullOrWhiteSpace(
+            fromCasella))
+        {
+            Snackbar.Add(
+                "Casella mittente non trovata per questa email inviata.",
+                Severity.Warning);
+
+            return;
+        }
+
+        /*
+         * Come nel mail-detail:
+         * recuperiamo anche gli allegati
+         * originali.
+         */
+        var forwardAttachments =
+            await BuildSentForwardAttachmentsAsync(
+                msg);
+
+        var parameters =
+            new DialogParameters
+            {
+                ["Utente"] =
+                    _utente,
+
+                ["Oggetto"] =
+                    EnsureSubjectPrefix(
+                        msg.Oggetto,
+                        "Fwd:"),
+
+                /*
+                 * L'editor parte vuoto.
+                 * Il messaggio inoltrato viene
+                 * mostrato separatamente sotto.
+                 */
+                ["CorpoIniziale"] = "",
+
+                ["ForwardOriginalHtml"] =
+                    BuildSentForwardHtml(
+                        msg),
+
+                ["Destinatari"] = "",
+                ["Cc"] = null,
+                ["Bcc"] = null,
+
+                ["IsForward"] = true,
+
+                ["ForwardAttachments"] =
+                    forwardAttachments,
+
+                /*
+                 * Manteniamo la casella
+                 * della mail inviata originale.
+                 */
+                ["CasellaMittente"] =
+                    fromCasella,
+
+                ["ReplyToMessageId"] = null,
+                ["References"] = null,
+                ["ThreadKey"] = null
+            };
+
+        var dialog =
+            DialogService.Show<ComposeDialog>(
+                "Inoltra (esterno)",
+                parameters,
+                new DialogOptions
+                {
+                    MaxWidth =
+                        MaxWidth.Large,
+
+                    FullWidth = true,
+                    CloseOnEscapeKey = false,
+                    BackdropClick = false
+                });
+
+        var result =
+            await dialog.Result;
+
+        if (!result.Canceled &&
+            result.Data?.ToString() == "sent")
+        {
+            Snackbar.Add(
+                "Inoltro esterno inviato ✅",
+                Severity.Success);
+
+            await LoadMoreSentAsync(
+                reset: true);
+        }
+    }
+    private async Task<
+    List<MailService_NEW.OutgoingAttachment_NEW>>
+    BuildSentForwardAttachmentsAsync(
+        SentEmailDetailDto msg)
+    {
+        var result =
+            new List<
+                MailService_NEW.OutgoingAttachment_NEW>();
+
+        if (msg.Allegati == null ||
+            !msg.Allegati.Any())
+        {
+            return result;
+        }
+
+        foreach (var a in msg.Allegati)
+        {
+            try
+            {
+                var bytes =
+                    await Http.GetByteArrayAsync(
+                        $"/api/attachments/{a.Id}/downloadInternal");
+
+                if (bytes == null ||
+                    bytes.Length == 0)
+                {
+                    continue;
+                }
+
+                result.Add(
+                    new MailService_NEW
+                        .OutgoingAttachment_NEW(
+                            a.NomeFile,
+                            NormalizeMime(
+                                a.MimeType,
+                                a.NomeFile),
+                            bytes
+                        ));
+            }
+            catch
+            {
+                Snackbar.Add(
+                    $"Impossibile allegare automaticamente: {a.NomeFile}",
+                    Severity.Warning);
+            }
+        }
+
+        return result;
+    }
+
+    private string BuildSentReplyQuoteHtml(
+        SentEmailDetailDto msg)
+    {
+        var sender =
+            ExtractEmail(
+                msg.CasellaMittente);
+
+        var it =
+            new System.Globalization
+                .CultureInfo("it-IT");
+
+        var date =
+            msg.DataInvio.ToString(
+                "ddd d MMM yyyy",
+                it);
+
+        var time =
+            msg.DataInvio.ToString(
+                "HH:mm",
+                it);
+
+        var bodyHtml =
+            NormalizeReplyBodyHtml(
+                msg.CorpoHtml,
+                msg.CorpoTesto);
+
+        return $@"
+<div style=""font-family:'Courier New',monospace;
+            font-size:14px;
+            line-height:1.45;
+            color:#222;"">
+
+    <div>
+        Il giorno {HtmlEncode(date)}
+        alle ore {HtmlEncode(time)}
+        {HtmlEncode(sender)} ha scritto:
+    </div>
+
+    <br>
+
+    <div>
+        {bodyHtml}
+    </div>
+
+</div>";
+    }
+
+    private string BuildSentForwardHtml(
+    SentEmailDetailDto msg)
+    {
+        var (to, cc, bcc) =
+            SentDetail_Recipients(msg);
+
+        var sender =
+            HtmlEncode(
+                ExtractEmail(
+                    msg.CasellaMittente));
+
+        var date =
+            HtmlEncode(
+                msg.DataInvio.ToString(
+                    "ddd d MMM yyyy HH:mm",
+                    new System.Globalization
+                        .CultureInfo("it-IT")));
+
+        var subject =
+            HtmlEncode(
+                msg.Oggetto ?? "");
+
+        var bodyHtml =
+            NormalizeReplyBodyHtml(
+                msg.CorpoHtml,
+                msg.CorpoTesto);
+
+        var html =
+            "<br><br>" +
+            "---------- Forwarded message ---------<br>" +
+            "<b>Da:</b> " +
+            sender +
+            "<br>" +
+
+            "<b>Date:</b> " +
+            date +
+            "<br>" +
+
+            "<b>Subject:</b> " +
+            subject +
+            "<br>" +
+
+            "<b>To:</b> " +
+            HtmlEncode(
+                string.Join(
+                    ", ",
+                    to)) +
+            "<br>";
+
+        if (cc.Count > 0)
+        {
+            html +=
+                "<b>CC:</b> " +
+                HtmlEncode(
+                    string.Join(
+                        ", ",
+                        cc)) +
+                "<br>";
+        }
+
+        if (bcc.Count > 0)
+        {
+            html +=
+                "<b>CCN:</b> " +
+                HtmlEncode(
+                    string.Join(
+                        ", ",
+                        bcc)) +
+                "<br>";
+        }
+
+        html +=
+            "<br>" +
+            bodyHtml;
+
+        return html;
+    }
+
+    private static string EnsureSubjectPrefix(
+    string? subject,
+    string prefix)
+    {
+        var value =
+            subject?.Trim() ?? "";
+
+        return value.StartsWith(
+            prefix,
+            StringComparison.OrdinalIgnoreCase)
+            ? value
+            : $"{prefix} {value}".Trim();
+    }
+
+    private async Task PrintSent(
+    SentEmailDetailDto msg)
+    {
+        if (msg is null)
+            return;
+
+        var (to, cc, bcc) =
+            SentDetail_Recipients(msg);
+
+        var message = new
+        {
+            sender =
+                ExtractEmail(
+                    msg.CasellaMittente),
+
+            to =
+                string.Join(
+                    "; ",
+                    to),
+
+            cc =
+                string.Join(
+                    "; ",
+                    cc),
+
+            bcc =
+                string.Join(
+                    "; ",
+                    bcc),
+
+            date =
+                msg.DataInvio.ToString(
+                    "dd/MM/yyyy HH:mm"),
+
+            bodyHtml =
+                NormalizeReplyBodyHtml(
+                    msg.CorpoHtml,
+                    msg.CorpoTesto),
+
+            attachments =
+                msg.Allegati?
+                    .Select(a => new
+                    {
+                        name =
+                            a.NomeFile ??
+                            "Allegato"
+                    })
+                    .ToList()
+                ?? new()
+        };
+
+        await JS.InvokeVoidAsync(
+            "printSingleEmail",
+            msg.Oggetto ??
+                "(nessun oggetto)",
+            message);
+    }
     // --------------------
     // SENT (LIST) helpers
     // --------------------
@@ -4514,6 +5147,22 @@ else
         background: #dce5ff;
         color: #2540a1;
     }
+
+    .sent-detail-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        flex: 0 0 auto;
+    }
+
+        .sent-detail-actions .mud-icon-button {
+            color: #5f6368;
+        }
+
+            .sent-detail-actions .mud-icon-button:hover {
+                color: #1a73e8;
+            }
 
     .ml-date {
         white-space: nowrap;

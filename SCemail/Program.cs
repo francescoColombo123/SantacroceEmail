@@ -6,6 +6,7 @@ using Oracle.EntityFrameworkCore;
 using SCemail;
 using SCemail.Components.Data;
 using SCemail.Components.Shared;
+using SCemail.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 // ---------- LOGGING ----------
@@ -41,12 +42,22 @@ builder.Services.AddServerSideBlazor()
 builder.Services.AddScoped<MailService>();
 builder.Services.AddScoped<IEmailTasksClient, EmailTasksClient>();
 builder.Services.AddScoped<AccessiService>();
+builder.Services.AddScoped<OfficePreviewService>();
 // stessa istanza sia HostedService che servizio iniettabile
 builder.Services.AddSingleton<EmailFetchService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<EmailFetchService>());
 builder.Services.AddHostedService<ImapHealthCheckService>();
 builder.Services.AddSingleton<RubricaImportService>();
-builder.Services.AddSingleton<GmailThreadSyncService>(); 
+builder.Services.AddSingleton<GmailThreadSyncService>();
+builder.Services.AddSingleton<
+    IOfficePreviewQueue,
+    OfficePreviewQueue>();
+
+builder.Services.AddScoped<
+    OfficePreviewService>();
+
+builder.Services.AddHostedService<
+    OfficePreviewBackgroundService>();
 builder.Services.AddScoped<IEmailTasksRepository, EmailTasksRepository>();
 builder.Services.AddScoped<TaskHomeBadgeService>();
 // ---------- HttpClient sicuro anche nei controller ----------

@@ -59,8 +59,20 @@
             <div class="attov-body">
                 @if (_loading)
                 {
-                    <div class="attov-state">
-                        <div>Caricamento allegato...</div>
+                    <div class="attov-initial-loader">
+
+                        <div class="attov-initial-loader-ring">
+                            <div class="attov-initial-loader-inner"></div>
+                        </div>
+
+                        <div class="attov-initial-loader-title">
+                            Apertura allegato
+                        </div>
+
+                        <div class="attov-initial-loader-subtitle">
+                            Recupero delle informazioni in corso...
+                        </div>
+
                     </div>
                 }
                 else if (!string.IsNullOrWhiteSpace(_error))
@@ -76,6 +88,53 @@
                         Allegato non disponibile.
                     </div>
                 }
+                else if (_isOffice && !_officePreviewAvailable)
+                {
+                    <div class="attov-office-unavailable">
+
+                        <div class="attov-office-unavailable-card">
+
+                            <div class="attov-office-unavailable-icon">
+                                <svg viewBox="0 0 24 24"
+                                     width="32"
+                                     height="32"
+                                     fill="none"
+                                     stroke="currentColor"
+                                     stroke-width="1.7"
+                                     stroke-linecap="round"
+                                     stroke-linejoin="round">
+
+                                    <path d="M6 2h8l4 4v16H6z" />
+                                    <path d="M14 2v5h5" />
+                                    <path d="M9 13h6" />
+                                    <path d="M9 17h4" />
+                                </svg>
+                            </div>
+
+                            <div class="attov-office-unavailable-title">
+                                Anteprima non disponibile
+                            </div>
+
+                            <div class="attov-office-unavailable-text">
+                                Questo documento non può essere visualizzato
+                                direttamente al momento.
+                            </div>
+
+                            <div class="attov-office-unavailable-hint">
+                                Puoi comunque scaricarlo e aprirlo normalmente.
+                            </div>
+
+                            <a href="@_downloadUrl"
+                               target="_blank"
+                               rel="noopener"
+                               class="attov-office-unavailable-download">
+                                Scarica documento
+                            </a>
+
+                        </div>
+
+                    </div>
+                }
                 else if (_isPreviewable)
                 {
                     @if (_isImage)
@@ -86,10 +145,12 @@
                                  class="attov-image" />
                         </div>
                     }
-                    else if (_isPdf)
+                    else if (_isPdf || _isOffice)
                     {
                         <div class="attov-preview-wrap attov-pdf-wrap">
-                            <div id="pdfPagesContainerOverlay" class="attov-pdf-pages"></div>
+                            <div id="pdfPagesContainerOverlay"
+                                 class="attov-pdf-pages">
+                            </div>
                         </div>
                     }
                     else
@@ -100,6 +161,14 @@
                                 loading="lazy">
                         </iframe>
                     }
+                }
+                else
+                {
+                    <div class="attov-state">
+                        Questo file (<b>@_effectiveMime</b>)
+                        non è visualizzabile direttamente nel browser.
+                        Puoi comunque scaricarlo.
+                    </div>
                 }
                 else
                 {
@@ -307,6 +376,367 @@
         border-radius: 14px;
         color: #7f1d1d;
     }
+
+    .document-preview-loader {
+        width: 100%;
+        min-height: 520px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+        background: radial-gradient( circle at 50% 10%, #ffffff 0%, #f8fafc 52%, #f1f5f9 100% );
+    }
+
+    .document-preview-loader-card {
+        width: min(420px, 92%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 42px 40px 38px;
+        background: rgba(255, 255, 255, .96);
+        border: 1px solid rgba(226,232,240,.9);
+        border-radius: 26px;
+        box-shadow: 0 25px 65px rgba(15,23,42,.08);
+    }
+
+    .document-preview-visual {
+        position: relative;
+        width: 92px;
+        height: 100px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+
+    .document-preview-file {
+        position: relative;
+        width: 64px;
+        height: 82px;
+        overflow: hidden;
+        border-radius: 12px;
+        background: #ffffff;
+        border: 1px solid #dbe3ee;
+        box-shadow: 0 14px 28px rgba(15,23,42,.10);
+        animation: document-preview-float 2.4s ease-in-out infinite;
+    }
+
+    .document-preview-file-fold {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 20px;
+        height: 20px;
+        background: linear-gradient( 225deg, #eef4ff 50%, transparent 51% );
+    }
+
+    .document-preview-file-line {
+        position: absolute;
+        left: 14px;
+        height: 4px;
+        border-radius: 10px;
+        background: #cbd5e1;
+    }
+
+        .document-preview-file-line.line-1 {
+            top: 33px;
+            width: 36px;
+        }
+
+        .document-preview-file-line.line-2 {
+            top: 45px;
+            width: 28px;
+        }
+
+        .document-preview-file-line.line-3 {
+            top: 57px;
+            width: 34px;
+        }
+
+    .document-preview-processing {
+        position: absolute;
+        right: -2px;
+        bottom: 5px;
+        width: 34px;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        border-radius: 12px;
+        background: #2563eb;
+        box-shadow: 0 8px 20px rgba(37,99,235,.25);
+    }
+
+        .document-preview-processing span {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #fff;
+            animation: document-preview-dot 1.1s ease-in-out infinite;
+        }
+
+            .document-preview-processing span:nth-child(2) {
+                animation-delay: .15s;
+            }
+
+            .document-preview-processing span:nth-child(3) {
+                animation-delay: .30s;
+            }
+
+    .document-preview-title {
+        font-size: 20px;
+        line-height: 1.25;
+        font-weight: 750;
+        color: #0f172a;
+        margin-bottom: 9px;
+    }
+
+    .document-preview-description {
+        font-size: 14px;
+        line-height: 1.5;
+        color: #64748b;
+        text-align: center;
+        margin-bottom: 25px;
+    }
+
+    .document-preview-progress {
+        position: relative;
+        width: 230px;
+        height: 5px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #e8edf5;
+    }
+
+    .document-preview-progress-value {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 45%;
+        border-radius: 999px;
+        background: linear-gradient( 90deg, #2563eb, #60a5fa );
+        animation: document-preview-progress 1.4s cubic-bezier(.4,0,.2,1) infinite;
+    }
+
+    .document-preview-caption {
+        margin-top: 13px;
+        font-size: 12px;
+        color: #94a3b8;
+    }
+
+    @@keyframes document-preview-progress {
+        0%
+
+    {
+        left: -50%;
+    }
+
+    60% {
+        left: 70%;
+    }
+
+    100% {
+        left: 110%;
+    }
+
+    }
+
+    @@keyframes document-preview-float {
+        0%, 100%
+
+    {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-6px);
+    }
+
+    }
+
+    @@keyframes document-preview-dot {
+        0%, 60%, 100%
+
+    {
+        opacity: .45;
+        transform: translateY(0);
+    }
+
+    30% {
+        opacity: 1;
+        transform: translateY(-3px);
+    }
+
+    }
+
+    .pdf-preview-progress {
+        width: 100%;
+        text-align: center;
+        padding: 8px 12px 16px;
+        color: #64748b;
+        font-size: 13px;
+    }
+
+    .pdf-preview-page {
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+
+    .office-preview-error {
+        width: 100%;
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        color: #991b1b;
+        background: #fff;
+    }
+
+    @@keyframes office-preview-spin {
+        to
+
+    {
+        transform: rotate(360deg);
+    }
+
+    }
+
+    .attov-office-unavailable {
+        width: 100%;
+        height: 100%;
+        min-height: 420px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+        background: radial-gradient( circle at 50% 15%, #ffffff 0, #f8fafc 55%, #f1f5f9 100% );
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+    }
+
+    .attov-office-unavailable-card {
+        width: min(430px, 94%);
+        padding: 38px 36px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        background: rgba(255, 255, 255, .94);
+        border: 1px solid rgba(226, 232, 240, .95);
+        border-radius: 24px;
+        box-shadow: 0 24px 60px rgba(15, 23, 42, .08);
+    }
+
+    .attov-office-unavailable-icon {
+        width: 70px;
+        height: 70px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 20px;
+        border-radius: 21px;
+        background: #f1f5f9;
+        color: #475569;
+    }
+
+    .attov-office-unavailable-title {
+        font-size: 20px;
+        line-height: 1.2;
+        font-weight: 750;
+        color: #0f172a;
+        margin-bottom: 10px;
+    }
+
+    .attov-office-unavailable-text {
+        max-width: 330px;
+        font-size: 14px;
+        line-height: 1.55;
+        color: #64748b;
+    }
+
+    .attov-office-unavailable-hint {
+        margin-top: 5px;
+        font-size: 13px;
+        color: #94a3b8;
+    }
+
+    .attov-office-unavailable-download {
+        margin-top: 24px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 10px 18px;
+        border-radius: 11px;
+        background: #2563eb;
+        color: white;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 650;
+        transition: transform .15s ease, box-shadow .15s ease, background .15s ease;
+    }
+
+        .attov-office-unavailable-download:hover {
+            background: #1d4ed8;
+            transform: translateY(-1px);
+            box-shadow: 0 8px 20px rgba(37, 99, 235, .20);
+        }
+
+    .attov-initial-loader {
+        width: 100%;
+        height: 100%;
+        min-height: 420px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #fff;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+    }
+
+    .attov-initial-loader-ring {
+        width: 54px;
+        height: 54px;
+        padding: 4px;
+        border-radius: 50%;
+        background: conic-gradient( #2563eb, #93c5fd, #dbeafe, #2563eb );
+        animation: attov-initial-spin 1s linear infinite;
+        margin-bottom: 18px;
+    }
+
+    .attov-initial-loader-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: #fff;
+    }
+
+    .attov-initial-loader-title {
+        font-size: 17px;
+        font-weight: 700;
+        color: #0f172a;
+    }
+
+    .attov-initial-loader-subtitle {
+        margin-top: 5px;
+        font-size: 13px;
+        color: #94a3b8;
+    }
+
+    @@keyframes attov-initial-spin {
+        to
+
+    {
+        transform: rotate(360deg);
+    }
+
+    }
 </style>
 
 @code {
@@ -326,7 +756,12 @@
     private bool _hasPrevious => _currentIndex > 0;
     private bool _hasNext => _currentIndex >= 0 && _currentIndex < _attachments.Count - 1;
     private bool _isSent => string.Equals(Src, "sent", StringComparison.OrdinalIgnoreCase);
-
+    private bool _officePreviewAvailable = true;
+    private string? _officePreviewMessage;
+    private bool _officeAvailabilityChecked;
+    private sealed record OfficePreviewAvailabilityDto(
+    bool Available,
+    string? Message);
     private string _effectiveMime =>
        _currentMeta is null
            ? "application/octet-stream"
@@ -337,12 +772,27 @@
 
     private bool _isPdf =>
         _effectiveMime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase);
-
+    private bool _isOffice =>
+    _effectiveMime.Equals(
+        "application/msword",
+        StringComparison.OrdinalIgnoreCase)
+    ||
+    _effectiveMime.Equals(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        StringComparison.OrdinalIgnoreCase)
+    ||
+    _effectiveMime.Equals(
+        "application/vnd.ms-excel",
+        StringComparison.OrdinalIgnoreCase)
+    ||
+    _effectiveMime.Equals(
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        StringComparison.OrdinalIgnoreCase);
     private bool _isPreviewable =>
         _effectiveMime.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
         _effectiveMime.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ||
         _effectiveMime.StartsWith("text/", StringComparison.OrdinalIgnoreCase) ||
-        _effectiveMime.Equals("text/html", StringComparison.OrdinalIgnoreCase);
+        _effectiveMime.Equals("text/html", StringComparison.OrdinalIgnoreCase) || _isOffice;
 
     private string _querySuffix
     {
@@ -360,14 +810,79 @@
         }
     }
 
-    private string _inlineUrl =>
-    !string.IsNullOrWhiteSpace(Src) && Id == 0
-        ? Src
-        : _currentMeta is null
-            ? ""
-            : _isSent
-                ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
-                : $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
+    private async Task CheckOfficePreviewAvailabilityAsync()
+    {
+        if (!_isOffice)
+            return;
+
+        if (_officeAvailabilityChecked)
+            return;
+
+        try
+        {
+            var availability =
+                await Http.GetFromJsonAsync<OfficePreviewAvailabilityDto>(
+                    "/api/attachments/office-preview/availability");
+
+            _officePreviewAvailable =
+                availability?.Available ?? false;
+
+            _officePreviewMessage =
+                availability?.Message;
+        }
+        catch
+        {
+            _officePreviewAvailable = false;
+
+            _officePreviewMessage =
+                "Anteprima documenti temporaneamente non disponibile.";
+        }
+        finally
+        {
+            _officeAvailabilityChecked = true;
+        }
+    }
+
+    private string _inlineUrl
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(Src) &&
+                Id == 0)
+            {
+                return Src;
+            }
+
+            if (_currentMeta is null)
+                return "";
+
+            /*
+             * Office:
+             * il backend restituisce il PDF convertito.
+             */
+            if (_isOffice)
+            {
+                return _isSent
+                    ? $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}"
+                    : $"/api/attachments/{_currentMeta.Id}/preview{_querySuffix}";
+            }
+
+            /*
+             * Inviate
+             */
+            if (_isSent)
+            {
+                return
+                    $"/api/attachments/{_currentMeta.Id}/previewInternal{_querySuffix}";
+            }
+
+            /*
+             * Ricevute
+             */
+            return
+                $"/api/attachments/{_currentMeta.Id}/inline{_querySuffix}";
+        }
+    }
 
     private string _downloadUrl =>
      !string.IsNullOrWhiteSpace(Src) && Id == 0
@@ -384,12 +899,21 @@
         await LoadContextAsync(Id);
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    protected override async Task OnAfterRenderAsync(
+    bool firstRender)
     {
-        if (_currentMeta is not null && _isPdf && _lastRenderedPdfId != _currentMeta.Id)
+        if (_currentMeta is not null &&
+            (_isPdf || _isOffice) &&
+            (!_isOffice || _officePreviewAvailable) &&
+            _lastRenderedPdfId != _currentMeta.Id)
         {
-            _lastRenderedPdfId = _currentMeta.Id;
-            await JS.InvokeVoidAsync("pdfPreview.renderAllPages", "pdfPagesContainerOverlay", _inlineUrl);
+            _lastRenderedPdfId =
+                _currentMeta.Id;
+
+            await JS.InvokeVoidAsync(
+                "pdfPreview.renderAllPages",
+                "pdfPagesContainerOverlay",
+                _inlineUrl);
         }
     }
 
@@ -509,6 +1033,7 @@
             _currentIndex = 0;
 
         _currentMeta = _attachments[_currentIndex];
+            await CheckOfficePreviewAvailabilityAsync();
     }
     catch (HttpRequestException ex)
     {
@@ -606,6 +1131,7 @@ private async Task ChangeAttachmentAsync(int newIndex)
 
     _currentIndex = newIndex;
     _currentMeta = _attachments[_currentIndex];
+        await CheckOfficePreviewAvailabilityAsync();
 
     _loading = false;
 
@@ -613,7 +1139,11 @@ private async Task ChangeAttachmentAsync(int newIndex)
 }
     private async Task Close()
     {
+        await JS.InvokeVoidAsync(
+            "pdfPreview.clear");
+
         _visible = false;
+
         await OnClose.InvokeAsync();
     }
 

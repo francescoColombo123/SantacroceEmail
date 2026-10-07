@@ -32,11 +32,10 @@
                            Label="Titolo"
                            @bind-Value="Model.Titolo"
                            Variant="Variant.Outlined"
-                           Margin="Margin.Dense"
-                           Clearable="true">
+                           Margin="Margin.Dense">
 
                     <MudSelectItem T="string" Value="@("")">
-                        Vuoto
+                        Nessuno
                     </MudSelectItem>
 
                     <MudSelectItem T="string" Value="@("Dott.")">
@@ -64,7 +63,9 @@
                               @bind-Value="Model.FirstName"
                               Variant="Variant.Outlined"
                               Margin="Margin.Dense"
-                              Immediate="true" />
+                              Immediate="true"
+                              Required="true"
+                              RequiredError="Il nome è obbligatorio." />
             </MudItem>
 
 
@@ -77,7 +78,9 @@
                               @bind-Value="Model.LastName"
                               Variant="Variant.Outlined"
                               Margin="Margin.Dense"
-                              Immediate="true" />
+                              Immediate="true"
+                              Required="true"
+                              RequiredError="Il cognome è obbligatorio." />
             </MudItem>
 
 
@@ -143,10 +146,12 @@
             <MudItem xs="12" sm="6">
                 <MudTextField T="string"
                               Label="Email"
-                              Value="Model.Email"
-                              Disabled="true"
+                              @bind-Value="Model.Email"
+                              Disabled="@(!IsNew)"
                               Variant="Variant.Outlined"
-                              Margin="Margin.Dense" />
+                              Margin="Margin.Dense"
+                              Immediate="true"
+                              HelperText="Facoltativa" />
             </MudItem>
 
 
@@ -224,6 +229,9 @@
     [Parameter]
     public RubricaContatto Model { get; set; } = new();
 
+    [Parameter]
+    public bool IsNew { get; set; }
+
     private bool _saving;
 
 
@@ -250,7 +258,7 @@
         try
         {
             // ==========================================
-            // NORMALIZZAZIONE TESTI
+            // NORMALIZZAZIONE
             // ==========================================
 
             Model.FirstName =
@@ -265,17 +273,13 @@
             Model.Azienda =
                 NormalizeOptionalWords(Model.Azienda);
 
-
-            // Titolo vuoto se non selezionato
             Model.Titolo =
                 string.IsNullOrWhiteSpace(Model.Titolo)
                     ? ""
                     : Model.Titolo.Trim();
 
-
-            // ==========================================
-            // NORMALIZZAZIONE TELEFONI
-            // ==========================================
+            Model.Email =
+                NormalizeEmail(Model.Email);
 
             Model.TelefonoUfficio =
                 NormalizePhone(Model.TelefonoUfficio);
@@ -288,77 +292,152 @@
 
 
             // ==========================================
-            // RECUPERO CONTATTO DAL DB
+            // CAMPI OBBLIGATORI
             // ==========================================
 
-            await using var db =
-                DbFactory.CreateDbContext();
-
-            var entity =
-                await db.RubricaContatti
-                    .FirstOrDefaultAsync(
-                        x => x.Id == Model.Id
-                    );
-
-
-            if (entity == null)
+            if (string.IsNullOrWhiteSpace(Model.FirstName))
             {
                 Snackbar.Add(
-                    "Contatto non trovato.",
-                    Severity.Error
+                    "Il nome è obbligatorio.",
+                    Severity.Warning
+                );
+
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(Model.LastName))
+            {
+                Snackbar.Add(
+                    "Il cognome è obbligatorio.",
+                    Severity.Warning
                 );
 
                 return;
             }
 
 
+            await using var db =
+                DbFactory.CreateDbContext();
+
+
             // ==========================================
-            // AGGIORNAMENTO CAMPI
+            // NUOVO CONTATTO
             // ==========================================
 
-            entity.CodiceCliente =
-                Model.CodiceCliente;
+            if (IsNew)
+            {
+                if (!string.IsNullOrWhiteSpace(Model.Email))
+                {
+                    var exists =
+                        await db.RubricaContatti
+                            .AsNoTracking()
+                            .Where(x => x.Email == Model.Email)
+                            .Select(x => x.Id)
+                            .FirstOrDefaultAsync();
 
-            entity.Titolo =
-                Model.Titolo;
+                    if (exists != 0)
+                    {
+                        Snackbar.Add(
+                            $"Esiste già un contatto con l'email {Model.Email}.",
+                            Severity.Warning
+                        );
 
-            entity.FirstName =
-                Model.FirstName;
+                        return;
+                    }
+                }
 
-            entity.MiddleName =
-                Model.MiddleName;
+                var entity =
+                    new RubricaContatto
+                    {
+                        CodiceCliente = Model.CodiceCliente,
+                        Titolo = Model.Titolo,
+                        FirstName = Model.FirstName,
+                        MiddleName = Model.MiddleName,
+                        LastName = Model.LastName,
+                        Azienda = Model.Azienda,
+                        Email = Model.Email,
+                        TelefonoUfficio = Model.TelefonoUfficio,
+                        TelefonoCellulare = Model.TelefonoCellulare,
+                        TelefonoPrivato = Model.TelefonoPrivato,
+                        CreatedAt = DateTime.Now
+                    };
 
-            entity.LastName =
-                Model.LastName;
+                db.RubricaContatti.Add(entity);
 
-            entity.Azienda =
-                Model.Azienda;
+                await db.SaveChangesAsync();
 
-            // Email volutamente non modificabile
-            // entity.Email = Model.Email;
+                Snackbar.Add(
+                    "Contatto creato correttamente.",
+                    Severity.Success
+                );
+            }
 
-            entity.TelefonoUfficio =
-                Model.TelefonoUfficio;
+            // ==========================================
+            // MODIFICA CONTATTO
+            // ==========================================
+            else
+            {
+                var entity =
+                    await db.RubricaContatti
+                        .FirstOrDefaultAsync(
+                            x => x.Id == Model.Id
+                        );
 
-            entity.TelefonoCellulare =
-                Model.TelefonoCellulare;
+                if (entity == null)
+                {
+                    Snackbar.Add(
+                        "Contatto non trovato.",
+                        Severity.Error
+                    );
 
-            entity.TelefonoPrivato =
-                Model.TelefonoPrivato;
+                    return;
+                }
 
+                entity.CodiceCliente = Model.CodiceCliente;
+                entity.Titolo = Model.Titolo;
+                entity.FirstName = Model.FirstName;
+                entity.MiddleName = Model.MiddleName;
+                entity.LastName = Model.LastName;
+                entity.Azienda = Model.Azienda;
 
-            await db.SaveChangesAsync();
+                // Email volutamente non modificabile in modifica.
+                entity.TelefonoUfficio = Model.TelefonoUfficio;
+                entity.TelefonoCellulare = Model.TelefonoCellulare;
+                entity.TelefonoPrivato = Model.TelefonoPrivato;
 
+                await db.SaveChangesAsync();
 
-            Snackbar.Add(
-                "Contatto salvato correttamente.",
-                Severity.Success
-            );
-
+                Snackbar.Add(
+                    "Contatto modificato correttamente.",
+                    Severity.Success
+                );
+            }
 
             MudDialog.Close(
                 DialogResult.Ok(true)
             );
+        }
+        catch (DbUpdateException ex)
+        {
+            var message =
+                ex.GetBaseException().Message;
+
+            if (message.Contains(
+                "UX_RUBRICA_EMAIL",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                Snackbar.Add(
+                    "Esiste già un contatto con questa email.",
+                    Severity.Warning
+                );
+            }
+            else
+            {
+                Snackbar.Add(
+                    "Errore durante il salvataggio del contatto.",
+                    Severity.Error
+                );
+            }
         }
         catch (Exception ex)
         {
@@ -403,6 +482,19 @@
             return null;
 
         return NormalizeWords(value);
+    }
+
+
+    private static string? NormalizeEmail(
+        string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+            return null;
+
+        return email
+            .Trim()
+            .Trim('"')
+            .ToLowerInvariant();
     }
 
 

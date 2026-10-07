@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SCemail;
 using SCemail.Components.Data;
+using SCemail.Services;
 
 
 namespace SCemail.Components.Controllers
@@ -17,7 +18,7 @@ namespace SCemail.Components.Controllers
         private readonly MailService_NEW mailService_NEW;
         private readonly ILogger<AttachmentsController> _logger;
         private readonly IConfiguration _config;
-
+        private readonly OfficePreviewService _officePreviewService;
         public record AttachmentMetaDto(int Id, string Filename, string Mime);
         private readonly IEmailAttachmentsRepository _attRepo;
         private readonly AttachmentsOptions _opt;
@@ -72,7 +73,8 @@ namespace SCemail.Components.Controllers
      IOptions<AttachmentsOptions> opt,
      ILogger<AttachmentsController> logger,
      IConfiguration config,
-     EmailFetchService fetch)
+     EmailFetchService fetch,
+     OfficePreviewService officePreviewService)
         {
             _mail = mail;
             _attRepo = attRepo;
@@ -80,6 +82,8 @@ namespace SCemail.Components.Controllers
             _logger = logger;
             _config = config;
             _fetch = fetch;
+            _officePreviewService = officePreviewService;
+
         }
 
         public record AttachmentListItemDto(int Id, string Filename, string Mime);
@@ -150,9 +154,28 @@ namespace SCemail.Components.Controllers
             }
         }
         [HttpGet("{id:int}/preview")]
-        public Task<IActionResult> Preview(int id, [FromQuery] string? src, CancellationToken ct)
-    => ServeFromDisk(id, src, inline: true, previewOnly: true, ct);
+        public async Task<IActionResult> Preview(
+     int id,
+     [FromQuery] string? src,
+     CancellationToken ct)
+        {
+            var officeResult =
+                await TryServeOfficePreviewAsync(
+                    id,
+                    src,
+                    sent: false,
+                    ct);
 
+            if (officeResult is not null)
+                return officeResult;
+
+            return await ServeFromDisk(
+                id,
+                src,
+                inline: true,
+                previewOnly: true,
+                ct);
+        }
         [HttpPost("{id:int}/ensure")]
         public async Task<IActionResult> Ensure(int id, [FromQuery] string? src, CancellationToken ct)
         {
@@ -190,8 +213,26 @@ namespace SCemail.Components.Controllers
         }
 
         [HttpGet("{id:int}/previewInternal")]
-        public Task<IActionResult> PreviewInternal(int id, CancellationToken ct)
-    => ServeSentFromDisk(id, inline: true, previewOnly: true, ct);
+        public async Task<IActionResult> PreviewInternal(
+    int id,
+    CancellationToken ct)
+        {
+            var officeResult =
+                await TryServeOfficePreviewAsync(
+                    id,
+                    "sent",
+                    sent: true,
+                    ct);
+
+            if (officeResult is not null)
+                return officeResult;
+
+            return await ServeSentFromDisk(
+                id,
+                inline: true,
+                previewOnly: true,
+                ct);
+        }
 
         [HttpGet("{id:int}/downloadInternal")]
         public Task<IActionResult> DownloadInternal(int id, CancellationToken ct)
@@ -291,7 +332,22 @@ namespace SCemail.Components.Controllers
 
             return Content(html, "text/html; charset=utf-8");
         }
+        [HttpGet("office-preview/availability")]
+        public IActionResult OfficePreviewAvailability()
+        {
+            var availability =
+                _officePreviewService
+                    .GetAvailability();
 
+            return Ok(new
+            {
+                available =
+                    availability.Available,
+
+                message =
+                    availability.Message
+            });
+        }
         [HttpGet("{emlId:int}/eml-part/{index:int}/inline")]
         public async Task<IActionResult> OpenEmlPartInline(int emlId, int index, CancellationToken ct)
         {
@@ -918,7 +974,295 @@ function closePreview() {{
     <div>{body}</div>
 </div>";
         }
+        private async Task<IActionResult?>
+    TryServeOfficePreviewAsync(
+        int id,
+        string? src,
+        bool sent,
+        CancellationToken ct)
+        {
+            try
+            {
+                string fullPath;
+                string fileName;
 
+                // ========================================================
+                // INVIATE
+                // ========================================================
+
+                if (sent)
+                {
+                    var meta =
+                        await _attRepo
+                            .GetSentAttachmentMetaAsync(
+                                id,
+                                ct);
+
+                    if (meta is null)
+                        return null;
+
+                    if (string.IsNullOrWhiteSpace(
+                        meta.Path))
+                    {
+                        return null;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(
+                        _opt.BasePath))
+                    {
+                        return Problem(
+                            "Attachments:BasePath non configurato.");
+                    }
+
+                    fullPath =
+                        BuildSafeFullPath(
+                            _opt.BasePath,
+                            meta.Path);
+
+                    fileName =
+                        meta.NomeFile
+                        ?? Path.GetFileName(fullPath);
+                }
+
+                // ========================================================
+                // RICEVUTE
+                // ========================================================
+
+                else
+                {
+                    var meta =
+                        await _attRepo
+                            .GetMetaAsync(
+                                id,
+                                src,
+                                ct);
+
+                    if (meta is null)
+                        return null;
+
+                    /*
+                     * Se non è ancora stato materializzato su disco
+                     * manteniamo esattamente la tua logica attuale.
+                     */
+                    if (string.IsNullOrWhiteSpace(
+                        meta.FilePath))
+                    {
+                        var ensured =
+                            await _fetch
+                                .EnsureSingleAttachmentAsync(
+                                    id,
+                                    ct);
+
+                        if (!ensured)
+                            return null;
+
+                        meta =
+                            await _attRepo
+                                .GetMetaAsync(
+                                    id,
+                                    src,
+                                    ct);
+
+                        if (meta is null ||
+                            string.IsNullOrWhiteSpace(
+                                meta.FilePath))
+                        {
+                            return null;
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(
+                        _opt.BasePath))
+                    {
+                        return Problem(
+                            "Attachments:BasePath non configurato.");
+                    }
+
+                    fullPath =
+                        BuildSafeFullPath(
+                            _opt.BasePath,
+                            meta.FilePath);
+
+                    fileName =
+                        meta.NomeFile
+                        ?? Path.GetFileName(fullPath);
+
+                    /*
+                     * Se per qualche motivo il file non è più presente
+                     * proviamo nuovamente a materializzarlo.
+                     */
+                    if (!System.IO.File.Exists(
+                        fullPath))
+                    {
+                        var ensured =
+                            await _fetch
+                                .EnsureSingleAttachmentAsync(
+                                    id,
+                                    ct);
+
+                        if (ensured)
+                        {
+                            var refreshed =
+                                await _attRepo
+                                    .GetMetaAsync(
+                                        id,
+                                        src,
+                                        ct);
+
+                            if (refreshed is not null &&
+                                !string.IsNullOrWhiteSpace(
+                                    refreshed.FilePath))
+                            {
+                                fullPath =
+                                    BuildSafeFullPath(
+                                        _opt.BasePath,
+                                        refreshed.FilePath);
+
+                                fileName =
+                                    refreshed.NomeFile
+                                    ?? Path.GetFileName(
+                                        fullPath);
+                            }
+                        }
+                    }
+                }
+
+                // ========================================================
+                // È OFFICE?
+                // ========================================================
+
+                if (!_officePreviewService
+                    .IsSupported(fileName))
+                {
+                    /*
+                     * Non è Office.
+                     *
+                     * Il controller continuerà con la preview
+                     * PDF/immagine originale.
+                     */
+                    return null;
+                }
+
+                if (!System.IO.File.Exists(
+                    fullPath))
+                {
+                    return NotFound(
+                        $"File allegato {id} non disponibile.");
+                }
+
+                // ========================================================
+                // LIBREOFFICE PRESENTE?
+                // ========================================================
+
+                var availability =
+                    _officePreviewService
+                        .GetAvailability();
+
+                if (!availability.Available)
+                {
+                    _logger.LogWarning(
+                        "Preview Office richiesta ma LibreOffice non è disponibile. AttachmentId={AttachmentId}",
+                        id);
+
+                    return StatusCode(
+                        StatusCodes.Status503ServiceUnavailable,
+                        new
+                        {
+                            code =
+                                "OFFICE_PREVIEW_UNAVAILABLE",
+
+                            message =
+                                "L'anteprima dei documenti Office non è disponibile su questo server. È comunque possibile scaricare il file."
+                        });
+                }
+
+                // ========================================================
+                // CONVERSIONE
+                // ========================================================
+
+                var pdfPath =
+                    await _officePreviewService
+                        .GetOrCreatePdfAsync(
+                            fullPath,
+                            id,
+                            sent
+                                ? "sent"
+                                : "received",
+                            ct);
+
+                Response.Headers[
+                    "X-Content-Type-Options"] =
+                    "nosniff";
+
+                Response.Headers[
+                    "Cache-Control"] =
+                    "private, no-cache";
+
+                Response.Headers[
+                    "Content-Disposition"] =
+                    "inline";
+
+                _logger.LogInformation(
+                    "Preview Office PDF. AttachmentId={AttachmentId}, Sent={Sent}, Source={Source}, Pdf={Pdf}",
+                    id,
+                    sent,
+                    fullPath,
+                    pdfPath);
+
+                return PhysicalFile(
+                    pdfPath,
+                    "application/pdf",
+                    enableRangeProcessing: true);
+            }
+            catch (LibreOfficeUnavailableException ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "LibreOffice non disponibile.");
+
+                return StatusCode(
+                    StatusCodes.Status503ServiceUnavailable,
+                    new
+                    {
+                        code =
+                            "OFFICE_PREVIEW_UNAVAILABLE",
+
+                        message =
+                            "L'anteprima dei documenti Office non è disponibile su questo server. È comunque possibile scaricare il file."
+                    });
+            }
+            catch (OperationCanceledException)
+            {
+                return StatusCode(
+                    StatusCodes.Status499ClientClosedRequest);
+            }
+            catch (TimeoutException ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Timeout conversione Office AttachmentId={AttachmentId}",
+                    id);
+
+                return StatusCode(
+                    StatusCodes.Status504GatewayTimeout,
+                    new
+                    {
+                        message =
+                            "La conversione del documento Office ha impiegato troppo tempo."
+                    });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "Errore preview Office. AttachmentId={AttachmentId}, Sent={Sent}",
+                    id,
+                    sent);
+
+                return Problem(
+                    "Impossibile generare l'anteprima del documento Office.");
+            }
+        }
         private static bool IsPreviewableEmlPart(string? mime, string? fileName)
         {
             mime ??= "";

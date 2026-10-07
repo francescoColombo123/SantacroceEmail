@@ -18,7 +18,7 @@ using System.Text.RegularExpressions;
 using static MudBlazor.CategoryTypes;
 using static Org.BouncyCastle.Math.EC.ECCurve;
 using static SCemail.Components.Pages.MailDetail;
-
+using SCemail.Services;
 
 namespace SCemail.Components.Data
 {
@@ -33,25 +33,36 @@ namespace SCemail.Components.Data
         private readonly IConfiguration _config;
         private readonly IOptions<AttachmentsOptions> _attachmentsOpt;
         private readonly string _attachmentsBasePath;
+        private readonly IOfficePreviewQueue _officePreviewQueue;
         public MailService_NEW(
-            IDbContextFactory<MailDbContext> dbFactory,
-            ILogger<MailService_NEW> logger,
-            HttpClient http,
-            IConfiguration config,
-            AccessiService accessiService,
-            IOptions<AttachmentsOptions> attachmentsOpt)
+    IDbContextFactory<MailDbContext> dbFactory,
+    ILogger<MailService_NEW> logger,
+    HttpClient http,
+    IConfiguration config,
+    AccessiService accessiService,
+    IOptions<AttachmentsOptions> attachmentsOpt,
+    IOfficePreviewQueue officePreviewQueue)
         {
             _dbFactory = dbFactory;
             _logger = logger;
             _http = http;
             _config = config;
-            _connectionString = config.GetConnectionString("OracleDb")
-                ?? throw new InvalidOperationException("Connection string 'OracleDb' mancante nel file di configurazione.");
+
+            _connectionString =
+                config.GetConnectionString("OracleDb")
+                ?? throw new InvalidOperationException(
+                    "Connection string 'OracleDb' mancante nel file di configurazione.");
+
             _accessiService = accessiService;
             _attachmentsOpt = attachmentsOpt;
-            _attachmentsBasePath = _config.GetValue<string>("Attachments:BasePath")
-        ?? Path.Combine(AppContext.BaseDirectory, "attachments");
 
+            _attachmentsBasePath =
+                _config.GetValue<string>("Attachments:BasePath")
+                ?? Path.Combine(
+                    AppContext.BaseDirectory,
+                    "attachments");
+
+            _officePreviewQueue = officePreviewQueue;
         }
 
         public async Task<List<string>> GetEmailAddressesByIdsAsync(List<int> ids)
@@ -4683,7 +4694,8 @@ CancellationToken ct = default)
 
             if (inviata.Allegati is { Count: > 0 })
             {
-                var basePath = _attachmentsOpt.Value.BasePath;
+                var basePath =
+                    _attachmentsOpt.Value.BasePath;
 
                 if (string.IsNullOrWhiteSpace(basePath))
                 {
@@ -4695,21 +4707,76 @@ CancellationToken ct = default)
                         "Attachments:BasePath non configurato");
                 }
 
+                // ============================================================
+                // 1. SALVATAGGIO FISICO
+                // ============================================================
+
                 foreach (var al in inviata.Allegati)
                 {
-                    var rel = await SaveSentAttachmentAsync(
-                        basePath: basePath,
-                        casellaId: casella.Id,
-                        emailId: inviata.Id,
-                        originalFileName: al.NomeFile,
-                        bytes: al.Content,
-                        ct: ct
-                    );
+                    var rel =
+                        await SaveSentAttachmentAsync(
+                            basePath: basePath,
+                            casellaId: casella.Id,
+                            emailId: inviata.Id,
+                            originalFileName: al.NomeFile,
+                            bytes: al.Content,
+                            ct: ct);
 
                     al.Path = rel;
                 }
 
+                // ============================================================
+                // 2. AGGIORNIAMO I PATH NEL DATABASE
+                // ============================================================
+
                 await db.SaveChangesAsync(ct);
+
+                // ============================================================
+                // 3. PREVIEW OFFICE IN BACKGROUND
+                // ============================================================
+
+                foreach (var al in inviata.Allegati)
+                {
+                    if (string.IsNullOrWhiteSpace(al.Path))
+                        continue;
+
+                    try
+                    {
+                        var fullPath =
+                            Path.GetFullPath(
+                                Path.Combine(
+                                    basePath,
+                                    al.Path));
+
+                        if (!File.Exists(fullPath))
+                            continue;
+
+                        var queued =
+                            _officePreviewQueue.TryEnqueue(
+                                al.Id,
+                                fullPath,
+                                "sent");
+
+                        if (queued)
+                        {
+                            _logger.LogInformation(
+                                "Preview Office inviata accodata. AttachmentId={AttachmentId}, File={File}",
+                                al.Id,
+                                fullPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        /*
+                         * La preview NON deve mai trasformare
+                         * un invio SMTP riuscito in un errore.
+                         */
+                        _logger.LogWarning(
+                            ex,
+                            "Impossibile accodare preview Office inviata. AttachmentId={AttachmentId}",
+                            al.Id);
+                    }
+                }
 
                 _logger.LogInformation(
                     "Allegati inviati salvati su FS. EmailId={Id}, CasellaId={CasellaId}",

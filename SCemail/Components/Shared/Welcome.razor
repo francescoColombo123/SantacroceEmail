@@ -628,7 +628,7 @@ string.IsNullOrWhiteSpace(_cp)
 
     .summary-row {
         display: grid;
-        grid-template-columns: 320px 1fr 260px;
+        grid-template-columns: 320px minmax(0, 1fr) 300px;
         align-items: center;
         gap: 14px;
         padding: 16px 18px;
@@ -646,7 +646,7 @@ string.IsNullOrWhiteSpace(_cp)
     }
 
     .summary-row-main {
-        grid-template-columns: 260px 1fr 300px;
+        grid-template-columns: 320px minmax(0, 1fr) 300px;
     }
 
     .summary-left {
@@ -698,10 +698,12 @@ string.IsNullOrWhiteSpace(_cp)
     }
 
     .summary-right {
+        grid-column: 3;
         display: flex;
-        justify-content: flex-end;
+        justify-content: flex-start;
         align-items: center;
         min-width: 0;
+        width: 300px;
     }
 
     .summary-right.single {
@@ -750,6 +752,7 @@ string.IsNullOrWhiteSpace(_cp)
     }
 
     @@media (max-width: 1200px) {
+
         .summary-row,
         .summary-row-main {
             grid-template-columns: 1fr;
@@ -757,6 +760,8 @@ string.IsNullOrWhiteSpace(_cp)
         }
 
         .summary-right {
+            grid-column: 1;
+            width: auto;
             justify-content: flex-start;
         }
     }

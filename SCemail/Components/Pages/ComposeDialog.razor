@@ -14,7 +14,7 @@
 <MudDialog>
     <DialogContent>
         <div class="compose-layout">
-    <div class="compose-main">
+            <div class="compose-main">
 
                 <!-- ========================== DA ========================== -->
                 <div class="compose-header-row">
@@ -40,166 +40,205 @@
                     </div>
                 </div>
 
-        <!-- ==========================  A  ========================== -->
-        <div class="recipient-container" @ref="_toBoxRef">
-            <div class="recipient-head">
-                <label class="rcpt-label">A</label>
+                <!-- ========================== A ========================== -->
+                <div class="compose-header-row compose-recipient-row recipient-container" @ref="_toBoxRef">
+                    <div class="compose-header-label">A:</div>
 
-                <div class="rcpt-actions">
-                    <MudButton Variant="Variant.Text" Size="Size.Small" Class="rcpt-link"
-                               OnClick="@(() => _showCc = true)">Cc</MudButton>
+                    <div class="compose-header-value">
+                        <div class="recipient-inline-shell">
+                            <div class="recipient-box recipient-box-inline">
+                                @foreach (var chip in _toList)
+                                {
+                                    <MudChip T="RecipientChip"
+                                             Color="Color.Primary"
+                                             Variant="Variant.Filled"
+                                             OnClick="() => OnChipClick(chip)"
+                                             OnClose="@(e => RemoveRecipient(_toList, chip))"
+                                             Closeable="true"
+                                             Class="chip-pill">
+                                        <div class="chip-avatar chip-a">@chip.Email.Substring(0, 1).ToUpper()</div>
+                                        <div class="chip-name">@chip.NameOrEmail</div>
+                                    </MudChip>
+                                }
 
-                    <MudButton Variant="Variant.Text" Size="Size.Small" Class="rcpt-link"
-                               OnClick="@(() => _showBcc = true)">Ccn</MudButton>
-                </div>
-            </div>
-            <div class="recipient-box">
-                @foreach (var chip in _toList)
-                {
-                    <MudChip T="RecipientChip"
-                             Color="Color.Primary"
-                             Variant="Variant.Filled"
-                             OnClick="() => OnChipClick(chip)"
-                             OnClose="@(e => RemoveRecipient(_toList, chip))"
-                             Closeable="true"
-                             Class="chip-pill">
-                        <div class="chip-avatar chip-a">@chip.Email.Substring(0, 1).ToUpper()</div>
-                        <div class="chip-name">@chip.NameOrEmail</div>
-                    </MudChip>
-                }
+                                <MudTextField T="string"
+                                              @key="_toInputKey"
+                                              Value="_toInput"
+                                              ValueChanged="OnToInputChanged"
+                                              Immediate="true"
+                                              @onkeydown="@(async e => await HandleRecipientKey(e, _toList, _toInput ?? "", RecipientField.To))"
+                                              Placeholder="Aggiungi destinatario..."
+                                              Class="recipient-input recipient-input-inline"
+                                              Variant="Variant.Text" />
+                            </div>
 
-                <MudTextField T="string"
-                              @bind-Value="_toInput"
-                              Immediate="true"
-                              OnInput="@(async (ChangeEventArgs e) =>
-                                                                    await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.To))"
-                              @onkeydown="@(async e => await HandleRecipientKey(e, _toList, _toInput ?? "", v => _toInput = v, RecipientField.To))"
-                              Placeholder="Aggiungi destinatario..."
-                              Class="recipient-input"
-                              Variant="Variant.Text" />
+                            <div class="rcpt-actions-inline">
+                                <MudButton Variant="Variant.Text"
+                                           Size="Size.Small"
+                                           Class="rcpt-link"
+                                           OnClick="@(() => _showCc = true)">
+                                    Cc
+                                </MudButton>
 
-            </div>
-
-            @if (_showSuggestionsTo && _suggestionsTo.Any())
-            {
-                <MudPaper Class="suggestion-panel">
-                    @foreach (var s in _suggestionsTo)
-                    {
-                        <div class="suggestion-item"
-                             @onclick="() => SelectSuggestion(s, _toList, RecipientField.To)">
-                            <div class="chip-avatar chip-a">@s.Email.Substring(0, 1).ToUpper()</div>
-                            <div class="chip-texts">
-                                <div class="chip-name">@s.NameOrEmail</div>
-                                <div class="chip-email">@s.Email</div>
+                                <MudButton Variant="Variant.Text"
+                                           Size="Size.Small"
+                                           Class="rcpt-link"
+                                           OnClick="@(() => _showBcc = true)">
+                                    Ccn
+                                </MudButton>
                             </div>
                         </div>
-                    }
-                </MudPaper>
-            }
-        </div>
 
-
-
-        <!-- ==========================  CC  ========================== -->
-        @if (_showCc || _ccList.Any())
-        {
-            <div class="recipient-container" @ref="_ccBoxRef">
-                <label class="mud-input-label">CC</label>
-                <div class="recipient-box">
-                    @foreach (var chip in _ccList)
-                    {
-                        <MudChip T="RecipientChip"
-                                 Color="Color.Secondary"
-                                 Variant="Variant.Filled"
-                                 OnClick="() => OnChipClick(chip)"
-                                 OnClose="@(e => RemoveRecipient(_ccList, chip))"
-                                 Closeable="true"
-                                 Class="chip-pill">
-                            <div class="chip-avatar chip-cc">@chip.Email.Substring(0, 1).ToUpper()</div>
-                            <div class="chip-name">@chip.NameOrEmail</div>
-                        </MudChip>
-                    }
-
-                    <MudTextField T="string"
-                                  @bind-Value="_ccInput"
-                                  Immediate="true"
-                                  OnInput="@(async (ChangeEventArgs e) =>
-                                                                                            await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Cc))"
-                              @onkeydown="@(async e => await HandleRecipientKey(e, _ccList, _ccInput ?? "", v => _ccInput = v, RecipientField.Cc))"
-                              Placeholder="Aggiungi CC..."
-                              Class="recipient-input"
-                              Variant="Variant.Text" />
-            </div>
-
-            @if (_showSuggestionsCc && _suggestionsCc.Any())
-                {
-                    <MudPaper Class="suggestion-panel">
-                        @foreach (var s in _suggestionsCc)
+                        @if (_showSuggestionsTo && _suggestionsTo.Any())
                         {
-                            <div class="suggestion-item"
-                                 @onclick="() => SelectSuggestion(s, _ccList, RecipientField.Cc)">
-                                <div class="chip-avatar chip-cc">@s.Email.Substring(0, 1).ToUpper()</div>
-                                <div class="chip-texts">
-                                    <div class="chip-name">@s.NameOrEmail</div>
-                                    <div class="chip-email">@s.Email</div>
-                                </div>
-                            </div>
+                            <MudPaper Class="suggestion-panel" Elevation="4">
+                                @foreach (var s in _suggestionsTo)
+                                {
+                                    <div class="suggestion-item"
+                                         @onclick="() => SelectSuggestion(s, _toList, RecipientField.To)">
+
+                                        <div class="recipient-avatar">
+                                            @GetRecipientInitial(s)
+                                        </div>
+
+                                        <div class="suggestion-text">
+                                            @if (HasRealRecipientName(s))
+                                            {
+                                                <div class="suggestion-name">@s.Name</div>
+                                                <div class="suggestion-email">@s.Email</div>
+                                            }
+                                            else
+                                            {
+                                                <div class="suggestion-email-only">@s.Email</div>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                            </MudPaper>
                         }
-                    </MudPaper>
-                }
-            </div>
-        }
-        @if (_showBcc || _bccList.Any())
-        {
+                    </div>
+                </div>
 
-            <!-- ==========================  CCN  ========================== -->
-            <div class="recipient-container" @ref="_bccBoxRef">
-                <label class="mud-input-label">CCN</label>
-                <div class="recipient-box">
-                    @foreach (var chip in _bccList)
-                    {
-                        <MudChip T="RecipientChip"
-                                 Color="Color.Tertiary"
-                                 Variant="Variant.Filled"
-                                 OnClick="() => OnChipClick(chip)"
-                                 OnClose="@(e => RemoveRecipient(_bccList, chip))"
-                                 Closeable="true"
-                                 Class="chip-pill">
-                            <div class="chip-avatar chip-bcc">@chip.Email.Substring(0, 1).ToUpper()</div>
-                            <div class="chip-name">@chip.NameOrEmail</div>
-                        </MudChip>
-                    }
 
-                    <MudTextField T="string"
-                                  @bind-Value="_bccInput"
-                                  Immediate="true"
-                                  OnInput="@(async (ChangeEventArgs e) =>
-                                                                                            await OnRecipientInput(e?.Value?.ToString() ?? string.Empty, RecipientField.Bcc))"
-                              @onkeydown="@(async e => await HandleRecipientKey(e, _bccList, _bccInput ?? "", v => _bccInput = v, RecipientField.Bcc))"
-                              Placeholder="Aggiungi CCN..."
-                              Class="recipient-input"
-                              Variant="Variant.Text" />
-            </div>
-
-            @if (_showSuggestionsBcc && _suggestionsBcc.Any())
+                <!-- ==========================  CC  ========================== -->
+                @if (_showCc || _ccList.Any())
                 {
-                    <MudPaper Class="suggestion-panel">
-                        @foreach (var s in _suggestionsBcc)
-                        {
-                            <div class="suggestion-item"
-                                 @onclick="() => SelectSuggestion(s, _bccList, RecipientField.Bcc)">
-                                <div class="chip-avatar chip-bcc">@s.Email.Substring(0, 1).ToUpper()</div>
-                                <div class="chip-texts">
-                                    <div class="chip-name">@s.NameOrEmail</div>
-                                    <div class="chip-email">@s.Email</div>
-                                </div>
-                            </div>
-                        }
-                    </MudPaper>
-                }
-            </div>
+                    <div class="compose-header-row compose-recipient-row recipient-container" @ref="_ccBoxRef">
+                        <div class="compose-header-label">Cc:</div>
 
-        }
+                        <div class="compose-header-value">
+                            <div class="recipient-box recipient-box-inline">
+                                @foreach (var chip in _ccList)
+                                {
+                                    <MudChip T="RecipientChip"
+                                             Color="Color.Secondary"
+                                             Variant="Variant.Filled"
+                                             OnClick="() => OnChipClick(chip)"
+                                             OnClose="@(e => RemoveRecipient(_ccList, chip))"
+                                             Closeable="true"
+                                             Class="chip-pill">
+                                        <div class="chip-avatar chip-cc">@chip.Email.Substring(0, 1).ToUpper()</div>
+                                        <div class="chip-name">@chip.NameOrEmail</div>
+                                    </MudChip>
+                                }
+
+                                <MudTextField T="string"
+                                              @key="_ccInputKey"
+                                              Value="_ccInput"
+                                              ValueChanged="OnCcInputChanged"
+                                              Immediate="true"
+                                              @onkeydown="@(async e => await HandleRecipientKey(e, _ccList, _ccInput ?? "", RecipientField.Cc))"
+                                              Placeholder="Aggiungi CC..."
+                                              Class="recipient-input recipient-input-inline"
+                                              Variant="Variant.Text" />
+                            </div>
+
+                            @if (_showSuggestionsCc && _suggestionsCc.Any())
+                            {
+                                <MudPaper Class="suggestion-panel" Elevation="4">
+                                    @foreach (var s in _suggestionsCc)
+                                    {
+                                        <div class="suggestion-item"
+                                             @onclick="() => SelectSuggestion(s, _ccList, RecipientField.Cc)">
+                                            <div class="recipient-avatar">@GetRecipientInitial(s)</div>
+
+                                            <div class="suggestion-text">
+                                                @if (HasRealRecipientName(s))
+                                                {
+                                                    <div class="suggestion-name">@s.Name</div>
+                                                    <div class="suggestion-email">@s.Email</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="suggestion-email-only">@s.Email</div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </MudPaper>
+                            }
+                        </div>
+                    </div>
+                }
+                @if (_showBcc || _bccList.Any())
+                {
+                    <div class="compose-header-row compose-recipient-row recipient-container" @ref="_bccBoxRef">
+                        <div class="compose-header-label">Ccn:</div>
+
+                        <div class="compose-header-value">
+                            <div class="recipient-box recipient-box-inline">
+                                @foreach (var chip in _bccList)
+                                {
+                                    <MudChip T="RecipientChip"
+                                             Color="Color.Tertiary"
+                                             Variant="Variant.Filled"
+                                             OnClick="() => OnChipClick(chip)"
+                                             OnClose="@(e => RemoveRecipient(_bccList, chip))"
+                                             Closeable="true"
+                                             Class="chip-pill">
+                                        <div class="chip-avatar chip-bcc">@chip.Email.Substring(0, 1).ToUpper()</div>
+                                        <div class="chip-name">@chip.NameOrEmail</div>
+                                    </MudChip>
+                                }
+
+                                <MudTextField T="string"
+                                              @key="_bccInputKey"
+                                              Value="_bccInput"
+                                              ValueChanged="OnBccInputChanged"
+                                              Immediate="true"
+                                              @onkeydown="@(async e => await HandleRecipientKey(e, _bccList, _bccInput ?? "", RecipientField.Bcc))"
+                                              Placeholder="Aggiungi CCN..."
+                                              Class="recipient-input recipient-input-inline"
+                                              Variant="Variant.Text" />
+                            </div>
+
+                            @if (_showSuggestionsBcc && _suggestionsBcc.Any())
+                            {
+                                <MudPaper Class="suggestion-panel" Elevation="4">
+                                    @foreach (var s in _suggestionsBcc)
+                                    {
+                                        <div class="suggestion-item"
+                                             @onclick="() => SelectSuggestion(s, _bccList, RecipientField.Bcc)">
+                                            <div class="recipient-avatar">@GetRecipientInitial(s)</div>
+
+                                            <div class="suggestion-text">
+                                                @if (HasRealRecipientName(s))
+                                                {
+                                                    <div class="suggestion-name">@s.Name</div>
+                                                    <div class="suggestion-email">@s.Email</div>
+                                                }
+                                                else
+                                                {
+                                                    <div class="suggestion-email-only">@s.Email</div>
+                                                }
+                                            </div>
+                                        </div>
+                                    }
+                                </MudPaper>
+                            }
+                        </div>
+                    </div>
+                }
 
                 <!-- ========================== OGGETTO ========================== -->
                 <div class="compose-header-row compose-subject-row">
@@ -222,160 +261,160 @@
                     </div>
 
                 </div>
-        <!-- Editor -->
-        <div style="margin-top: 12px;">
-            <label class="msg-label">Messaggio</label>
+                <!-- Editor -->
+                <div style="margin-top: 12px;">
+                    <label class="msg-label">Messaggio</label>
 
-           <div class="compose-editor-shell">
-                <div id="composeToolbar">
-                    <button class="ql-bold"></button>
-                    <button class="ql-italic"></button>
-                    <button class="ql-underline"></button>
-                    <button class="ql-list" value="ordered"></button>
-                    <button class="ql-list" value="bullet"></button>
-                    <button class="ql-link"></button>
-                    <button class="ql-clean"></button>
-                </div>
-
-                <div id="editor"></div>
-
-                @if (!string.IsNullOrWhiteSpace(_firmaHtml))
-                {
-                    <div class="compose-signature-box">
-                        <div class="compose-signature-preview">
-                            @((MarkupString)NormalizeFirmaHtml(_firmaHtml))
+                    <div class="compose-editor-shell">
+                        <div id="composeToolbar">
+                            <button class="ql-bold"></button>
+                            <button class="ql-italic"></button>
+                            <button class="ql-underline"></button>
+                            <button class="ql-list" value="ordered"></button>
+                            <button class="ql-list" value="bullet"></button>
+                            <button class="ql-link"></button>
+                            <button class="ql-clean"></button>
                         </div>
-                    </div>
-                }
 
-                @if (!IsForward && !string.IsNullOrWhiteSpace(GetEffectiveQuoteHtml()))
-                {
-                    <div class="compose-gmail-quote">
-                        <button type="button"
-                                class="gmail-quote-dots"
-                                title="Mostra/Nascondi messaggio precedente"
-                                @onclick="@(() => _showQuoteDetails = !_showQuoteDetails)">
-                            ...
-                        </button>
+                        <div id="editor"></div>
 
-                        @if (_showQuoteDetails)
+                        @if (!string.IsNullOrWhiteSpace(_firmaHtml))
                         {
-                            <div class="compose-quote-box">
-                                <div class="compose-quote-title">
-                                    Messaggio precedente
+                            <div class="compose-signature-box">
+                                <div class="compose-signature-preview">
+                                    @((MarkupString)NormalizeFirmaHtml(_firmaHtml))
+                                </div>
+                            </div>
+                        }
+
+                        @if (!IsForward && !string.IsNullOrWhiteSpace(GetEffectiveQuoteHtml()))
+                        {
+                            <div class="compose-gmail-quote">
+                                <button type="button"
+                                        class="gmail-quote-dots"
+                                        title="Mostra/Nascondi messaggio precedente"
+                                        @onclick="@(() => _showQuoteDetails = !_showQuoteDetails)">
+                                    ...
+                                </button>
+
+                                @if (_showQuoteDetails)
+                                {
+                                    <div class="compose-quote-box">
+                                        <div class="compose-quote-title">
+                                            Messaggio precedente
+                                        </div>
+
+                                        <div class="compose-quote-body">
+                                            @((MarkupString)GetEffectiveQuoteHtml())
+                                        </div>
+                                    </div>
+                                }
+                            </div>
+                        }
+
+                        @if (IsForward &&
+                                                !string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+                        {
+                            <div class="forward-original-wrapper">
+                                <div class="forward-original-label">
+                                    Messaggio inoltrato
                                 </div>
 
-                                <div class="compose-quote-body">
-                                    @((MarkupString)GetEffectiveQuoteHtml())
+                                <div class="forward-original-content">
+                                    @((MarkupString)ForwardOriginalHtml)
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+
+
+            </div>
+
+            <aside class="compose-side">
+                <div class="attachments-title">Allegati</div>
+
+                <div id="dropZone" class="drop-zone mt-3" @ref="_dropZoneRef">
+                    <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Large" Color="Color.Primary" />
+                    <div>Trascina qui i file o clicca per selezionarli</div>
+                    <InputFile OnChange="OnFileSelected" multiple />
+                </div>
+                @if (_uploadingAttachments)
+                {
+                    <MudPaper Class="upload-loader" Elevation="2">
+                        <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Medium" />
+                        <div class="upload-loader-text">
+                            Caricamento allegati... @_uploadingDone / @_uploadingTotal
+                        </div>
+                    </MudPaper>
+                }
+
+
+                @if (_attachments.Any())
+                {
+                    <div class="gmail-attachments-list">
+                        @foreach (var f in _attachments)
+                        {
+                            <div class="gmail-attachment-row">
+                                <div class="gmail-attachment-left">
+                                    <div class="gmail-attachment-icon">
+                                        <MudIcon Icon="@GetAttachmentIcon(f.Name)" Size="Size.Medium" />
+                                    </div>
+
+                                    <div class="gmail-attachment-info">
+                                        <div class="gmail-attachment-name" title="@f.Name">
+                                            @f.Name
+                                        </div>
+                                        <div class="gmail-attachment-size">
+                                            @FormatFileSize(f.Size)
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="gmail-attachment-actions">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                                   Color="Color.Default"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => RemoveAttachment(f))"
+                                                   Disabled="_uploadingAttachments" />
                                 </div>
                             </div>
                         }
                     </div>
                 }
 
-                @if (IsForward &&
-                    !string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+                @if (_forwardedAttachments.Any())
                 {
-                    <div class="forward-original-wrapper">
-                        <div class="forward-original-label">
-                            Messaggio inoltrato
-                        </div>
+                    <div class="gmail-attachments-list">
+                        @foreach (var f in _forwardedAttachments)
+                        {
+                            <div class="gmail-attachment-row">
+                                <div class="gmail-attachment-left">
+                                    <div class="gmail-attachment-icon">
+                                        <MudIcon Icon="@GetAttachmentIcon(f.FileName)" Size="Size.Medium" />
+                                    </div>
 
-                        <div class="forward-original-content">
-                            @((MarkupString)ForwardOriginalHtml)
-                        </div>
+                                    <div class="gmail-attachment-info">
+                                        <div class="gmail-attachment-name" title="@f.FileName">
+                                            @f.FileName
+                                        </div>
+                                        <div class="gmail-attachment-size">
+                                            Allegato originale
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="gmail-attachment-actions">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                                   Color="Color.Default"
+                                                   Size="Size.Small"
+                                                   OnClick="@(() => RemoveForwardedAttachment(f))" />
+                                </div>
+                            </div>
+                        }
                     </div>
                 }
-            </div>
-        </div>
-
-        
-        </div>
-
-        <aside class="compose-side">
-            <div class="attachments-title">Allegati</div>
-
-            <div id="dropZone" class="drop-zone mt-3" @ref="_dropZoneRef">
-            <MudIcon Icon="@Icons.Material.Filled.UploadFile" Size="Size.Large" Color="Color.Primary" />
-            <div>Trascina qui i file o clicca per selezionarli</div>
-            <InputFile OnChange="OnFileSelected" multiple />
-        </div>
-        @if (_uploadingAttachments)
-        {
-            <MudPaper Class="upload-loader" Elevation="2">
-                <MudProgressCircular Indeterminate="true" Color="Color.Primary" Size="Size.Medium" />
-                <div class="upload-loader-text">
-                    Caricamento allegati... @_uploadingDone / @_uploadingTotal
-                </div>
-            </MudPaper>
-        }
-      
-
-        @if (_attachments.Any())
-        {
-            <div class="gmail-attachments-list">
-                @foreach (var f in _attachments)
-                {
-                    <div class="gmail-attachment-row">
-                        <div class="gmail-attachment-left">
-                            <div class="gmail-attachment-icon">
-                                <MudIcon Icon="@GetAttachmentIcon(f.Name)" Size="Size.Medium" />
-                            </div>
-
-                            <div class="gmail-attachment-info">
-                                <div class="gmail-attachment-name" title="@f.Name">
-                                    @f.Name
-                                </div>
-                                <div class="gmail-attachment-size">
-                                    @FormatFileSize(f.Size)
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="gmail-attachment-actions">
-                            <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                           Color="Color.Default"
-                                           Size="Size.Small"
-                                           OnClick="@(() => RemoveAttachment(f))"
-                                           Disabled="_uploadingAttachments" />
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-
-        @if (_forwardedAttachments.Any())
-        {
-            <div class="gmail-attachments-list">
-                @foreach (var f in _forwardedAttachments)
-                {
-                    <div class="gmail-attachment-row">
-                        <div class="gmail-attachment-left">
-                            <div class="gmail-attachment-icon">
-                                <MudIcon Icon="@GetAttachmentIcon(f.FileName)" Size="Size.Medium" />
-                            </div>
-
-                            <div class="gmail-attachment-info">
-                                <div class="gmail-attachment-name" title="@f.FileName">
-                                    @f.FileName
-                                </div>
-                                <div class="gmail-attachment-size">
-                                    Allegato originale
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="gmail-attachment-actions">
-                            <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                            Color="Color.Default"
-                                            Size="Size.Small"
-                                            OnClick="@(() => RemoveForwardedAttachment(f))" />
-                        </div>
-                    </div>
-                }
-            </div>
-        }
-        </aside>
+            </aside>
         </div>
 
         @if (_pending is not null)
@@ -471,19 +510,19 @@
         background: #fff;
     }
 
-    #editor .ql-container {
-        min-height: 190px !important;
-        height: 190px !important;
-        border: none !important;
-    }
+        #editor .ql-container {
+            min-height: 190px !important;
+            height: 190px !important;
+            border: none !important;
+        }
 
-    #editor .ql-editor {
-        min-height: 190px !important;
-        font-family: "Courier New", Courier, monospace !important;
-        font-size: 14px;
-        line-height: 1.5;
-        color: #222;
-    }
+        #editor .ql-editor {
+            min-height: 190px !important;
+            font-family: "Courier New", Courier, monospace !important;
+            font-size: 14px;
+            line-height: 1.5;
+            color: #222;
+        }
 
 
     /* area testo scrollabile */
@@ -560,11 +599,57 @@
         background-color: #546e7a; /* grigio */
     }
 
+    .compose-recipient-row {
+        align-items: flex-start;
+        position: relative;
+    }
     .chip-texts {
         display: flex;
         flex-direction: column;
         line-height: 1;
     }
+
+    .recipient-box-inline .chip-pill {
+        flex: 0 0 auto;
+    }
+
+    .recipient-input-inline {
+        flex: 1 0 180px;
+        min-width: 180px;
+    }
+
+        .recipient-input-inline .mud-input-root,
+        .recipient-input-inline .mud-input-slot {
+            white-space: nowrap;
+        }
+
+    .rcpt-actions-inline {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+    }
+    .recipient-box-inline {
+        flex: 1 1 auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        /* fondamentale: una sola riga */
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        white-space: nowrap;
+        min-height: 32px;
+        padding: 2px 6px !important;
+    }
+    .recipient-inline-shell {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+        width: 100%;
+    }
+
 
     .chip-name {
         font-size: 13px;
@@ -660,6 +745,7 @@
         border-radius: 10px;
         background: #fff;
     }
+
     .suggestion-item {
         padding: 8px 10px;
         display: flex;
@@ -746,6 +832,7 @@
         background: #fff;
         overflow: hidden;
     }
+
     #composeToolbar {
         border: none !important;
         border-bottom: 1px solid #ddd !important;
@@ -766,6 +853,7 @@
         font-size: 14px;
         line-height: 1.5;
     }
+
     .attach-meta {
         margin-top: 8px;
         font-size: 12px;
@@ -852,6 +940,7 @@
         font-weight: 500;
         color: #3c4043;
     }
+
     .upload-loader {
         margin-top: 10px;
         padding: 10px 12px;
@@ -917,16 +1006,16 @@
     }
 
     .compose-quote-body {
-    border-left: 2px solid #d0d7de;
-    padding-left: 12px;
-    font-family: "Courier New", Courier, monospace;
-    font-size: 14px;
-    line-height: 1.45;
+        border-left: 2px solid #d0d7de;
+        padding-left: 12px;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 14px;
+        line-height: 1.45;
         white-space: normal;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
-    
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
     .compose-layout {
         display: grid;
         grid-template-columns: minmax(0, 1fr) 280px;
@@ -996,6 +1085,7 @@
         #editor .ql-editor blockquote {
             white-space: normal !important;
         }
+
     .drop-zone {
         margin-top: 0 !important;
         padding: 14px 10px !important;
@@ -1011,83 +1101,83 @@
     }
 
     @@media (max-width: 900px) {
-        .compose-layout
+        .compose-layout {
+            grid-template-columns: 1fr;
+        }
 
-    {
-        grid-template-columns: 1fr;
+        .compose-side {
+            border-left: none;
+            padding-left: 0;
+            position: static;
+        }
     }
 
-    .compose-side {
-        border-left: none;
-        padding-left: 0;
-        position: static;
-    }
-
-    }
     .forward-original-wrapper {
-    margin-top: 0;
-    border-top: 1px solid #e4e7ec;
-    background: #fff;
-    min-width: 0;
-}
+        margin-top: 0;
+        border-top: 1px solid #e4e7ec;
+        background: #fff;
+        min-width: 0;
+    }
 
-.forward-original-label {
-    padding: 9px 14px;
-    background: #f8fafc;
-    border-bottom: 1px solid #eaecf0;
-    color: #667085;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: .35px;
-}
+    .forward-original-label {
+        padding: 9px 14px;
+        background: #f8fafc;
+        border-bottom: 1px solid #eaecf0;
+        color: #667085;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: .35px;
+    }
 
-.forward-original-content {
-    max-height: 380px;
-    padding: 14px 16px;
-    overflow: auto;
-    color: #202124;
-    background: #fff;
-    font-family: Arial, Helvetica, sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
-}
+    .forward-original-content {
+        max-height: 380px;
+        padding: 14px 16px;
+        overflow: auto;
+        color: #202124;
+        background: #fff;
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+    }
 
-.forward-original-content * {
-    box-sizing: border-box;
-}
-.forward-original-content table,
-.forward-original-content tbody,
-.forward-original-content tr,
-.forward-original-content td,
-.forward-original-content th {
-    white-space: normal;
-}
-.forward-original-content img {
-    max-width: 100% !important;
-    height: auto !important;
-}
+        .forward-original-content * {
+            box-sizing: border-box;
+        }
 
-.forward-original-content table {
-    max-width: 100% !important;
-    border-collapse: collapse;
-}
+        .forward-original-content table,
+        .forward-original-content tbody,
+        .forward-original-content tr,
+        .forward-original-content td,
+        .forward-original-content th {
+            white-space: normal;
+        }
 
-.forward-original-content td,
-.forward-original-content th {
-    overflow-wrap: anywhere;
-    word-break: break-word;
-}
+        .forward-original-content img {
+            max-width: 100% !important;
+            height: auto !important;
+        }
 
-.forward-original-content pre {
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
+        .forward-original-content table {
+            max-width: 100% !important;
+            border-collapse: collapse;
+        }
+
+        .forward-original-content td,
+        .forward-original-content th {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .forward-original-content pre {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
     /* =========================================================
-       COMPOSER COMPATTO - STILE GMAIL
-       ========================================================= */
+           COMPOSER COMPATTO - STILE GMAIL
+           ========================================================= */
 
     .compose-header-row {
         display: flex;
@@ -1108,6 +1198,7 @@
     .compose-header-value {
         flex: 1;
         min-width: 0;
+        position: relative;
     }
 
     .compose-from-select {
@@ -1140,8 +1231,8 @@
 
 
     /* =========================================================
-       EDITOR PIÙ GRANDE
-       ========================================================= */
+           EDITOR PIÙ GRANDE
+           ========================================================= */
 
     #editor .ql-container {
         min-height: 360px !important;
@@ -1161,8 +1252,8 @@
         margin-bottom: 4px !important;
     }
     /* =========================================================
-       DIALOG NUOVA EMAIL PIÙ GRANDE
-       ========================================================= */
+           DIALOG NUOVA EMAIL PIÙ GRANDE
+           ========================================================= */
 
     .mud-dialog {
         width: 96vw !important;
@@ -1226,7 +1317,76 @@
         width: 100% !important;
         grid-template-columns: minmax(0, 1fr) 300px !important;
     }
-    </style>
+
+    .suggestion-panel {
+        margin-top: 4px;
+        max-height: 260px;
+        overflow-y: auto;
+        border: 1px solid #dadce0;
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 4px 10px rgba(60, 64, 67, .15), 0 1px 3px rgba(60, 64, 67, .20);
+    }
+
+    .suggestion-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 14px;
+        cursor: pointer;
+        min-height: 58px;
+    }
+
+        .suggestion-item:hover {
+            background: #f1f3f4;
+        }
+
+    .recipient-avatar {
+        width: 38px;
+        height: 38px;
+        min-width: 38px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #e8f0fe;
+        color: #1a73e8;
+        font-size: 16px;
+        font-weight: 600;
+    }
+
+    .suggestion-text {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .suggestion-name {
+        color: #202124;
+        font-size: 14px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .suggestion-email {
+        color: #5f6368;
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .suggestion-email-only {
+        color: #202124;
+        font-size: 14px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+</style>
 
 @code {
 
@@ -1243,7 +1403,7 @@
     [Parameter] public string? ThreadKey { get; set; }
     [Parameter] public string? Cc { get; set; }
     [Parameter] public string? Bcc { get; set; }
-    [Parameter] public long? DraftId { get; set; }   
+    [Parameter] public long? DraftId { get; set; }
     [Parameter] public bool IsForward { get; set; }
     [Parameter] public string? ForwardOriginalHtml { get; set; }
     [Parameter] public List<MailService_NEW.OutgoingAttachment_NEW>? ForwardAttachments { get; set; }
@@ -1349,41 +1509,106 @@
                 }
             }
         }
-       if (DraftId.HasValue)
-            {
-                SplitDraftBody(CorpoIniziale ?? "");
-            }
-            else if (IsForward)
-            {
-                /*
-                * Nell'inoltro Quill parte vuoto.
-                * La firma viene aggiunta da initQuill.
-                * Il messaggio inoltrato rimane in ForwardOriginalHtml.
-                */
-                _bodyHtml = "";
-                _quoteHtml = "";
-                _showQuoteDetails = false;
-            }
-            else
-            {
-                /*
-                * Risposta / rispondi a tutti.
-                */
-                _bodyHtml = "";
-                _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
-                _showQuoteDetails = false;
-            }
+        if (DraftId.HasValue)
+        {
+            SplitDraftBody(CorpoIniziale ?? "");
+        }
+        else if (IsForward)
+        {
+            /*
+            * Nell'inoltro Quill parte vuoto.
+            * La firma viene aggiunta da initQuill.
+            * Il messaggio inoltrato rimane in ForwardOriginalHtml.
+            */
+            _bodyHtml = "";
+            _quoteHtml = "";
+            _showQuoteDetails = false;
+        }
+        else
+        {
+            /*
+            * Risposta / rispondi a tutti.
+            */
+            _bodyHtml = "";
+            _quoteHtml = PrepareQuoteForEditor(CorpoIniziale);
+            _showQuoteDetails = false;
+        }
         var recenti = await MailSvc.GetRecentRecipientsAsync(10);
         _allRecipients = (recenti ?? new List<string>())
             .Select(ParseAddressToChip)
             .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
+    private static bool HasRealRecipientName(
+    RecipientChip recipient)
+    {
+        if (string.IsNullOrWhiteSpace(recipient.Name))
+            return false;
 
+        var name = recipient.Name.Trim();
+        var email = recipient.Email.Trim();
+
+        // Evita di mostrare:
+        // pippo@gmail.com
+        // pippo@gmail.com
+        if (name.Equals(
+            email,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // Se il "nome" sembra comunque una mail,
+        // lo consideriamo non significativo.
+        if (name.Contains("@"))
+            return false;
+
+        return true;
+    }
+
+    private static string GetRecipientInitial(
+        RecipientChip recipient)
+    {
+        var value =
+            HasRealRecipientName(recipient)
+                ? recipient.Name!
+                : recipient.Email;
+
+        return string.IsNullOrWhiteSpace(value)
+            ? "?"
+            : value.Trim()[0]
+                .ToString()
+                .ToUpperInvariant();
+    }
 
     private string? _toInput;
     private string? _ccInput;
     private string? _bccInput;
+
+    // Incrementati quando un destinatario viene confermato.
+    // @key forza MudTextField a ricreare l'input DOM e impedisce
+    // che rimanga visualizzato il testo del destinatario precedente.
+    private int _toInputKey;
+    private int _ccInputKey;
+    private int _bccInputKey;
+
+    private async Task OnToInputChanged(string? value)
+    {
+        _toInput = value ?? string.Empty;
+        await OnRecipientInput(_toInput, RecipientField.To);
+    }
+
+    private async Task OnCcInputChanged(string? value)
+    {
+        _ccInput = value ?? string.Empty;
+        await OnRecipientInput(_ccInput, RecipientField.Cc);
+    }
+
+    private async Task OnBccInputChanged(string? value)
+    {
+        _bccInput = value ?? string.Empty;
+        await OnRecipientInput(_bccInput, RecipientField.Bcc);
+    }
     private static string FormatForwardQuoteHtml(string? input)
     {
         if (string.IsNullOrWhiteSpace(input))
@@ -1428,24 +1653,24 @@
         }
     }
     private void SplitDraftBody(string html)
-{
-    html ??= "";
-
-    // Formato bozza robusto (v2) con marker espliciti.
-    if (TrySplitDraftV2(html, out var bodyV2, out var quoteV2, out var forwardV2))
     {
-        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(bodyV2));
-        _quoteHtml = NormalizeComposeSpacing(quoteV2);
-        ForwardOriginalHtml = forwardV2;
-        IsForward = !string.IsNullOrWhiteSpace(forwardV2);
-        _showQuoteDetails = false;
-        return;
-    }
+        html ??= "";
 
-    // Legacy recente: body + quote separati in wrapper div.
-    var replyMatch = Regex.Match(
-        html,
-        @"(?is)
+        // Formato bozza robusto (v2) con marker espliciti.
+        if (TrySplitDraftV2(html, out var bodyV2, out var quoteV2, out var forwardV2))
+        {
+            _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(bodyV2));
+            _quoteHtml = NormalizeComposeSpacing(quoteV2);
+            ForwardOriginalHtml = forwardV2;
+            IsForward = !string.IsNullOrWhiteSpace(forwardV2);
+            _showQuoteDetails = false;
+            return;
+        }
+
+        // Legacy recente: body + quote separati in wrapper div.
+        var replyMatch = Regex.Match(
+            html,
+            @"(?is)
           <div[^>]*data-compose-body\s*=\s*[""']true[""'][^>]*>
               (?<body>[\s\S]*?)
           </div>
@@ -1453,31 +1678,31 @@
           (?:<div[^>]*data-compose-quote\s*=\s*[""']true[""'][^>]*>
               (?<quote>[\s\S]*?)
           </div>)?",
-        RegexOptions.IgnorePatternWhitespace
-    );
+            RegexOptions.IgnorePatternWhitespace
+        );
 
-    if (replyMatch.Success && !Regex.IsMatch(html, @"data-forward-original\s*=\s*[""']true[""']", RegexOptions.IgnoreCase))
-    {
-        IsForward = false;
+        if (replyMatch.Success && !Regex.IsMatch(html, @"data-forward-original\s*=\s*[""']true[""']", RegexOptions.IgnoreCase))
+        {
+            IsForward = false;
 
-        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
-            replyMatch.Groups["body"].Value.Trim()
-        ));
+            _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
+                replyMatch.Groups["body"].Value.Trim()
+            ));
 
-        _quoteHtml = replyMatch.Groups["quote"].Success
-            ? NormalizeComposeSpacing(replyMatch.Groups["quote"].Value.Trim())
-            : "";
+            _quoteHtml = replyMatch.Groups["quote"].Success
+                ? NormalizeComposeSpacing(replyMatch.Groups["quote"].Value.Trim())
+                : "";
 
-        _showQuoteDetails = false;
-        return;
-    }
+            _showQuoteDetails = false;
+            return;
+        }
 
-    /*
-     * Prima controlliamo se è una bozza di inoltro.
-     */
-    var forwardMatch = Regex.Match(
-        html,
-        @"(?is)
+        /*
+         * Prima controlliamo se è una bozza di inoltro.
+         */
+        var forwardMatch = Regex.Match(
+            html,
+            @"(?is)
           <div[^>]*data-compose-body\s*=\s*[""']true[""'][^>]*>
               (?<body>[\s\S]*?)
           </div>
@@ -1485,34 +1710,34 @@
           <div[^>]*data-forward-original\s*=\s*[""']true[""'][^>]*>
               (?<forward>[\s\S]*?)
           </div>",
-        RegexOptions.IgnorePatternWhitespace
-    );
+            RegexOptions.IgnorePatternWhitespace
+        );
 
-    if (forwardMatch.Success)
-    {
-        IsForward = true;
+        if (forwardMatch.Success)
+        {
+            IsForward = true;
 
-        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
-            forwardMatch.Groups["body"].Value.Trim()
-        ));
+            _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(
+                forwardMatch.Groups["body"].Value.Trim()
+            ));
 
-        ForwardOriginalHtml = forwardMatch
-            .Groups["forward"]
-            .Value
-            .Trim();
+            ForwardOriginalHtml = forwardMatch
+                .Groups["forward"]
+                .Value
+                .Trim();
 
-        _quoteHtml = "";
-        _showQuoteDetails = false;
+            _quoteHtml = "";
+            _showQuoteDetails = false;
 
-        return;
-    }
+            return;
+        }
 
-    /*
-     * Vecchia gestione delle risposte.
-     */
-    var m = Regex.Match(
-        html,
-        @"(?is)<hr[^>]*>\s*
+        /*
+         * Vecchia gestione delle risposte.
+         */
+        var m = Regex.Match(
+            html,
+            @"(?is)<hr[^>]*>\s*
           <div>\s*
           <(b|strong)>\s*
           Messaggio precedente:
@@ -1521,35 +1746,35 @@
           <blockquote[^>]*>
           (?<quote>[\s\S]*?)
           </blockquote>",
-        RegexOptions.IgnorePatternWhitespace
-    );
-
-    if (!m.Success)
-    {
-        m = Regex.Match(
-            html,
-            @"(?is)Messaggio precedente:\s*(?<quote>[\s\S]*)"
+            RegexOptions.IgnorePatternWhitespace
         );
-    }
 
-    if (m.Success)
-    {
-        var quoteStart = m.Index;
-        var beforeQuote = html[..quoteStart];
-        var quotePart = m.Groups["quote"].Value;
+        if (!m.Success)
+        {
+            m = Regex.Match(
+                html,
+                @"(?is)Messaggio precedente:\s*(?<quote>[\s\S]*)"
+            );
+        }
 
-        _quoteHtml = NormalizeComposeSpacing(quotePart.Trim());
-        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(beforeQuote.Trim())));
-    }
-    else
-    {
-        _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(html)));
-        _quoteHtml = "";
-    }
+        if (m.Success)
+        {
+            var quoteStart = m.Index;
+            var beforeQuote = html[..quoteStart];
+            var quotePart = m.Groups["quote"].Value;
 
-    IsForward = false;
-    _showQuoteDetails = false;
-}
+            _quoteHtml = NormalizeComposeSpacing(quotePart.Trim());
+            _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(beforeQuote.Trim())));
+        }
+        else
+        {
+            _bodyHtml = NormalizeComposeSpacing(StripComposeSignature(RemoveTrailingSignatures(html)));
+            _quoteHtml = "";
+        }
+
+        IsForward = false;
+        _showQuoteDetails = false;
+    }
 
     private const string DraftV2Start = "<!--SC_DRAFT_V2-->";
     private const string DraftBodyStart = "<!--SC_BODY_START-->";
@@ -1576,7 +1801,14 @@
         value = source[start..end].Trim();
         return true;
     }
-
+    private static string NormalizeRecipientEmail(
+    string? email)
+    {
+        return (email ?? "")
+            .Trim()
+            .Trim('<', '>')
+            .ToLowerInvariant();
+    }
     private static bool TrySplitDraftV2(string html, out string body, out string quote, out string forward)
     {
         body = "";
@@ -1620,86 +1852,86 @@
         return html.Trim();
     }
     private async Task OnCasellaChanged(string? value)
-{
-    value = value?.Trim();
-
-    if (_isSwitchingCasella ||
-        _isSavingDraft ||
-        _isDisposed)
     {
-        return;
-    }
+        value = value?.Trim();
 
-    if (string.Equals(
-        _selectedCasella,
-        value,
-        StringComparison.OrdinalIgnoreCase))
-    {
-        return;
-    }
-
-    _isSwitchingCasella = true;
-
-    try
-    {
-        _selectedCasella = value;
-
-        /*
-         * Carica la firma associata alla nuova casella.
-         */
-        await LoadFirmaAsync();
-
-        /*
-         * Aggiorna realmente la firma dentro Quill.
-         * StateHasChanged da solo non basta perché Quill
-         * gestisce autonomamente il proprio DOM.
-         */
-        if (_quillInitialized)
+        if (_isSwitchingCasella ||
+            _isSavingDraft ||
+            _isDisposed)
         {
-            /*
-             * Firma separata dal contenuto editabile:
-             * non tocchiamo il DOM di Quill per evitare
-             * duplicazioni/perdita testo durante switch casella.
-             */
-            _lastInitFirma = _firmaHtml ?? "";
-        }
-        else
-        {
-            /*
-             * Se Quill non è ancora pronto,
-             * la nuova firma verrà inserita durante initQuill.
-             */
-            _pendingQuillInit = true;
+            return;
         }
 
-        await InvokeAsync(StateHasChanged);
-    }
-    catch (JSDisconnectedException)
-    {
-        // Il dialog o il circuito Blazor si sta chiudendo.
-    }
-    catch (TaskCanceledException)
-    {
-        // Navigazione o chiusura in corso.
-    }
-    catch (Exception ex)
-    {
-        Logger.LogError(
-            ex,
-            "Errore cambio casella/firma. Casella={Casella}",
-            value
-        );
+        if (string.Equals(
+            _selectedCasella,
+            value,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
 
-        Snackbar.Add(
-            "Errore durante il cambio della firma ❌",
-            Severity.Error
-        );
+        _isSwitchingCasella = true;
+
+        try
+        {
+            _selectedCasella = value;
+
+            /*
+             * Carica la firma associata alla nuova casella.
+             */
+            await LoadFirmaAsync();
+
+            /*
+             * Aggiorna realmente la firma dentro Quill.
+             * StateHasChanged da solo non basta perché Quill
+             * gestisce autonomamente il proprio DOM.
+             */
+            if (_quillInitialized)
+            {
+                /*
+                 * Firma separata dal contenuto editabile:
+                 * non tocchiamo il DOM di Quill per evitare
+                 * duplicazioni/perdita testo durante switch casella.
+                 */
+                _lastInitFirma = _firmaHtml ?? "";
+            }
+            else
+            {
+                /*
+                 * Se Quill non è ancora pronto,
+                 * la nuova firma verrà inserita durante initQuill.
+                 */
+                _pendingQuillInit = true;
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (JSDisconnectedException)
+        {
+            // Il dialog o il circuito Blazor si sta chiudendo.
+        }
+        catch (TaskCanceledException)
+        {
+            // Navigazione o chiusura in corso.
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(
+                ex,
+                "Errore cambio casella/firma. Casella={Casella}",
+                value
+            );
+
+            Snackbar.Add(
+                "Errore durante il cambio della firma ❌",
+                Severity.Error
+            );
+        }
+        finally
+        {
+            _isSwitchingCasella = false;
+        }
     }
-    finally
-    {
-        _isSwitchingCasella = false;
-    }
-}
     private async Task LoadFirmaAsync()
     {
         _firmaHtml = "";
@@ -1881,14 +2113,24 @@
             .ToList();
 
         _allRecipients.AddRange(nuovi);
-        _allRecipients = _allRecipients
-            .GroupBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
-            .Select(g => g.First())
-            .ToList();
 
-        return locali.Concat(nuovi)
-                     .DistinctBy(c => c.Email, StringComparer.OrdinalIgnoreCase)
-                     .Take(10);
+        _allRecipients = _allRecipients
+            .Where(c =>
+                !string.IsNullOrWhiteSpace(c.Email))
+            .GroupBy(
+                c => NormalizeRecipientEmail(c.Email))
+            .Select(g =>
+                g.OrderByDescending(HasRealRecipientName)
+                 .First())
+            .ToList();
+        return locali.Concat(nuovi).Where(c => !string.IsNullOrWhiteSpace(c.Email))
+                .GroupBy(
+                    c => NormalizeRecipientEmail(c.Email))
+                    .Select(g =>
+                        g.OrderByDescending(HasRealRecipientName)
+                         .First())
+                    .Take(10)
+                    .ToList();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1925,9 +2167,9 @@
             );
         }
 
-         var bodyNow = DraftId.HasValue
-            ? (_bodyHtml ?? "")
-            : "<p><br></p>";
+        var bodyNow = DraftId.HasValue
+           ? (_bodyHtml ?? "")
+           : "<p><br></p>";
 
         var quoteNow = _quoteHtml ?? "";
 
@@ -2173,35 +2415,35 @@
 
     private bool _isClosing;
     private string BuildBodyForDraft()
-{
-    var body = BuildBodyWithSignature(_bodyHtml);
-
-    if (IsForward)
     {
-        if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
-            return body;
+        var body = BuildBodyWithSignature(_bodyHtml);
 
-        /*
-         * Per ora salviamo editor e inoltro nello stesso HTML.
-         * In futuro sarà meglio avere una colonna separata.
-         */
+        if (IsForward)
+        {
+            if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+                return body;
+
+            /*
+             * Per ora salviamo editor e inoltro nello stesso HTML.
+             * In futuro sarà meglio avere una colonna separata.
+             */
+            return DraftV2Start +
+                   DraftBodyStart + body + DraftBodyEnd +
+                   DraftForwardStart + ForwardOriginalHtml + DraftForwardEnd;
+        }
+
+        var quote = GetEffectiveQuoteHtml();
+
+        if (string.IsNullOrWhiteSpace(quote))
+        {
+            return DraftV2Start +
+                   DraftBodyStart + body + DraftBodyEnd;
+        }
+
         return DraftV2Start +
                DraftBodyStart + body + DraftBodyEnd +
-               DraftForwardStart + ForwardOriginalHtml + DraftForwardEnd;
+               DraftQuoteStart + quote + DraftQuoteEnd;
     }
-
-    var quote = GetEffectiveQuoteHtml();
-
-    if (string.IsNullOrWhiteSpace(quote))
-    {
-        return DraftV2Start +
-               DraftBodyStart + body + DraftBodyEnd;
-    }
-
-    return DraftV2Start +
-           DraftBodyStart + body + DraftBodyEnd +
-           DraftQuoteStart + quote + DraftQuoteEnd;
-}
     private static string RemoveTrailingSignatures(string? html)
     {
         if (string.IsNullOrWhiteSpace(html))
@@ -2402,15 +2644,15 @@
     private bool _isSwitchingCasella;
     private bool _isDisposed;
     private string BuildBodyForSend()
-{
-     var body = BuildBodyWithSignature(_bodyHtml);
-
-    if (IsForward)
     {
-        if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
-            return body;
+        var body = BuildBodyWithSignature(_bodyHtml);
 
-        return $@"
+        if (IsForward)
+        {
+            if (string.IsNullOrWhiteSpace(ForwardOriginalHtml))
+                return body;
+
+            return $@"
 <div style=""font-family:Arial,Helvetica,sans-serif;
             font-size:14px;
             line-height:1.5;
@@ -2424,15 +2666,15 @@
         {ForwardOriginalHtml}
     </div>
 </div>";
-    }
+        }
 
-    var quote = GetEffectiveQuoteHtml();
+        var quote = GetEffectiveQuoteHtml();
 
-    if (string.IsNullOrWhiteSpace(quote))
-        return body;
+        if (string.IsNullOrWhiteSpace(quote))
+            return body;
 
-    return body +
-           @"<br><br>
+        return body +
+               @"<br><br>
              <hr style=""border:0;border-top:1px solid #dadce0;"">
              <div style=""margin:10px 0 6px;color:#5f6368;font-weight:600;"">
                  Messaggio precedente:
@@ -2442,9 +2684,9 @@
                  margin:0 0 0 8px;
                  padding-left:12px;
                  color:#5f6368;"">" +
-           quote +
-           "</blockquote>";
-}
+               quote +
+               "</blockquote>";
+    }
     private static string RemoveQuoteGarbage(string? input)
 
     {
@@ -2846,14 +3088,17 @@
             case RecipientField.To:
                 _showSuggestionsTo = false;
                 _toInput = string.Empty;
+                _toInputKey++;
                 break;
             case RecipientField.Cc:
                 _showSuggestionsCc = false;
                 _ccInput = string.Empty;
+                _ccInputKey++;
                 break;
             case RecipientField.Bcc:
                 _showSuggestionsBcc = false;
                 _bccInput = string.Empty;
+                _bccInputKey++;
                 break;
         }
 
@@ -2877,11 +3122,34 @@
                 break;
         }
     }
+    private void ClearRecipientInput(RecipientField field)
+    {
+        switch (field)
+        {
+            case RecipientField.To:
+                _toInput = string.Empty;
+                _toInputKey++;
+                _ctsTo?.Cancel();
+                break;
+
+            case RecipientField.Cc:
+                _ccInput = string.Empty;
+                _ccInputKey++;
+                _ctsCc?.Cancel();
+                break;
+
+            case RecipientField.Bcc:
+                _bccInput = string.Empty;
+                _bccInputKey++;
+                _ctsBcc?.Cancel();
+                break;
+        }
+    }
+
     private async Task HandleRecipientKey(
         KeyboardEventArgs e,
         List<RecipientChip> list,
         string? inputValue,
-        Action<string?> updateValue,
         RecipientField field)
     {
         var text = (inputValue ?? "").Trim();
@@ -2950,7 +3218,8 @@
         if (!text.Contains("@"))
         {
             Snackbar.Add("⚠️ Inserisci un indirizzo email valido", Severity.Warning);
-            updateValue("");
+            ClearRecipientInput(field);
+            await InvokeAsync(StateHasChanged);
             return;
         }
 
@@ -2970,8 +3239,11 @@
             }
         }
 
-        // 🔹 5️⃣ Pulisci input e aggiorna UI
-        updateValue("");
+        // 🔹 5️⃣ Pulisci DAVVERO input e aggiorna UI.
+        // Non usiamo più una Action<string?> perché il MudTextField
+        // mantiene anche stato DOM interno: resettiamo la variabile
+        // e incrementiamo la @key del campo.
+        ClearRecipientInput(field);
         HideSuggestions(field);
         await InvokeAsync(StateHasChanged);
     }
@@ -3163,34 +3435,34 @@
         _bccList = bcc;
     }
 
-  private bool HasDraftContent()
-        {
-            var hasRecipients =
-                _toList.Any() ||
-                _ccList.Any() ||
-                _bccList.Any();
+    private bool HasDraftContent()
+    {
+        var hasRecipients =
+            _toList.Any() ||
+            _ccList.Any() ||
+            _bccList.Any();
 
-            var hasSubject =
-                !string.IsNullOrWhiteSpace(_composeSubject);
+        var hasSubject =
+            !string.IsNullOrWhiteSpace(_composeSubject);
 
-            var hasBody =
-                !string.IsNullOrWhiteSpace(
-                    HtmlToPlain(StripComposeSignature(_bodyHtml)));
+        var hasBody =
+            !string.IsNullOrWhiteSpace(
+                HtmlToPlain(StripComposeSignature(_bodyHtml)));
 
-            var hasForward =
-                IsForward &&
-                !string.IsNullOrWhiteSpace(
-                    ForwardOriginalHtml);
+        var hasForward =
+            IsForward &&
+            !string.IsNullOrWhiteSpace(
+                ForwardOriginalHtml);
 
-            var hasAttachments =
-                _outgoing.Any();
+        var hasAttachments =
+            _outgoing.Any();
 
-            return hasRecipients ||
-                hasSubject ||
-                hasBody ||
-                hasForward ||
-                hasAttachments;
-        }
+        return hasRecipients ||
+            hasSubject ||
+            hasBody ||
+            hasForward ||
+            hasAttachments;
+    }
     private static string PrepareQuoteForEditor(string? html)
     {
         if (string.IsNullOrWhiteSpace(html))

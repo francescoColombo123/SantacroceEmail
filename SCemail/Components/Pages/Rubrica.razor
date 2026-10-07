@@ -1,4 +1,5 @@
 ﻿@page "/rubrica"
+@implements IDisposable
 
 @using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.EntityFrameworkCore
@@ -41,6 +42,21 @@
 
 
     <MudDivider Class="my-3" />
+
+
+    <MudStack Direction="Row"
+              Spacing="2"
+              AlignItems="AlignItems.Center"
+              Class="mb-3">
+
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.PersonAdd"
+                   OnClick="OpenCreate">
+            Nuovo contatto
+        </MudButton>
+
+    </MudStack>
 
 
     @* =========================================================
@@ -156,69 +172,69 @@
            INTESTAZIONI
            ========================= *@
 
-       <HeaderContent>
+        <HeaderContent>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="codice"
-                           T="RubricaContatto">
-            Cod. Cliente
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="codice"
+                                   T="RubricaContatto">
+                    Cod. Cliente
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="nome"
-                           T="RubricaContatto">
-            Nome
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="nome"
+                                   T="RubricaContatto">
+                    Nome
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="cognome"
-                           T="RubricaContatto">
-            Cognome
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="cognome"
+                                   T="RubricaContatto">
+                    Cognome
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="azienda"
-                           T="RubricaContatto">
-            Azienda
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="azienda"
+                                   T="RubricaContatto">
+                    Azienda
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="email"
-                           T="RubricaContatto">
-            Email
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="email"
+                                   T="RubricaContatto">
+                    Email
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="ufficio"
-                           T="RubricaContatto">
-            Tel. Ufficio
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="ufficio"
+                                   T="RubricaContatto">
+                    Tel. Ufficio
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="cellulare"
-                           T="RubricaContatto">
-            Cellulare
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="cellulare"
+                                   T="RubricaContatto">
+                    Cellulare
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh>
-        <MudTableSortLabel SortLabel="privato"
-                           T="RubricaContatto">
-            Tel. Privato
-        </MudTableSortLabel>
-    </MudTh>
+            <MudTh>
+                <MudTableSortLabel SortLabel="privato"
+                                   T="RubricaContatto">
+                    Tel. Privato
+                </MudTableSortLabel>
+            </MudTh>
 
-    <MudTh Align="Align.Center">
-        Azioni
-    </MudTh>
+            <MudTh Align="Align.Center">
+                Azioni
+            </MudTh>
 
-</HeaderContent>
+        </HeaderContent>
 
 
         @* =========================
@@ -427,8 +443,8 @@
 <style>
 
     /* =========================================================
-           CONTENITORE PRINCIPALE
-           ========================================================= */
+               CONTENITORE PRINCIPALE
+               ========================================================= */
 
     .rubrica-paper {
         width: 96vw;
@@ -439,8 +455,8 @@
 
 
     /* =========================================================
-           TABELLA
-           ========================================================= */
+               TABELLA
+               ========================================================= */
 
     .rubrica-table {
         width: 100%;
@@ -471,8 +487,8 @@
 
 
     /* =========================================================
-           NOME CONTATTO
-           ========================================================= */
+               NOME CONTATTO
+               ========================================================= */
 
     .contact-name {
         display: flex;
@@ -487,8 +503,8 @@
 
 
     /* =========================================================
-           CAMPI VUOTI
-           ========================================================= */
+               CAMPI VUOTI
+               ========================================================= */
 
     .empty-value {
         color: #9ca3af;
@@ -496,8 +512,8 @@
 
 
     /* =========================================================
-           DROP ZONE CSV
-           ========================================================= */
+               DROP ZONE CSV
+               ========================================================= */
 
     .drop-zone {
         display: block;
@@ -520,8 +536,8 @@
 
 
     /* =========================================================
-           INPUT FILE NASCOSTO
-           ========================================================= */
+               INPUT FILE NASCOSTO
+               ========================================================= */
 
     .offscreen-input {
         position: absolute;
@@ -534,8 +550,8 @@
 
 
     /* =========================================================
-           RESPONSIVE
-           ========================================================= */
+               RESPONSIVE
+               ========================================================= */
 
     @@media (max-width: 1200px) {
 
@@ -557,14 +573,11 @@
        ========================================================= */
 
     private const int BATCH_SIZE = 200;
-    private const int EMAIL1_INDEX = 18;
 
 
     /* =========================================================
        STATO RUBRICA
        ========================================================= */
-
-    private List<RubricaContatto> _contatti = new();
 
     private MudTable<RubricaContatto>? _table;
 
@@ -592,8 +605,9 @@
     private int _processed;
 
     private int _added;
-
-    private int _skipped;
+    private int _duplicates;
+    private int _invalid;
+    private int _errors;
 
     private bool _dragOver;
 
@@ -645,6 +659,7 @@
     public void Dispose()
     {
         _dotNetRef?.Dispose();
+        _dotNetRef = null;
     }
 
 
@@ -892,6 +907,51 @@
 
 
     /* =========================================================
+       NUOVO CONTATTO
+       ========================================================= */
+
+    private async Task OpenCreate()
+    {
+        var parameters =
+            new DialogParameters
+            {
+                ["Model"] =
+                    new RubricaContatto
+                    {
+                        Titolo = "",
+                        CreatedAt = DateTime.Now
+                    },
+
+                ["IsNew"] = true
+            };
+
+        var options =
+            new DialogOptions
+            {
+                CloseButton = true,
+                MaxWidth = MaxWidth.Medium,
+                FullWidth = true
+            };
+
+        var dialog =
+            DialogService.Show<RubricaEditDialog>(
+                "Nuovo contatto",
+                parameters,
+                options
+            );
+
+        var result =
+            await dialog.Result;
+
+        if (!result.Canceled &&
+            _table != null)
+        {
+            await _table.ReloadServerData();
+        }
+    }
+
+
+    /* =========================================================
        MODIFICA CONTATTO
        ========================================================= */
 
@@ -938,7 +998,9 @@
 
                         CreatedAt =
                             c.CreatedAt
-                    }
+                    },
+
+                ["IsNew"] = false
             };
 
 
@@ -980,6 +1042,17 @@
     private async Task Delete(
         RubricaContatto c)
     {
+        var confirmed =
+            await DialogService.ShowMessageBox(
+                "Elimina contatto",
+                $"Vuoi eliminare {c.FirstName} {c.LastName}?",
+                yesText: "Elimina",
+                cancelText: "Annulla"
+            );
+
+        if (confirmed != true)
+            return;
+
         try
         {
             await using var db =
@@ -1051,12 +1124,22 @@
 
         _processed = 0;
         _added = 0;
-        _skipped = 0;
+        _duplicates = 0;
+        _invalid = 0;
+        _errors = 0;
 
         try
         {
             await using var db =
                 DbFactory.CreateDbContext();
+
+            var existingEmails = (
+                await db.RubricaContatti
+                    .AsNoTracking()
+                    .Where(x => x.Email != null && x.Email != "")
+                    .Select(x => x.Email!)
+                    .ToListAsync()
+            ).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
             var cfg =
                 new CsvConfiguration(
@@ -1203,21 +1286,6 @@
                         );
 
 
-                    /*
-                     * Se Organization Name è vuoto
-                     * ma abbiamo il reparto,
-                     * conserviamo almeno quello.
-                     */
-
-                    if (string.IsNullOrWhiteSpace(
-                            azienda) &&
-                        !string.IsNullOrWhiteSpace(
-                            department))
-                    {
-                        azienda = department;
-                    }
-
-
                     // --------------------------
                     // EMAIL
                     // --------------------------
@@ -1262,6 +1330,16 @@
                         NormalizeEmailNullable(
                             email
                         );
+
+                    if (!string.IsNullOrWhiteSpace(email))
+                    {
+                        if (!existingEmails.Add(email))
+                        {
+                            _duplicates++;
+                            continue;
+                        }
+                    }
+
 
 
                     // --------------------------
@@ -1342,40 +1420,35 @@
                             azienda
                         );
 
+                    department =
+                        NormalizeOptionalWords(
+                            department
+                        );
+
+                    // Contatto aziendale non nominativo:
+                    // Nome = azienda, Cognome = reparto.
+                    if (string.IsNullOrWhiteSpace(firstName) &&
+                        !string.IsNullOrWhiteSpace(azienda))
+                    {
+                        firstName = azienda;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(lastName) &&
+                        !string.IsNullOrWhiteSpace(department))
+                    {
+                        lastName = department;
+                    }
+
+
 
                     // --------------------------
                     // RIGA COMPLETAMENTE VUOTA?
                     // --------------------------
 
-                    var hasUsefulData =
-                        !string.IsNullOrWhiteSpace(
-                            firstName) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            middleName) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            lastName) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            azienda) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            email) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            telefonoUfficio) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            telefonoCellulare) ||
-
-                        !string.IsNullOrWhiteSpace(
-                            telefonoPrivato);
-
-
-                    if (!hasUsefulData)
+                    if (string.IsNullOrWhiteSpace(firstName) ||
+                     string.IsNullOrWhiteSpace(lastName))
                     {
-                        _skipped++;
+                        _invalid++;
                         continue;
                     }
 
@@ -1423,8 +1496,6 @@
 
                     buffer.Add(contact);
 
-                    _added++;
-
 
                     // --------------------------
                     // SALVATAGGIO BATCH
@@ -1436,6 +1507,8 @@
                             .AddRange(buffer);
 
                         await db.SaveChangesAsync();
+
+                        _added += buffer.Count;
 
                         buffer.Clear();
 
@@ -1461,6 +1534,8 @@
 
                     await db.SaveChangesAsync();
 
+                    _added += buffer.Count;
+
                     buffer.Clear();
 
                     db.ChangeTracker.Clear();
@@ -1472,7 +1547,8 @@
                 $"✅ Import completato — " +
                 $"Letti: {_processed}, " +
                 $"Inseriti: {_added}, " +
-                $"Scartati: {_skipped}",
+                $"Duplicati: {_duplicates}, " +
+                $"Non validi: {_invalid}",
                 Severity.Success
             );
 
@@ -1589,7 +1665,7 @@
                 .ToLowerInvariant()
         );
     }
-    
+
     /* =========================================================
        NORMALIZZAZIONE EMAIL
        ========================================================= */
