@@ -3,7 +3,10 @@
 @using SCemail.Components.Data
 @using Microsoft.AspNetCore.WebUtilities
 @using Microsoft.JSInterop
+@using Microsoft.EntityFrameworkCore
 
+@inject IDbContextFactory<MailDbContext> DbFactory
+@inject IDialogService DialogService
 @inject NavigationManager Nav
 @inject MailService_NEW MailSvc
 @inject AccessiService AccessiSrv
@@ -63,7 +66,80 @@ else
             </div>
 
         </div>
+        <!-- PULIZIA ASSEGNAZIONI -->
+        <MudPaper Class="cleanup-box"
+                  Elevation="1">
 
+            <div class="cleanup-header">
+                <MudIcon Icon="@Icons.Material.Filled.CleaningServices"
+                         Size="Size.Small" />
+
+                <div>
+                    <div class="cleanup-title">
+                        Pulizia assegnazioni
+                    </div>
+
+                    <div class="cleanup-subtitle">
+                        Elimina le assegnazioni di un utente fino a una data specifica
+                    </div>
+                </div>
+            </div>
+
+            <div class="cleanup-controls">
+
+                <MudAutocomplete T="string"
+                                 Label="Utente"
+                                 @bind-Value="_cleanupUser"
+                                 SearchFunc="SearchCleanupUsers"
+                                 ToStringFunc="@(x => x ?? string.Empty)"
+                                 Variant="Variant.Outlined"
+                                 Margin="Margin.Dense"
+                                 Dense="true"
+                                 Clearable="true"
+                                 ResetValueOnEmptyText="true"
+                                 CoerceText="true"
+                                 MaxItems="@_utenti.Count"
+                                 Class="cleanup-user" />
+
+                <MudDatePicker Label="Fino al"
+                               @bind-Date="_cleanupDate"
+                               DateFormat="dd/MM/yyyy"
+                               Placeholder="es. 31/12/2026"
+                               Editable="true"
+                               Clearable="true"
+                               MaxDate="@DateTime.Today"
+                               Variant="Variant.Outlined"
+                               Margin="Margin.Dense"
+                               Class="cleanup-date" />
+
+                <MudButton Color="Color.Error"
+                           Variant="Variant.Filled"
+                           Size="Size.Small"
+                           StartIcon="@Icons.Material.Filled.CleaningServices"
+                           Disabled="@(_cleaningAssignments ||
+                                                                  string.IsNullOrWhiteSpace(_cleanupUser) ||
+                                                                  !_cleanupDate.HasValue)"
+                       OnClick="CleanOldAssignmentsAsync">
+
+                @if (_cleaningAssignments)
+                    {
+                        <MudProgressCircular Size="Size.Small"
+                                             Indeterminate="true" />
+
+                        <span class="cleanup-loading-text">
+                            Pulizia...
+                        </span>
+                    }
+                    else
+                    {
+                        <span>Pulisci</span>
+                    }
+
+                </MudButton>
+
+            </div>
+
+        </MudPaper>
         <!-- FILTRI -->
         <MudPaper Class="filter-bar"
                   Elevation="1"
@@ -213,6 +289,9 @@ else
     private List<AdminUserHomeDto> _usersHome = new();
 
     private List<AdminUserHomeDto> _usersHomeFiltrati = new();
+    private string? _cleanupUser;
+    private DateTime? _cleanupDate;
+    private bool _cleaningAssignments;
 
     // =========================================================
     // DTO
@@ -289,6 +368,104 @@ else
         finally
         {
             _loading = false;
+
+            StateHasChanged();
+        }
+    }
+
+    private Task<IEnumerable<string>> SearchCleanupUsers(
+    string value,
+    CancellationToken ct)
+    {
+        IEnumerable<string> result = _utenti;
+
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            result = result.Where(x =>
+                x.Contains(
+                    value.Trim(),
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        return Task.FromResult(result);
+    }
+
+    private async Task CleanOldAssignmentsAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_cleanupUser) ||
+            !_cleanupDate.HasValue)
+        {
+            Snackbar.Add(
+                "Seleziona un utente e una data.",
+                Severity.Warning);
+
+            return;
+        }
+
+        var user = _cleanupUser
+            .Trim()
+            .ToLowerInvariant();
+
+        var data = _cleanupDate.Value.Date;
+
+        var conferma = await DialogService.ShowMessageBox(
+            "Conferma pulizia assegnazioni",
+            $"Vuoi eliminare tutte le assegnazioni di {user} fino al {data:dd/MM/yyyy}?",
+            yesText: "Sì, pulisci",
+            cancelText: "Annulla");
+
+        if (conferma != true)
+            return;
+
+        _cleaningAssignments = true;
+
+        try
+        {
+            await using var db =
+                await DbFactory.CreateDbContextAsync();
+
+            var assegnazioni = await db.EmailAssegnazione
+                .Where(a =>
+                    a.Utente != null &&
+                    a.Utente.ToLower() == user &&
+                    a.DataAssegnazione != null &&
+                    a.DataAssegnazione <= data)
+                .ToListAsync();
+
+            if (assegnazioni.Count == 0)
+            {
+                Snackbar.Add(
+                    $"Nessuna assegnazione da pulire per {user}.",
+                    Severity.Info);
+
+                return;
+            }
+
+            db.EmailAssegnazione.RemoveRange(assegnazioni);
+
+            await db.SaveChangesAsync();
+
+            Snackbar.Add(
+                $"{assegnazioni.Count} assegnazioni eliminate per {user} fino al {data:dd/MM/yyyy}.",
+                Severity.Success);
+
+            // Ricarica i contatori della console amministrazione
+            await LoadUsersHomeAsync();
+
+            ApplicaFiltri();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine(
+                "❌ Errore pulizia assegnazioni: " + ex);
+
+            Snackbar.Add(
+                $"Errore durante la pulizia delle assegnazioni: {ex.Message}",
+                Severity.Error);
+        }
+        finally
+        {
+            _cleaningAssignments = false;
 
             StateHasChanged();
         }
@@ -755,6 +932,55 @@ else
         gap: 5px;
     }
 
+    .cleanup-box {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        padding: 14px 18px;
+        margin-bottom: 18px;
+        border-radius: 16px;
+        border: 1px solid #e0e7f5;
+        background: #fff;
+    }
+
+    .cleanup-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 245px;
+        color: #263b63;
+    }
+
+    .cleanup-title {
+        font-size: 15px;
+        font-weight: 800;
+    }
+
+    .cleanup-subtitle {
+        margin-top: 2px;
+        font-size: 11px;
+        color: #7b879f;
+        line-height: 1.3;
+    }
+
+    .cleanup-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+    }
+
+    .cleanup-user {
+        width: 300px;
+    }
+
+    .cleanup-date {
+        width: 190px;
+    }
+
+    .cleanup-loading-text {
+        margin-left: 7px;
+    }
     .dot {
         width: 8px;
         height: 8px;
@@ -793,6 +1019,28 @@ else
 
         .mini-board {
             grid-template-columns: repeat(2, 1fr);
+        }
+
+        .cleanup-box {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 12px;
+        }
+
+        .cleanup-controls {
+            flex-wrap: wrap;
+        }
+
+        .cleanup-header {
+            min-width: 0;
+        }
+
+        .cleanup-user {
+            width: 100%;
+        }
+
+        .cleanup-date {
+            width: 190px;
         }
     }
 </style>

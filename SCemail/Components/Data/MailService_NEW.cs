@@ -620,50 +620,178 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
 
         public async Task<(int TotalInbox, int UnreadInbox)> GetInboxHomeCountsAsync(string utente)
         {
-            await using var db = _dbFactory.CreateDbContext();
+            if (string.IsNullOrWhiteSpace(utente))
+                return (0, 0);
 
-            var utenteNorm = utente.Trim().ToLower();
+            using var conn = new OracleConnection(_connectionString);
+            await conn.OpenAsync();
+
+            var utenteNorm = utente.Trim().ToLowerInvariant();
             var minDate = GetMailUiMinDate();
 
-            var rows = await (
-                from e in db.EmailRicevute.AsNoTracking()
-                join a in db.EmailAssegnazione.AsNoTracking()
-                    on e.Id equals a.EmailId
-                where a.Utente != null
-                      && a.Utente.ToLower() == utenteNorm
-                      && (e.Eliminato == null || e.Eliminato != "Y")
-                      && (e.Blacklist == null || e.Blacklist != "Y")
-                      && (!minDate.HasValue || e.DataRicezione >= minDate.Value)
-                      && !db.EmailArchivio.Any(ar =>
-                            ar.IdEmail == e.Id &&
-                            ar.Utente != null &&
-                            ar.Utente.ToLower() == utenteNorm)
-                      && !db.EmailInboxSezioneMap.Any(m =>
-                            m.IdEmail == e.Id &&
-                            m.Utente != null &&
-                            m.Utente.ToLower() == utenteNorm)
-                select new
-                {
-                    e.Id,
-                    e.ThreadKey,
+            var threadPartitionExpr = @"
+NVL(
+    NULLIF(
+        REGEXP_REPLACE(
+            LOWER(TRIM(
+                REGEXP_SUBSTR(
+                    NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''),
+                    '[^ ]+',
+                    1,
+                    1
+                )
+            )),
+            '[<>[:space:][:cntrl:]]',
+            ''
+        ),
+        ''
+    ),
+    NVL(
+        NULLIF(
+            REGEXP_REPLACE(
+                LOWER(TRIM(e.IN_REPLY_TO)),
+                '[<>[:space:][:cntrl:]]',
+                ''
+            ),
+            ''
+        ),
+        NVL(
+            NULLIF(
+                REGEXP_REPLACE(
+                    LOWER(TRIM(
+                        REGEXP_REPLACE(
+                            NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1), ''),
+                            '^(re|fw|fwd)[[:space:]]*:[[:space:]]*',
+                            ''
+                        )
+                    )),
+                    '[[:space:][:cntrl:]]',
+                    ''
+                ),
+                ''
+            ),
+            NVL(
+                NULLIF(
+                    REGEXP_REPLACE(
+                        LOWER(TRIM(e.THREAD_KEY)),
+                        '[[:space:][:cntrl:]]',
+                        ''
+                    ),
+                    ''
+                ),
+                NVL(
+                    NULLIF(
+                        REGEXP_REPLACE(
+                            LOWER(TRIM(e.GMAIL_THREAD_ID)),
+                            '[[:space:][:cntrl:]]',
+                            ''
+                        ),
+                        ''
+                    ),
+                    NVL(
+                        NULLIF(
+                            REGEXP_REPLACE(
+                                LOWER(TRIM(e.MESSAGE_ID)),
+                                '[<>[:space:][:cntrl:]]',
+                                ''
+                            ),
+                            ''
+                        ),
+                        'single_' || e.ID
+                    )
+                )
+            )
+        )
+    )
+)";
 
-                    LettureCount = db.EmailLetture.Count(l =>
-                        l.EmailId == e.Id &&
-                        l.Utente != null &&
-                        l.Utente.ToLower() == utenteNorm)
-                }
-            ).ToListAsync();
+            var sql = $@"
+WITH base_rows AS (
+    SELECT
+        e.ID,
 
-            var grouped = rows
-                .GroupBy(x => string.IsNullOrWhiteSpace(x.ThreadKey)
-                    ? $"SINGLE_{x.Id}"
-                    : x.ThreadKey.Trim())
-                .ToList();
+        ROW_NUMBER() OVER (
+            PARTITION BY {threadPartitionExpr}
+            ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
+        ) AS RN,
 
-            return (
-                TotalInbox: grouped.Count,
-                UnreadInbox: grouped.Count(g => g.Any(x => x.LettureCount == 0))
-            );
+        MAX(
+            CASE
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM SGAPP.EMAIL_LETTURE_UTENTE l
+                    WHERE l.EMAIL_ID = e.ID
+                      AND l.UTENTE IS NOT NULL
+                      AND INSTR(
+                            ';' || LOWER(REPLACE(l.UTENTE, ' ', '')) || ';',
+                            ';' || LOWER(REPLACE(:utente, ' ', '')) || ';'
+                          ) > 0
+                )
+                THEN 0
+                ELSE 1
+            END
+        ) OVER (
+            PARTITION BY {threadPartitionExpr}
+        ) AS HAS_UNREAD
+
+    FROM SGAPP.EMAIL_RICEVUTE e
+
+    WHERE NVL(e.BLACKLIST, 'N') <> 'Y'
+      AND NVL(e.ELIMINATO, 'N') <> 'Y'
+
+      AND EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_ASSEGNAZIONI x
+          WHERE x.EMAIL_ID = e.ID
+            AND LOWER(x.UTENTE) = :utente
+      )
+
+      AND NOT EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_ARCHIVIO ar
+          WHERE ar.ID_EMAIL = e.ID
+            AND LOWER(ar.UTENTE) = :utente
+      )
+
+      AND NOT EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP m
+          WHERE m.ID_EMAIL = e.ID
+            AND LOWER(m.UTENTE) = :utente
+      )
+
+      {(minDate.HasValue ? "AND e.DATA_RICEZIONE >= :minDate" : "")}
+)
+SELECT
+    COUNT(*) AS TOTAL_INBOX,
+    NVL(SUM(CASE WHEN HAS_UNREAD = 1 THEN 1 ELSE 0 END), 0) AS UNREAD_INBOX
+FROM base_rows
+WHERE RN = 1";
+
+            await using var cmd = new OracleCommand(sql, conn)
+            {
+                BindByName = true
+            };
+
+            cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = utenteNorm;
+
+            if (minDate.HasValue)
+                cmd.Parameters.Add("minDate", OracleDbType.Date).Value = minDate.Value.Date;
+
+            await using var reader = await cmd.ExecuteReaderAsync();
+
+            if (!await reader.ReadAsync())
+                return (0, 0);
+
+            var totalInbox = reader.IsDBNull(0)
+                ? 0
+                : Convert.ToInt32(reader.GetValue(0));
+
+            var unreadInbox = reader.IsDBNull(1)
+                ? 0
+                : Convert.ToInt32(reader.GetValue(1));
+
+            return (totalInbox, unreadInbox);
         }
         public async Task<(List<EmailListItem_NEW> Page, int Total)> GetSpamEmailsPagedAsync(
     int start,
@@ -3082,7 +3210,7 @@ GROUP BY
             var whereSql = @"
 WHERE 1=1";
 
-            if (casellaIds.Count > 0)
+            if (casellaIds.Count > 0 && folderUi != "inbox")
             {
                 whereSql += " AND e.CASELLA_ID IN (" + string.Join(",", casellaIds) + ")";
             }
