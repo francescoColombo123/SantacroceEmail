@@ -13,6 +13,7 @@
 @inject IDialogService DialogService
 @inject HttpClient Http
 @inject IJSRuntime JS
+@inject CalendarInviteService InviteSvc
 <div class="detail-shell">
     @if (_loading)
     {
@@ -325,6 +326,76 @@
         </div>
     }
 </div>
+                       @if (_invites.TryGetValue(InviteKey(mail), out var invite) && invite != null)
+{
+    <div class="calendar-invite @(invite.IsCancelled ? "cancelled" : "")">
+        <div class="ci-head">
+            <MudIcon Icon="@(invite.IsCancelled ? Icons.Material.Filled.EventBusy : Icons.Material.Filled.Event)"
+                     Size="Size.Small" />
+            <span class="ci-title">
+                @InviteTitle(invite): @invite.Summary
+            </span>
+        </div>
+
+        <div class="ci-row"><b>Quando:</b> @FormatInviteWhen(invite)</div>
+
+        @if (!string.IsNullOrWhiteSpace(invite.Location))
+        {
+            <div class="ci-row"><b>Dove:</b> @invite.Location</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(invite.OrganizerEmail))
+        {
+            <div class="ci-row">
+                <b>Organizzatore:</b> @(invite.OrganizerName ?? invite.OrganizerEmail)
+                @if (!string.IsNullOrWhiteSpace(invite.OrganizerName))
+                {
+                    <span class="ci-muted">&nbsp;&lt;@invite.OrganizerEmail&gt;</span>
+                }
+            </div>
+        }
+
+        @if (invite.Attendees.Count > 0)
+        {
+            <div class="ci-row ci-muted">
+                <b>Partecipanti:</b>
+                @(string.Join(", ", invite.Attendees.Select(FormatAttendee)))
+            </div>
+        }
+
+        @if (invite.CanReply && !string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase))
+        {
+            <div class="ci-actions">
+                <MudButton Size="Size.Small"
+                           Variant="@(IsInviteReply(mail, CalendarReplyKind.Accepted) ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Success"
+                           StartIcon="@Icons.Material.Filled.Check"
+                           Disabled="@_inviteSending"
+                           OnClick="@(() => ReplyToInviteAsync(mail, invite, CalendarReplyKind.Accepted))">
+                    Accetta
+                </MudButton>
+
+                <MudButton Size="Size.Small"
+                           Variant="@(IsInviteReply(mail, CalendarReplyKind.Tentative) ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Warning"
+                           StartIcon="@Icons.Material.Filled.HelpOutline"
+                           Disabled="@_inviteSending"
+                           OnClick="@(() => ReplyToInviteAsync(mail, invite, CalendarReplyKind.Tentative))">
+                    Forse
+                </MudButton>
+
+                <MudButton Size="Size.Small"
+                           Variant="@(IsInviteReply(mail, CalendarReplyKind.Declined) ? Variant.Filled : Variant.Outlined)"
+                           Color="Color.Error"
+                           StartIcon="@Icons.Material.Filled.Close"
+                           Disabled="@_inviteSending"
+                           OnClick="@(() => ReplyToInviteAsync(mail, invite, CalendarReplyKind.Declined))">
+                    Rifiuta
+                </MudButton>
+            </div>
+        }
+    </div>
+}
                        @{
     var visibleAttachments = GetVisibleAttachments(mail);
 }
@@ -1218,7 +1289,11 @@ private List<AllegatoItem_NEW> GetVisibleAttachments(EmailDetail_NEW mail)
 
     private bool IsSentMail(EmailDetail_NEW mail)
     {
-        return string.Equals(mail.Tipo, "SENT", StringComparison.OrdinalIgnoreCase)
+        // "I" è il Tipo impostato da GetConversationByThreadFastAsync per EMAIL_INVIATE
+        // (come in ResolveAttachmentSource): senza, le immagini inline delle inviate puntavano
+        // all'endpoint delle ricevute, dove lo stesso ID è un altro allegato.
+        return string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(mail.Tipo, "SENT", StringComparison.OrdinalIgnoreCase)
             || string.Equals(mail.Tipo, "INVIATA", StringComparison.OrdinalIgnoreCase)
             || (!string.IsNullOrWhiteSpace(mail.Mittente)
                 && !mail.Mittente.Contains("@")
@@ -1915,7 +1990,158 @@ private async Task LoadPageAsync()
         _loading = false;
         await InvokeAsync(StateHasChanged);
     }
+
+    // Gli inviti si caricano dopo il primo render: l'.ics potrebbe
+    // dover essere scaricato da IMAP e non deve rallentare la pagina.
+    await LoadCalendarInvitesAsync();
 }
+
+// ===================== INVITI CALENDARIO (.ics) =====================
+
+private readonly Dictionary<string, CalendarInvite?> _invites = new();
+private readonly Dictionary<string, CalendarReplyKind> _inviteReplies = new();
+private bool _inviteSending;
+
+private static string InviteKey(EmailDetail_NEW mail) => $"{mail.Tipo}:{mail.Id}";
+
+private bool IsInviteReply(EmailDetail_NEW mail, CalendarReplyKind kind)
+    => _inviteReplies.TryGetValue(InviteKey(mail), out var k) && k == kind;
+
+private async Task LoadCalendarInvitesAsync()
+{
+    try
+    {
+        var changed = false;
+
+        foreach (var mail in _thread.ToList())
+        {
+            var key = InviteKey(mail);
+
+            if (_invites.ContainsKey(key))
+                continue;
+
+            var icsAttachment = mail.Allegati?
+                .FirstOrDefault(a => CalendarInviteService.IsCalendarAttachment(a.MimeType, a.NomeFile));
+
+            if (icsAttachment == null)
+                continue;
+
+            _invites[key] = await InviteSvc.LoadInviteAsync(
+                icsAttachment.Id,
+                ResolveAttachmentSource(mail));
+
+            changed = true;
+        }
+
+        if (changed)
+            await InvokeAsync(StateHasChanged);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Errore lettura inviti calendario: {ex.Message}");
+    }
+}
+
+private static string InviteTitle(CalendarInvite invite)
+{
+    if (invite.IsCancelled)
+        return "Riunione annullata";
+
+    return invite.Method.ToUpperInvariant() switch
+    {
+        "REPLY" => "Risposta a invito",
+        "COUNTER" => "Proposta di modifica",
+        _ => "Invito a riunione"
+    };
+}
+
+private static string? PartStatLabel(string? partStat) => (partStat ?? "").ToUpperInvariant() switch
+{
+    "ACCEPTED" => "accettato",
+    "DECLINED" => "rifiutato",
+    "TENTATIVE" => "forse",
+    "DELEGATED" => "delegato",
+    _ => null // NEEDS-ACTION o assente: nessuna etichetta
+};
+
+private static string FormatAttendee(CalendarAttendee a)
+{
+    var status = PartStatLabel(a.PartStat);
+    return (a.Name ?? a.Email) + (status == null ? "" : $" ({status})");
+}
+
+private static string FormatInviteWhen(CalendarInvite invite)
+{
+    var it = System.Globalization.CultureInfo.GetCultureInfo("it-IT");
+
+    if (!invite.StartLocal.HasValue)
+        return "-";
+
+    var start = invite.StartLocal.Value;
+    var end = invite.EndLocal;
+
+    if (invite.AllDay)
+    {
+        var lastDay = (end ?? start.AddDays(1)).AddDays(-1);
+        return lastDay.Date <= start.Date
+            ? start.ToString("dddd d MMMM yyyy", it) + " (tutto il giorno)"
+            : $"{start.ToString("d MMM", it)} - {lastDay.ToString("d MMM yyyy", it)} (tutto il giorno)";
+    }
+
+    if (end.HasValue && end.Value.Date == start.Date)
+        return $"{start.ToString("dddd d MMMM yyyy, HH:mm", it)} - {end.Value:HH:mm}";
+
+    return end.HasValue
+        ? $"{start.ToString("d MMM yyyy HH:mm", it)} - {end.Value.ToString("d MMM yyyy HH:mm", it)}"
+        : start.ToString("dddd d MMMM yyyy, HH:mm", it);
+}
+
+private async Task ReplyToInviteAsync(EmailDetail_NEW mail, CalendarInvite invite, CalendarReplyKind kind)
+{
+    if (_inviteSending || string.IsNullOrWhiteSpace(_utente))
+        return;
+
+    var casellaEmail = ExtractEmailOnly(mail.CasellaEmail);
+
+    if (string.IsNullOrWhiteSpace(casellaEmail) || !casellaEmail.Contains('@'))
+    {
+        Snackbar.Add("Casella di ricezione non trovata: impossibile rispondere all'invito.", Severity.Warning);
+        return;
+    }
+
+    _inviteSending = true;
+    StateHasChanged();
+
+    try
+    {
+        await InviteSvc.SendReplyAsync(
+            invite,
+            kind,
+            utente: _utente!,
+            attendeeEmail: casellaEmail,
+            attendeeName: null,
+            inReplyTo: mail.MessageId,
+            references: mail.References,
+            threadKey: mail.ThreadKey);
+
+        _inviteReplies[InviteKey(mail)] = kind;
+
+        Snackbar.Add(
+            $"Risposta inviata a {invite.OrganizerEmail}: {CalendarInviteService.ReplySubjectPrefix(kind)}",
+            Severity.Success);
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Errore risposta invito: {ex}");
+        Snackbar.Add("Errore durante l'invio della risposta all'invito.", Severity.Error);
+    }
+    finally
+    {
+        _inviteSending = false;
+        StateHasChanged();
+    }
+}
+
 private readonly HashSet<string> _expandedQuotedMessages = new();
 private readonly HashSet<string> _expandedRecipientHeaders = new();
 
@@ -3502,6 +3728,50 @@ private string FormatRecipientsForForward(
 
 
 <style>
+    .calendar-invite {
+        margin: 12px 0;
+        padding: 12px 14px;
+        border: 1px solid #c6dafc;
+        border-left: 4px solid #1a73e8;
+        border-radius: 8px;
+        background: #f4f8ff;
+        font-size: 13px;
+    }
+
+    .calendar-invite.cancelled {
+        border-color: #f5c2c0;
+        border-left-color: #d93025;
+        background: #fff5f5;
+    }
+
+    .calendar-invite .ci-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+    }
+
+    .calendar-invite .ci-title {
+        font-weight: 600;
+        font-size: 14px;
+    }
+
+    .calendar-invite .ci-row {
+        margin: 2px 0;
+        overflow-wrap: anywhere;
+    }
+
+    .calendar-invite .ci-muted {
+        color: #5f6368;
+    }
+
+    .calendar-invite .ci-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+    }
+
     .c-text {
         white-space: pre-wrap;
         margin-top: 4px;

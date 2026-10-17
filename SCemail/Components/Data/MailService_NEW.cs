@@ -1,4 +1,4 @@
-using MailKit;
+﻿using MailKit;
 using MailKit.Net.Imap;
 using MailKit.Net.Smtp;
 using MailKit.Search;
@@ -86,18 +86,117 @@ namespace SCemail.Components.Data
             using var con = new OracleConnection(_connectionString);
             await con.OpenAsync();
 
-            using var cmd = con.CreateCommand();
-            cmd.CommandText = @"
-BEGIN
-    DELETE FROM SGAPP.EMAIL_ARCHIVIO
-     WHERE ID_EMAIL = :emailId
-       AND UTENTE = :utente;
-END;";
+            // La lista mostra un thread per riga: si ripristina l'intero thread,
+            // altrimenti i messaggi precedenti resterebbero in archivio.
+            var ids = await GetThreadEmailIdsAsync(con, emailId);
 
-            cmd.Parameters.Add(new OracleParameter("emailId", emailId));
-            cmd.Parameters.Add(new OracleParameter("utente", utente));
+            using var cmd = con.CreateCommand();
+            cmd.BindByName = true;
+            cmd.ArrayBindCount = ids.Count;
+            cmd.CommandText = @"
+DELETE FROM SGAPP.EMAIL_ARCHIVIO
+ WHERE ID_EMAIL = :emailId
+   AND UPPER(UTENTE) = UPPER(:utente)";
+
+            cmd.Parameters.Add("emailId", OracleDbType.Int32).Value = ids.ToArray();
+            cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = Enumerable.Repeat(utente, ids.Count).ToArray();
 
             await cmd.ExecuteNonQueryAsync();
+        }
+
+        // La stessa mail può essere ricevuta da più caselle (es. c.diiorio@ e m.prencipe@ in CC):
+        // ogni copia ha il thread Gmail del proprio account, quindi senza filtro la lista mostrerebbe
+        // la conversazione più volte. Tiene una sola copia per Message-ID, sempre quella della casella
+        // con ID più basso, così tutti i messaggi di un thread condiviso restano nello stesso thread.
+        // whereSql = filtro già applicato alla query esterna (alias "e" e "c"), riusato con gli stessi parametri.
+        private static string DedupCrossCasellaSql(string whereSql) => $@"
+      AND e.ID IN (
+          SELECT ID
+            FROM (
+                  SELECT e.ID,
+                         ROW_NUMBER() OVER (
+                             PARTITION BY e.MESSAGE_ID
+                             ORDER BY e.CASELLA_ID, e.ID
+                         ) AS DUP_RN
+                    FROM SGAPP.EMAIL_RICEVUTE e
+                    JOIN SGAPP.CASELLEPOSTA c ON c.ID = e.CASELLA_ID
+                  {whereSql}
+                 )
+           WHERE DUP_RN = 1
+      )";
+
+        // Tutti gli ID di EMAIL_RICEVUTE del thread di emailId, comprese le copie degli stessi
+        // messaggi ricevute da altre caselle. Ogni account Gmail ha un proprio thread id,
+        // quindi si passa dal Message-ID: thread -> suoi Message-ID -> thread delle copie.
+        // Volutamente in più query semplici: la versione con IN annidati su THREAD_KEY calcolato
+        // faceva prodotti di scansioni complete e su Oracle superava il minuto.
+        private static async Task<List<int>> GetThreadEmailIdsAsync(OracleConnection con, int emailId)
+        {
+            async Task<List<(int Id, string? Mid, string Key)>> QueryAsync(string where, Action<OracleCommand> bind)
+            {
+                var list = new List<(int, string?, string)>();
+
+                using var cmd = con.CreateCommand();
+                cmd.BindByName = true;
+                cmd.CommandText = $@"
+SELECT e.ID, e.MESSAGE_ID, {ThreadKeySqlE} AS K
+  FROM SGAPP.EMAIL_RICEVUTE e
+ WHERE {where}";
+                bind(cmd);
+
+                using var r = await cmd.ExecuteReaderAsync();
+                while (await r.ReadAsync())
+                    list.Add((Convert.ToInt32(r.GetValue(0)), r.IsDBNull(1) ? null : r.GetString(1), r.GetString(2)));
+
+                return list;
+            }
+
+            static string InList(string prefix, int count) =>
+                string.Join(", ", Enumerable.Range(0, count).Select(i => $":{prefix}{i}"));
+
+            var seed = await QueryAsync("e.ID = :p_id", c => c.Parameters.Add("p_id", OracleDbType.Int32).Value = emailId);
+
+            if (seed.Count == 0)
+                return new List<int> { emailId };
+
+            // 1) messaggi del thread
+            var thread = await QueryAsync($"{ThreadKeySqlE} = :p_key",
+                c => c.Parameters.Add("p_key", OracleDbType.Varchar2, 500).Value = seed[0].Key);
+
+            var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { seed[0].Key };
+
+            // 2) copie degli stessi messaggi nelle altre caselle -> i loro thread
+            var mids = thread.Select(x => x.Mid).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().ToList();
+
+            foreach (var chunk in mids.Chunk(500))
+            {
+                var copies = await QueryAsync($"e.MESSAGE_ID IN ({InList("m", chunk.Length)})", c =>
+                {
+                    for (var i = 0; i < chunk.Length; i++)
+                        c.Parameters.Add($"m{i}", OracleDbType.Varchar2, 500).Value = chunk[i];
+                });
+
+                foreach (var copy in copies)
+                    keys.Add(copy.Key);
+            }
+
+            // 3) tutti i messaggi di quei thread
+            var ids = new HashSet<int>(thread.Select(x => x.Id)) { emailId };
+            var others = keys.Where(k => !string.Equals(k, seed[0].Key, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            foreach (var chunk in others.Chunk(500))
+            {
+                var rows = await QueryAsync($"{ThreadKeySqlE} IN ({InList("k", chunk.Length)})", c =>
+                {
+                    for (var i = 0; i < chunk.Length; i++)
+                        c.Parameters.Add($"k{i}", OracleDbType.Varchar2, 500).Value = chunk[i];
+                });
+
+                foreach (var row in rows)
+                    ids.Add(row.Id);
+            }
+
+            return ids.ToList();
         }
 
 
@@ -629,81 +728,36 @@ OFFSET :p_offset ROWS FETCH NEXT :p_limit ROWS ONLY";
             var utenteNorm = utente.Trim().ToLowerInvariant();
             var minDate = GetMailUiMinDate();
 
-            var threadPartitionExpr = @"
-NVL(
-    NULLIF(
-        REGEXP_REPLACE(
-            LOWER(TRIM(
-                REGEXP_SUBSTR(
-                    NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''),
-                    '[^ ]+',
-                    1,
-                    1
-                )
-            )),
-            '[<>[:space:][:cntrl:]]',
-            ''
-        ),
-        ''
-    ),
-    NVL(
-        NULLIF(
-            REGEXP_REPLACE(
-                LOWER(TRIM(e.IN_REPLY_TO)),
-                '[<>[:space:][:cntrl:]]',
-                ''
-            ),
-            ''
-        ),
-        NVL(
-            NULLIF(
-                REGEXP_REPLACE(
-                    LOWER(TRIM(
-                        REGEXP_REPLACE(
-                            NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1), ''),
-                            '^(re|fw|fwd)[[:space:]]*:[[:space:]]*',
-                            ''
-                        )
-                    )),
-                    '[[:space:][:cntrl:]]',
-                    ''
-                ),
-                ''
-            ),
-            NVL(
-                NULLIF(
-                    REGEXP_REPLACE(
-                        LOWER(TRIM(e.THREAD_KEY)),
-                        '[[:space:][:cntrl:]]',
-                        ''
-                    ),
-                    ''
-                ),
-                NVL(
-                    NULLIF(
-                        REGEXP_REPLACE(
-                            LOWER(TRIM(e.GMAIL_THREAD_ID)),
-                            '[[:space:][:cntrl:]]',
-                            ''
-                        ),
-                        ''
-                    ),
-                    NVL(
-                        NULLIF(
-                            REGEXP_REPLACE(
-                                LOWER(TRIM(e.MESSAGE_ID)),
-                                '[<>[:space:][:cntrl:]]',
-                                ''
-                            ),
-                            ''
-                        ),
-                        'single_' || e.ID
-                    )
-                )
-            )
-        )
-    )
-)";
+            var threadPartitionExpr = $@"
+{ThreadKeySqlE}";
+
+            // Stesso filtro della lista Posta in arrivo, riusato per togliere le copie multi-casella.
+            var homeWhere = $@"
+    WHERE NVL(e.BLACKLIST, 'N') <> 'Y'
+      AND NVL(e.ELIMINATO, 'N') <> 'Y'
+
+      AND EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_ASSEGNAZIONI x
+          WHERE x.EMAIL_ID = e.ID
+            AND LOWER(x.UTENTE) = :utente
+      )
+
+      AND NOT EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_ARCHIVIO ar
+          WHERE ar.ID_EMAIL = e.ID
+            AND LOWER(ar.UTENTE) = :utente
+      )
+
+      AND NOT EXISTS (
+          SELECT 1
+          FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP m
+          WHERE m.ID_EMAIL = e.ID
+            AND LOWER(m.UTENTE) = :utente
+      )
+
+      {(minDate.HasValue ? "AND e.DATA_RICEZIONE >= :minDate" : "")}";
 
             var sql = $@"
 WITH base_rows AS (
@@ -736,31 +790,8 @@ WITH base_rows AS (
 
     FROM SGAPP.EMAIL_RICEVUTE e
 
-    WHERE NVL(e.BLACKLIST, 'N') <> 'Y'
-      AND NVL(e.ELIMINATO, 'N') <> 'Y'
-
-      AND EXISTS (
-          SELECT 1
-          FROM SGAPP.EMAIL_ASSEGNAZIONI x
-          WHERE x.EMAIL_ID = e.ID
-            AND LOWER(x.UTENTE) = :utente
-      )
-
-      AND NOT EXISTS (
-          SELECT 1
-          FROM SGAPP.EMAIL_ARCHIVIO ar
-          WHERE ar.ID_EMAIL = e.ID
-            AND LOWER(ar.UTENTE) = :utente
-      )
-
-      AND NOT EXISTS (
-          SELECT 1
-          FROM SGAPP.EMAIL_INBOX_SEZIONE_MAP m
-          WHERE m.ID_EMAIL = e.ID
-            AND LOWER(m.UTENTE) = :utente
-      )
-
-      {(minDate.HasValue ? "AND e.DATA_RICEZIONE >= :minDate" : "")}
+    {homeWhere}
+    {DedupCrossCasellaSql(homeWhere)}
 )
 SELECT
     COUNT(*) AS TOTAL_INBOX,
@@ -1276,6 +1307,21 @@ LOWER(
         )
     )
 )";
+
+// Stessa chiave di ReceivedThreadKeySql ma con alias "e":
+// lista, conteggi e ricerca devono raggruppare esattamente
+// come il dettaglio e come EmailFetchService.ResolveThreadKeyAsync.
+private const string ThreadKeySqlE = @"
+LOWER(
+    TRIM(
+        COALESCE(
+            NULLIF(TRIM(e.THREAD_KEY), ''),
+            NULLIF(TRIM(e.GMAIL_THREAD_ID), ''),
+            NULLIF(TRIM(e.MESSAGE_ID), ''),
+            'SINGLE_R_' || TO_CHAR(e.ID)
+        )
+    )
+)";
 private static string NormalizeMessageId(
     string? value)
 {
@@ -1432,26 +1478,11 @@ WHERE EMAIL_ID IN ({ids})";
         {
             await using var conn = await GetOpenConnectionAsync();
 
-            const string sql = @"
+            var sql = $@"
 WITH received_seed AS (
     SELECT
         r.CASELLA_ID,
-        NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1), ''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'r_base_' || TO_CHAR(r.ID))
-                        )
-                    )
-                )
-            )
-        ) AS THREAD_NORM
+        {ReceivedThreadKeySql} AS THREAD_NORM
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.ID = :id
 ),
@@ -1463,22 +1494,7 @@ base_one AS (
 
     SELECT
         i.CASELLA_ID,
-        NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1), ''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'i_base_' || TO_CHAR(i.ID))
-                        )
-                    )
-                )
-            )
-        ) AS THREAD_NORM
+        {SentThreadKeySql} AS THREAD_NORM
     FROM SGAPP.EMAIL_INVIATE i
     WHERE i.ID = :id
       AND NOT EXISTS (SELECT 1 FROM received_seed)
@@ -1506,22 +1522,7 @@ raw_thread AS (
     CROSS JOIN base_one b
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
       AND (b.CASELLA_ID IS NULL OR r.CASELLA_ID = b.CASELLA_ID)
-      AND NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'r_single_' || r.ID)
-                        )
-                    )
-                )
-            )
-          ) = b.THREAD_NORM
+      AND {ReceivedThreadKeySql} = b.THREAD_NORM
 
     UNION ALL
 
@@ -1545,22 +1546,7 @@ raw_thread AS (
     FROM SGAPP.EMAIL_INVIATE i
     CROSS JOIN base_one b
     WHERE (b.CASELLA_ID IS NULL OR i.CASELLA_ID = b.CASELLA_ID)
-      AND NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'i_single_' || i.ID)
-                        )
-                    )
-                )
-            )
-          ) = b.THREAD_NORM
+      AND {SentThreadKeySql} = b.THREAD_NORM
 )
 SELECT *
 FROM raw_thread
@@ -2396,18 +2382,28 @@ WHEN NOT MATCHED THEN
             using var con = new OracleConnection(_connectionString);
             await con.OpenAsync();
 
-            var cmd = con.CreateCommand();
-            cmd.CommandText = @"
-            BEGIN
-                INSERT INTO SGAPP.EMAIL_ARCHIVIO (ID_EMAIL, UTENTE, DATA_ARCHIVIAZIONE)
-                VALUES (:emailId, :utente, SYSDATE);
-            EXCEPTION
-                WHEN DUP_VAL_ON_INDEX THEN
-                    NULL; -- gi� archiviata: ignora
-            END;";
+            // La lista raggruppa per thread e mostra l'ultimo messaggio NON archiviato:
+            // archiviando solo emailId, al ricaricamento ricompariva il messaggio
+            // precedente dello stesso thread. Si archivia quindi l'intero thread.
+            var ids = await GetThreadEmailIdsAsync(con, emailId);
 
-            cmd.Parameters.Add(new OracleParameter("emailId", emailId));
-            cmd.Parameters.Add(new OracleParameter("utente", utente));
+            var cmd = con.CreateCommand();
+            cmd.BindByName = true;
+            cmd.ArrayBindCount = ids.Count;
+            // NOT EXISTS: le righe già archiviate vengono saltate.
+            cmd.CommandText = @"
+INSERT INTO SGAPP.EMAIL_ARCHIVIO (ID_EMAIL, UTENTE, DATA_ARCHIVIAZIONE)
+SELECT :emailId, :utente, SYSDATE
+  FROM DUAL
+ WHERE NOT EXISTS (
+       SELECT 1
+         FROM SGAPP.EMAIL_ARCHIVIO a
+        WHERE a.ID_EMAIL = :emailId
+          AND UPPER(a.UTENTE) = UPPER(:utente)
+ )";
+
+            cmd.Parameters.Add("emailId", OracleDbType.Int32).Value = ids.ToArray();
+            cmd.Parameters.Add("utente", OracleDbType.Varchar2).Value = Enumerable.Repeat(utente, ids.Count).ToArray();
 
             await cmd.ExecuteNonQueryAsync();
         }
@@ -2567,7 +2563,7 @@ WITH base_rows AS (
             WHERE a.EMAIL_ID = e.ID
         ) AS ATT_PACK,
         ROW_NUMBER() OVER (
-            PARTITION BY NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'SINGLE_' || e.ID)))))
+            PARTITION BY {ThreadKeySqlE}
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
         MAX(
@@ -2582,10 +2578,10 @@ WITH base_rows AS (
                 ELSE 1
             END
         ) OVER (
-            PARTITION BY NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'SINGLE_' || e.ID)))))
+            PARTITION BY {ThreadKeySqlE}
         ) AS HAS_UNREAD,
         COUNT(*) OVER (
-            PARTITION BY NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'SINGLE_' || e.ID)))))
+            PARTITION BY {ThreadKeySqlE}
         ) AS THREAD_LEN
     FROM SGAPP.EMAIL_RICEVUTE e
     JOIN SGAPP.CASELLEPOSTA c ON c.ID = e.CASELLA_ID
@@ -3291,7 +3287,10 @@ WHERE 1=1";
     )";
             }
 
-            var threadPartitionExpr = @"NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || e.ID))))))";
+            if (folderUi == "inbox" || folderUi == "myarchive")
+                whereSql += DedupCrossCasellaSql(whereSql);
+
+            var threadPartitionExpr = $@"{ThreadKeySqlE}";
 
             // =========================================================
             // RAMO PI� LEGGERO PER "ALL", MA CON ALLEGATI
@@ -3737,12 +3736,12 @@ OFFSET :p_start ROWS FETCH NEXT :p_pageSize ROWS ONLY";
 
         public async Task<List<AdminUserSectionCountDto>> GetAdminSectionsForUserAsync(string utente)
         {
-            const string sql = @"
+            var sql = $@"
 SELECT 
     s.ID,
     s.CODICE,
     s.NOME,
-    COUNT(DISTINCT NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, TO_CHAR(e.ID)))))) AS CNT
+    COUNT(DISTINCT {ThreadKeySqlE}) AS CNT
 FROM SGAPP.EMAIL_INBOX_SEZIONI s
 JOIN SGAPP.EMAIL_INBOX_SEZIONE_MAP m 
     ON m.ID_SEZIONE = s.ID
@@ -3820,8 +3819,8 @@ WHERE ROWNUM = 1";
 
         public async Task<int> GetUnreadMentionsCountAsync(string utente)
         {
-            const string sql = @"
-SELECT COUNT(DISTINCT NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, TO_CHAR(e.ID))))))
+            var sql = $@"
+SELECT COUNT(DISTINCT {ThreadKeySqlE})
 FROM SGAPP.EMAIL_MENZIONI m
 JOIN SGAPP.EMAIL_RICEVUTE e ON e.ID = m.EMAIL_ID
 WHERE LOWER(m.UTENTE) = LOWER(:p_utente)
@@ -3839,12 +3838,12 @@ WHERE LOWER(m.UTENTE) = LOWER(:p_utente)
 
         public async Task<List<HomeSectionCountDto>> GetHomeSectionsForUserAsync(string utente)
         {
-            const string sql = @"
+            var sql = $@"
 SELECT 
     s.ID,
     s.CODICE,
     s.NOME,
-    COUNT(DISTINCT NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(e.THREAD_KEY, TO_CHAR(e.ID)))))) AS CNT
+    COUNT(DISTINCT {ThreadKeySqlE}) AS CNT
 FROM SGAPP.EMAIL_INBOX_SEZIONI s
 LEFT JOIN SGAPP.EMAIL_INBOX_SEZIONE_MAP m
        ON m.ID_SEZIONE = s.ID
@@ -4452,7 +4451,8 @@ ORDER BY s.ORDINE, s.NOME";
     string? inReplyTo = null,
     string? referencesHdr = null,
 string? threadKey = null,
-CancellationToken ct = default)
+CancellationToken ct = default,
+string? calendarReplyIcs = null)
         {
             await using var db = _dbFactory.CreateDbContext();
 
@@ -4533,6 +4533,34 @@ CancellationToken ct = default)
 
 
             message.Body = builder.ToMessageBody();
+
+            // Risposta a un invito (iMIP, RFC 6047): oltre all'HTML serve una parte
+            // text/calendar;method=REPLY, letta da Google Calendar / Outlook.
+            if (!string.IsNullOrWhiteSpace(calendarReplyIcs))
+            {
+                var calendarPart = new TextPart("calendar") { Text = calendarReplyIcs };
+                calendarPart.ContentType.Charset = "utf-8";
+                calendarPart.ContentType.Parameters.Add("method", "REPLY");
+                calendarPart.ContentTransferEncoding = ContentEncoding.Base64;
+
+                var icsAttachment = new MimePart("application", "ics")
+                {
+                    Content = new MimeContent(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(calendarReplyIcs))),
+                    ContentDisposition = new ContentDisposition(ContentDisposition.Attachment),
+                    ContentTransferEncoding = ContentEncoding.Base64,
+                    FileName = "invite.ics"
+                };
+
+                message.Body = new Multipart("mixed")
+                {
+                    new MultipartAlternative
+                    {
+                        new TextPart("html") { Text = bodyHtml ?? "" },
+                        calendarPart
+                    },
+                    icsAttachment
+                };
+            }
 
             // ? 4?? Header di threading Gmail
             static string CleanMsgId(string? value)
@@ -5413,7 +5441,7 @@ WHERE NVL(e.ELIMINATO,'N') = 'N'
 WITH filtered_rows AS (
     SELECT
         e.ID,
-        NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(e.THREAD_KEY), ''), NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'R_SINGLE_' || e.ID)))))) AS THREAD_KEY_NORM,
+        {ThreadKeySqlE} AS THREAD_KEY_NORM,
         e.THREAD_KEY,
         e.MITTENTE,
         e.DESTINATARI,
@@ -5454,7 +5482,7 @@ WITH filtered_rows AS (
             WHERE x.EMAIL_ID = e.ID
         ) AS ASSEGNATO_A,
         ROW_NUMBER() OVER (
-            PARTITION BY NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(e.THREAD_KEY), ''), NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'R_SINGLE_' || e.ID))))))
+            PARTITION BY {ThreadKeySqlE}
             ORDER BY e.DATA_RICEZIONE DESC, e.ID DESC
         ) AS RN,
         MAX(
@@ -5469,7 +5497,7 @@ WITH filtered_rows AS (
                 ELSE 1
             END
         ) OVER (
-            PARTITION BY NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(e.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(e.THREAD_KEY), ''), NVL(NULLIF(TRIM(e.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(e.MESSAGE_ID), ''), 'R_SINGLE_' || e.ID))))))
+            PARTITION BY {ThreadKeySqlE}
         ) AS HAS_UNREAD
     FROM SGAPP.EMAIL_RICEVUTE e
     JOIN SGAPP.CASELLEPOSTA c ON c.ID = e.CASELLA_ID
@@ -5481,29 +5509,29 @@ thread_totals AS (
         SUM(CNT) AS THREAD_LEN_REAL
     FROM (
         SELECT
-                        NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(r.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(r.THREAD_KEY), ''), NVL(NULLIF(TRIM(r.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(r.MESSAGE_ID), ''), 'R_SINGLE_' || r.ID)))))) AS THREAD_KEY_NORM,
+                        {ReceivedThreadKeySql} AS THREAD_KEY_NORM,
             COUNT(*) AS CNT
         FROM SGAPP.EMAIL_RICEVUTE r
         WHERE NVL(r.ELIMINATO, 'N') = 'N'
-                    AND NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(r.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(r.THREAD_KEY), ''), NVL(NULLIF(TRIM(r.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(r.MESSAGE_ID), ''), 'R_SINGLE_' || r.ID)))))) IN (
+                    AND {ReceivedThreadKeySql} IN (
                             SELECT DISTINCT fr.THREAD_KEY_NORM
               FROM filtered_rows fr
                             WHERE fr.THREAD_KEY_NORM IS NOT NULL
           )
-                GROUP BY NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(r.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(r.THREAD_KEY), ''), NVL(NULLIF(TRIM(r.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(r.MESSAGE_ID), ''), 'R_SINGLE_' || r.ID))))))
+                GROUP BY {ReceivedThreadKeySql}
 
         UNION ALL
 
         SELECT
-            NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(i.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(i.THREAD_KEY), ''), NVL(NULLIF(TRIM(i.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(i.MESSAGE_ID), ''), 'I_SINGLE_' || i.ID)))))) AS THREAD_KEY_NORM,
+            {SentThreadKeySql} AS THREAD_KEY_NORM,
             COUNT(*) AS CNT
         FROM SGAPP.EMAIL_INVIATE i
-        WHERE NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(i.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(i.THREAD_KEY), ''), NVL(NULLIF(TRIM(i.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(i.MESSAGE_ID), ''), 'I_SINGLE_' || i.ID)))))) IN (
+        WHERE {SentThreadKeySql} IN (
             SELECT DISTINCT fr.THREAD_KEY_NORM
             FROM filtered_rows fr
             WHERE fr.THREAD_KEY_NORM IS NOT NULL
         )
-        GROUP BY NVL(NULLIF(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1)), ''), NVL(NULLIF(TRIM(i.IN_REPLY_TO), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(TRIM(i.THREAD_KEY), ''), NVL(NULLIF(TRIM(i.GMAIL_THREAD_ID), ''), NVL(NULLIF(TRIM(i.MESSAGE_ID), ''), 'I_SINGLE_' || i.ID))))))
+        GROUP BY {SentThreadKeySql}
     )
     GROUP BY THREAD_KEY_NORM
 )
@@ -5726,7 +5754,7 @@ WHERE e.CASELLA_ID IN ({inList})
 ";
             }
 
-                        var threadPartitionExpr = @"NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || e.ID))))))";
+                        var threadPartitionExpr = $@"{ThreadKeySqlE}";
 
             var sql = $@"
 WITH base_rows AS (
@@ -6188,26 +6216,11 @@ VALUES (:p_eid, :p_autore, :p_testo, SYSDATE)";
         {
             await using var conn = await GetOpenConnectionAsync();
 
-            const string countSql = @"
+            var countSql = $@"
 WITH received_seed AS (
     SELECT
         r.CASELLA_ID,
-        NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1), ''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'r_base_' || TO_CHAR(r.ID))
-                        )
-                    )
-                )
-            )
-        ) AS THREAD_NORM
+        {ReceivedThreadKeySql} AS THREAD_NORM
     FROM SGAPP.EMAIL_RICEVUTE r
     WHERE r.ID = :id
 ),
@@ -6219,22 +6232,7 @@ base_one AS (
 
     SELECT
         i.CASELLA_ID,
-        NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1), ''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'i_base_' || TO_CHAR(i.ID))
-                        )
-                    )
-                )
-            )
-        ) AS THREAD_NORM
+        {SentThreadKeySql} AS THREAD_NORM
     FROM SGAPP.EMAIL_INVIATE i
     WHERE i.ID = :id
       AND NOT EXISTS (SELECT 1 FROM received_seed)
@@ -6245,22 +6243,7 @@ raw_thread AS (
     CROSS JOIN base_one b
     WHERE NVL(r.ELIMINATO, 'N') = 'N'
       AND (b.CASELLA_ID IS NULL OR r.CASELLA_ID = b.CASELLA_ID)
-      AND NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(r.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(r.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(r.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'r_single_' || r.ID)
-                        )
-                    )
-                )
-            )
-          ) = b.THREAD_NORM
+      AND {ReceivedThreadKeySql} = b.THREAD_NORM
 
     UNION ALL
 
@@ -6268,22 +6251,7 @@ raw_thread AS (
     FROM SGAPP.EMAIL_INVIATE i
     CROSS JOIN base_one b
     WHERE (b.CASELLA_ID IS NULL OR i.CASELLA_ID = b.CASELLA_ID)
-      AND NVL(
-            NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(i.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''),
-            NVL(
-                NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''),
-                NVL(
-                    NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(i.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''),
-                    NVL(
-                        NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''),
-                        NVL(
-                            NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''),
-                            NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(i.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'i_single_' || i.ID)
-                        )
-                    )
-                )
-            )
-          ) = b.THREAD_NORM
+      AND {SentThreadKeySql} = b.THREAD_NORM
 )
 SELECT NVL(COUNT(DISTINCT ROW_KEY), 1)
 FROM raw_thread";
@@ -6387,7 +6355,7 @@ WHERE NVL(e.ELIMINATO,'N') = 'N'
             bool hasWord = !string.IsNullOrWhiteSpace(w) && w.Length >= 2;
 
             var minDate = GetMailUiMinDate();
-            var threadPartitionExpr = @"NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_SUBSTR(NVL(DBMS_LOB.SUBSTR(e.REFERENCES_HDR, 1000, 1), ''), '[^ ]+', 1, 1))), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.IN_REPLY_TO)), '[<>[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(REGEXP_REPLACE(NVL(DBMS_LOB.SUBSTR(e.OGGETTO, 1000, 1),''), '^(re|fw|fwd)[[:space:]]*:[[:space:]]*', ''))), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.THREAD_KEY)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.GMAIL_THREAD_ID)), '[[:space:][:cntrl:]]', ''), ''), NVL(NULLIF(REGEXP_REPLACE(LOWER(TRIM(e.MESSAGE_ID)), '[<>[:space:][:cntrl:]]', ''), ''), 'single_' || e.ID))))))";
+            var threadPartitionExpr = $@"{ThreadKeySqlE}";
 
             var inList = string.Join(",", caselleAdmin.Select(x => x.ToString()));
 

@@ -79,10 +79,10 @@ public class EmailFetchService : BackgroundService
 
                 if (night)
                 {
-                    await BackfillHistoricalThreadsAsync(
+                    await BackfillMissingAttachmentsAsync(
                         stoppingToken);
 
-                    await BackfillMissingAttachmentsAsync(
+                    await RealignThreadKeysOncePerNightAsync(
                         stoppingToken);
                 }
                             }
@@ -96,6 +96,457 @@ public class EmailFetchService : BackgroundService
     }
 
     
+
+    private DateOnly? _lastThreadRealign;
+
+    // Sostituisce BackfillHistoricalThreadsAsync: riallinea THREAD_KEY delle email
+    // già salvate alla regola attuale. Disattivabile con EmailFetch:ThreadRealignEnabled=false.
+    private async Task RealignThreadKeysOncePerNightAsync(CancellationToken ct)
+    {
+        if (!(_config.GetValue<bool?>("EmailFetch:ThreadRealignEnabled") ?? true))
+            return;
+
+        // La finestra notturna attraversa la mezzanotte: la "notte" è quella che inizia alle 23.
+        var nowRome = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, RomeTz);
+        var night = DateOnly.FromDateTime(nowRome.Hour < 6 ? nowRome.Date.AddDays(-1) : nowRome.Date);
+
+        if (_lastThreadRealign == night)
+            return;
+
+        try
+        {
+            await using var conn = new OracleConnection(
+                _config.GetConnectionString("OracleDb")
+                ?? throw new InvalidOperationException("ConnectionString 'OracleDb' mancante."));
+
+            await conn.OpenAsync(ct);
+
+            // Prima recupero da IMAP gli header di thread mancanti nelle mail storiche,
+            // poi ricalcolo THREAD_KEY.
+            var limit = _config.GetValue<int?>("EmailFetch:ThreadHeaderBackfillLimit") ?? 50000;
+            await BackfillThreadHeadersAsync(conn, limit, ct);
+
+            var report = await new ThreadKeyRealigner(_logger).RunAsync(conn, apply: true, ct);
+
+            _lastThreadRealign = night;
+
+            _logger.LogInformation(
+                "Riallineamento THREAD_KEY completato: righe={Rows} aggiornate={Changes}",
+                report.Rows, report.Changes.Count);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Errore riallineamento THREAD_KEY");
+        }
+    }
+
+    private sealed record ThreadHeaderCandidate(
+        string Table,
+        int Id,
+        string FolderPath,
+        uint Uid,
+        string? MessageId);
+
+    // Molte mail storiche sono state salvate senza In-Reply-To / References / GMAIL_THREAD_ID:
+    // senza questi dati il thread non è ricostruibile. Li rileggo dalla casella via UID
+    // (solo header, niente corpo) e segno la riga THREAD_ALIGNED = 'Y' = "verificata",
+    // anche quando il messaggio non è più sul server, così non viene riprovata.
+    // Scrive solo se il Message-ID sul server coincide con quello a DB.
+    public async Task<int> BackfillThreadHeadersAsync(
+        OracleConnection conn,
+        int maxRows,
+        CancellationToken ct,
+        int? onlyCasellaId = null)
+    {
+        var accounts = new List<(int Id, string Email, string Password, string Provider, string Host, int Port, bool UseSsl)>();
+
+        await using (var cmd = new OracleCommand(@"
+SELECT ID, EMAIL, PASSWORD, PROVIDER, IMAP_HOST, IMAP_PORT, USE_SSL
+  FROM SGAPP.CASELLEPOSTA
+ WHERE NVL(ATTIVA, 'Y') = 'Y'", conn))
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await r.ReadAsync(ct))
+            {
+                accounts.Add((
+                    r.GetInt32(0), r.GetString(1), r.GetString(2),
+                    r.IsDBNull(3) ? "IMAP" : r.GetString(3),
+                    r.GetString(4), r.GetInt32(5),
+                    string.Equals(r.GetString(6), "Y", StringComparison.OrdinalIgnoreCase)));
+            }
+        }
+
+        var total = 0;
+
+        foreach (var a in accounts.Where(x => onlyCasellaId == null || x.Id == onlyCasellaId))
+        {
+            if (total >= maxRows)
+                break;
+
+            var candidates = await LoadThreadHeaderCandidatesAsync(conn, a.Id, maxRows - total, ct);
+
+            if (candidates.Count == 0)
+                continue;
+
+            try
+            {
+                total += await BackfillThreadHeadersForAccountAsync(conn, a, candidates, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Backfill header thread fallito per {Email}", a.Email);
+            }
+        }
+
+        if (total > 0)
+            _logger.LogInformation("Backfill header thread: {N} righe verificate", total);
+
+        return total;
+    }
+
+    private static async Task<List<ThreadHeaderCandidate>> LoadThreadHeaderCandidatesAsync(
+        OracleConnection conn,
+        int casellaId,
+        int limit,
+        CancellationToken ct)
+    {
+        const string sql = @"
+SELECT TBL, ID, FOLDER_PATH, MESSAGE_UID, MESSAGE_ID
+  FROM (
+        SELECT 'R' AS TBL, ID, FOLDER_PATH, MESSAGE_UID, MESSAGE_ID
+          FROM SGAPP.EMAIL_RICEVUTE
+         WHERE CASELLA_ID = :p_cid
+           AND THREAD_ALIGNED = 'N'
+           AND MESSAGE_UID IS NOT NULL
+           AND FOLDER_PATH IS NOT NULL
+           AND NVL(IS_EML_IMPORTATA, 'N') = 'N'
+        UNION ALL
+        SELECT 'I' AS TBL, ID, FOLDER_PATH, MESSAGE_UID, MESSAGE_ID
+          FROM SGAPP.EMAIL_INVIATE
+         WHERE CASELLA_ID = :p_cid
+           AND THREAD_ALIGNED = 'N'
+           AND MESSAGE_UID IS NOT NULL
+           AND FOLDER_PATH IS NOT NULL
+       )
+ ORDER BY FOLDER_PATH, MESSAGE_UID
+ FETCH FIRST :p_limit ROWS ONLY";
+
+        var result = new List<ThreadHeaderCandidate>();
+
+        await using var cmd = new OracleCommand(sql, conn) { BindByName = true };
+        cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
+        cmd.Parameters.Add("p_limit", OracleDbType.Int32).Value = Math.Max(1, limit);
+
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+
+        while (await r.ReadAsync(ct))
+        {
+            var uid = Convert.ToInt64(r.GetValue(3));
+
+            if (uid <= 0 || uid > uint.MaxValue)
+                continue;
+
+            result.Add(new ThreadHeaderCandidate(
+                r.GetString(0),
+                Convert.ToInt32(r.GetValue(1)),
+                r.GetString(2),
+                (uint)uid,
+                r.IsDBNull(4) ? null : r.GetString(4)));
+        }
+
+        return result;
+    }
+
+    private async Task<int> BackfillThreadHeadersForAccountAsync(
+        OracleConnection conn,
+        (int Id, string Email, string Password, string Provider, string Host, int Port, bool UseSsl) a,
+        List<ThreadHeaderCandidate> candidates,
+        CancellationToken ct)
+    {
+        using var client = new ImapClient();
+        client.AuthenticationMechanisms.Remove("XOAUTH2");
+
+        await client.ConnectAsync(
+            a.Host, a.Port,
+            a.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTlsWhenAvailable,
+            ct);
+
+        await client.AuthenticateAsync(a.Email, a.Password, ct);
+
+        var isGmail = (client.Capabilities & ImapCapabilities.GMailExt1) != 0;
+
+        var items = MessageSummaryItems.UniqueId
+                    | MessageSummaryItems.Envelope
+                    | MessageSummaryItems.References;
+
+        if (isGmail)
+            items |= MessageSummaryItems.GMailThreadId;
+
+        var processed = 0;
+
+        // Righe non trovate tramite UID: su Gmail le cerco per Message-ID in "Tutti i messaggi"
+        // (le mail archiviate escono dalla INBOX e il loro UID non è più valido).
+        var unmatched = new List<ThreadHeaderCandidate>();
+
+        try
+        {
+            foreach (var byFolder in candidates.GroupBy(c => c.FolderPath, StringComparer.OrdinalIgnoreCase))
+            {
+                IMailFolder? folder = null;
+
+                try
+                {
+                    // Niente GetFolderSafeAsync: in caso di cartella mancante tornerebbe la INBOX,
+                    // con UID che appartengono a un'altra cartella.
+                    folder = await client.GetFolderAsync(byFolder.Key, ct);
+                    await folder.OpenAsync(FolderAccess.ReadOnly, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogInformation(
+                        "Backfill header: cartella '{Folder}' non disponibile su {Email}",
+                        byFolder.Key, a.Email);
+
+                    unmatched.AddRange(byFolder);
+                    continue;
+                }
+
+                foreach (var batch in byFolder.Chunk(500))
+                {
+                    var uids = batch.Select(c => new UniqueId(c.Uid)).ToList();
+                    var summaries = await folder.FetchAsync(uids, items, ct);
+
+                    var byUid = summaries
+                        .Where(s => s.UniqueId.IsValid)
+                        .GroupBy(s => s.UniqueId.Id)
+                        .ToDictionary(g => g.Key, g => g.First());
+
+                    var found = new Dictionary<(string, int), IMessageSummary>();
+
+                    foreach (var c in batch)
+                    {
+                        if (!byUid.TryGetValue(c.Uid, out var s))
+                            continue;
+
+                        var serverMid = NormalizeMessageId(s.Envelope?.MessageId);
+                        var dbMid = NormalizeMessageId(c.MessageId);
+
+                        if (serverMid != null && dbMid != null
+                            && string.Equals(serverMid, dbMid, StringComparison.OrdinalIgnoreCase))
+                        {
+                            found[(c.Table, c.Id)] = s;
+                        }
+                    }
+
+                    var matched = batch.Where(c => found.ContainsKey((c.Table, c.Id))).ToList();
+                    unmatched.AddRange(batch.Where(c => !found.ContainsKey((c.Table, c.Id))));
+
+                    await MarkThreadHeadersCheckedAsync(conn, matched, found, null, ct);
+                    processed += matched.Count;
+                }
+
+                await folder.CloseAsync(false, ct);
+            }
+
+            if (unmatched.Count > 0)
+            {
+                var relocated = isGmail
+                    ? await FindByMessageIdInAllMailAsync(client, unmatched, items, ct)
+                    : new();
+
+                var foundElsewhere = relocated.ToDictionary(x => x.Key, x => x.Value.Summary);
+                var newLocation = relocated.ToDictionary(x => x.Key, x => (x.Value.Folder, x.Value.Summary.UniqueId.Id));
+
+                // Anche le righe non ritrovate vengono segnate come verificate (THREAD_ALIGNED = 'Y'),
+                // così non si riprovano ogni notte; la loro chiave attuale resta invariata.
+                foreach (var chunk in unmatched.Chunk(500))
+                    await MarkThreadHeadersCheckedAsync(conn, chunk.ToList(), foundElsewhere, newLocation, ct);
+
+                processed += unmatched.Count;
+
+                _logger.LogInformation(
+                    "Backfill header {Email}: {N} righe senza UID valido, ritrovate per Message-ID {Found}",
+                    a.Email, unmatched.Count, relocated.Count);
+            }
+        }
+        finally
+        {
+            try { if (client.IsConnected) await client.DisconnectAsync(true, ct); } catch { }
+        }
+
+        return processed;
+    }
+
+    private static async Task<Dictionary<(string Table, int Id), (string Folder, IMessageSummary Summary)>>
+        FindByMessageIdInAllMailAsync(
+            ImapClient client,
+            List<ThreadHeaderCandidate> rows,
+            MessageSummaryItems items,
+            CancellationToken ct)
+    {
+        var result = new Dictionary<(string Table, int Id), (string Folder, IMessageSummary Summary)>();
+
+        IMailFolder? all = null;
+        try { all = client.GetFolder(SpecialFolder.All); } catch { }
+
+        if (all == null)
+            return result;
+
+        await all.OpenAsync(FolderAccess.ReadOnly, ct);
+
+        var byMid = rows
+            .Select(r => (Row: r, Mid: NormalizeMessageId(r.MessageId)))
+            .Where(x => x.Mid != null && !x.Mid.StartsWith("fallback:", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(x => x.Mid!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.Row).ToList(), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var chunk in byMid.Keys.Chunk(25))
+        {
+            // Una sola SEARCH per gruppo: HEADER Message-ID x OR ... OR y
+            SearchQuery query = SearchQuery.HeaderContains("Message-ID", chunk[0]);
+
+            for (var i = 1; i < chunk.Length; i++)
+                query = query.Or(SearchQuery.HeaderContains("Message-ID", chunk[i]));
+
+            var uids = await all.SearchAsync(query, ct);
+
+            if (uids.Count == 0)
+                continue;
+
+            foreach (var s in await all.FetchAsync(uids, items, ct))
+            {
+                var mid = NormalizeMessageId(s.Envelope?.MessageId);
+
+                if (mid == null || !byMid.TryGetValue(mid, out var owners))
+                    continue;
+
+                foreach (var owner in owners)
+                    result.TryAdd((owner.Table, owner.Id), (all.FullName, s));
+            }
+        }
+
+        await all.CloseAsync(false, ct);
+
+        return result;
+    }
+
+    private static async Task MarkThreadHeadersCheckedAsync(
+        OracleConnection conn,
+        List<ThreadHeaderCandidate> batch,
+        Dictionary<(string Table, int Id), IMessageSummary> found,
+        Dictionary<(string Table, int Id), (string Folder, uint Uid)>? relocated,
+        CancellationToken ct)
+    {
+        foreach (var group in batch.GroupBy(c => c.Table))
+        {
+            var table = group.Key == "R" ? "SGAPP.EMAIL_RICEVUTE" : "SGAPP.EMAIL_INVIATE";
+            var rows = group.ToList();
+
+            // Header: riempio solo i campi vuoti.
+            // GMAIL_THREAD_ID invece vince sempre il valore letto da Gmail: la vecchia
+            // propagazione (EnsureGmailThreadForConversationAsync) ha scritto thread id di altre
+            // conversazioni su messaggi collegati via References, fondendo thread diversi.
+            var sql = $@"
+UPDATE {table}
+   SET IN_REPLY_TO     = NVL(IN_REPLY_TO, :p_irt),
+       REFERENCES_HDR  = CASE WHEN REFERENCES_HDR IS NULL THEN TO_CLOB(:p_refs) ELSE REFERENCES_HDR END,
+       GMAIL_THREAD_ID = NVL(:p_gthread, GMAIL_THREAD_ID),
+       THREAD_KEY      = CASE WHEN :p_root = 'Y' THEN :p_mid ELSE THREAD_KEY END,
+       THREAD_ALIGNED  = 'Y'
+ WHERE ID = :p_id";
+
+            await using var tx = (OracleTransaction)await conn.BeginTransactionAsync(ct);
+
+            await using var cmd = new OracleCommand(sql, conn)
+            {
+                BindByName = true,
+                ArrayBindCount = rows.Count,
+                Transaction = tx
+            };
+
+            string?[] irt = new string?[rows.Count];
+            string?[] refs = new string?[rows.Count];
+            string?[] gthread = new string?[rows.Count];
+            string[] root = Enumerable.Repeat("N", rows.Count).ToArray();
+            string?[] mid = new string?[rows.Count];
+
+            for (var i = 0; i < rows.Count; i++)
+            {
+                if (!found.TryGetValue((rows[i].Table, rows[i].Id), out var s))
+                    continue;
+
+                irt[i] = NormalizeMessageId(s.Envelope?.InReplyTo);
+
+                if (irt[i] is { Length: > 500 })
+                    irt[i] = null;
+
+                var r = s.References?
+                    .Select(NormalizeMessageId)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+                var joined = r is { Count: > 0 } ? string.Join(" ", r) : null;
+
+                // Il parametro è VARCHAR2: tengo la parte finale (i padri più vicini).
+                if (joined is { Length: > 3900 })
+                    joined = joined[^3900..];
+
+                refs[i] = joined;
+
+                gthread[i] = s.GMailThreadId.HasValue ? $"gmail:{s.GMailThreadId.Value}" : null;
+
+                // Verificato sul server e senza alcun padre: è l'inizio di un thread.
+                // Sostituisce le vecchie chiavi calcolate sull'oggetto.
+                if (irt[i] == null && refs[i] == null && gthread[i] == null)
+                {
+                    root[i] = "Y";
+                    mid[i] = NormalizeMessageId(rows[i].MessageId);
+                }
+            }
+
+            cmd.Parameters.Add("p_irt", OracleDbType.Varchar2, 500).Value =
+                irt.Select(x => (object?)x ?? DBNull.Value).ToArray();
+            cmd.Parameters.Add("p_refs", OracleDbType.Varchar2, 4000).Value =
+                refs.Select(x => (object?)x ?? DBNull.Value).ToArray();
+            cmd.Parameters.Add("p_gthread", OracleDbType.Varchar2, 128).Value =
+                gthread.Select(x => (object?)x ?? DBNull.Value).ToArray();
+            cmd.Parameters.Add("p_root", OracleDbType.Char, 1).Value = root;
+            cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value =
+                mid.Select(x => (object?)x ?? DBNull.Value).ToArray();
+            cmd.Parameters.Add("p_id", OracleDbType.Int32).Value =
+                rows.Select(x => x.Id).ToArray();
+
+            await cmd.ExecuteNonQueryAsync(ct);
+
+            // Messaggio ritrovato in un'altra cartella: aggiorno la posizione,
+            // serve anche al download su richiesta degli allegati.
+            var moved = relocated == null
+                ? new List<ThreadHeaderCandidate>()
+                : rows.Where(x => relocated.ContainsKey((x.Table, x.Id))).ToList();
+
+            if (moved.Count > 0)
+            {
+                await using var mv = new OracleCommand(
+                    $"UPDATE {table} SET FOLDER_PATH = :p_fp, MESSAGE_UID = :p_uid WHERE ID = :p_id", conn)
+                {
+                    BindByName = true,
+                    ArrayBindCount = moved.Count,
+                    Transaction = tx
+                };
+
+                mv.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value =
+                    moved.Select(x => NormalizeFolderPath(relocated![(x.Table, x.Id)].Folder)).ToArray();
+                mv.Parameters.Add("p_uid", OracleDbType.Int64).Value =
+                    moved.Select(x => (long)relocated![(x.Table, x.Id)].Uid).ToArray();
+                mv.Parameters.Add("p_id", OracleDbType.Int32).Value =
+                    moved.Select(x => x.Id).ToArray();
+
+                await mv.ExecuteNonQueryAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+        }
+    }
 
     private static bool IsNightWindow()
     {
@@ -159,7 +610,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             }
         }
     }
-    private static string? NormalizeMessageId(string? value)
+    internal static string? NormalizeMessageId(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
@@ -176,7 +627,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             : v.Trim();
     }
 
-    private static List<string> ExtractMessageIdsFromReferences(string? refs)
+    internal static List<string> ExtractMessageIdsFromReferences(string? refs)
     {
         if (string.IsNullOrWhiteSpace(refs))
             return new();
@@ -208,6 +659,8 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
     private static List<string> GetThreadCandidateMessageIds(MimeMessage message)
     {
+        // Ordine: prima il padre diretto (In-Reply-To), poi References
+        // dal più recente al più vecchio.
         var ids = new List<string>();
 
         var inReplyTo = NormalizeMessageId(message.InReplyTo);
@@ -218,6 +671,7 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
         {
             ids.AddRange(
                 message.References
+                    .Reverse()
                     .Select(NormalizeMessageId)
                     .Where(x => !string.IsNullOrWhiteSpace(x))!
             );
@@ -225,7 +679,6 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
 
         return ids
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Reverse()
             .ToList();
     }
     private sealed class ThreadResolveResult
@@ -242,12 +695,21 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
     string? providerThreadKey,
     CancellationToken ct)
     {
-        currentMessageId = NormalizeMessageId(currentMessageId) ?? currentMessageId;
+        currentMessageId =
+            NormalizeMessageId(currentMessageId)
+            ?? currentMessageId;
 
-        var providerThreadKeyNorm = (providerThreadKey ?? "").Trim();
+        var providerThreadKeyNorm =
+            (providerThreadKey ?? "").Trim();
+
+        // ============================================================
+        // 1. THREAD DEL PROVIDER: AUTORITATIVO
+        // ============================================================
+        // Se Gmail ci ha dato X-GM-THRID / GMailThreadId,
+        // non dobbiamo fare nessuna ricostruzione attraverso
+        // In-Reply-To o References.
         if (!string.IsNullOrWhiteSpace(providerThreadKeyNorm))
         {
-            // Per Gmail il thread id del provider è la chiave più affidabile e stabile.
             return new ThreadResolveResult
             {
                 ThreadKey = providerThreadKeyNorm,
@@ -255,51 +717,65 @@ WHERE NVL(ATTIVA, 'Y') = 'Y'";
             };
         }
 
+        // ============================================================
+        // 2. FALLBACK SOLO PER PROVIDER CHE NON DANNO UN THREAD ID
+        // ============================================================
+
         const string sqlFindByMessageId = @"
-SELECT THREAD_KEY, GMAIL_THREAD_ID
+SELECT THREAD_KEY
 FROM (
-    SELECT MESSAGE_ID,
-           THREAD_KEY,
-           GMAIL_THREAD_ID,
-           DATA_RICEZIONE AS DATA_REF
-      FROM SGAPP.EMAIL_RICEVUTE
-     WHERE CASELLA_ID = :p_cid
-       AND LOWER(MESSAGE_ID) = :p_mid
+    SELECT
+        THREAD_KEY,
+        DATA_RICEZIONE AS DATA_REF
+    FROM SGAPP.EMAIL_RICEVUTE
+    WHERE CASELLA_ID = :p_cid
+      AND LOWER(TRIM(MESSAGE_ID)) = :p_mid
 
     UNION ALL
 
-    SELECT MESSAGE_ID,
-           THREAD_KEY,
-           GMAIL_THREAD_ID,
-           DATA_INVIO AS DATA_REF
-      FROM SGAPP.EMAIL_INVIATE
-     WHERE CASELLA_ID = :p_cid
-       AND LOWER(MESSAGE_ID) = :p_mid
+    SELECT
+        THREAD_KEY,
+        DATA_INVIO AS DATA_REF
+    FROM SGAPP.EMAIL_INVIATE
+    WHERE CASELLA_ID = :p_cid
+      AND LOWER(TRIM(MESSAGE_ID)) = :p_mid
 )
 ORDER BY DATA_REF DESC
 FETCH FIRST 1 ROWS ONLY";
 
-        async Task<ThreadResolveResult?> FindParentAsync(string? rawMessageId)
+        async Task<ThreadResolveResult?> FindParentAsync(
+            string? rawMessageId)
         {
             var mid = NormalizeMessageId(rawMessageId);
+
             if (string.IsNullOrWhiteSpace(mid))
                 return null;
 
-            await using var cmd = new OracleCommand(sqlFindByMessageId, conn)
-            {
-                BindByName = true
-            };
+            await using var cmd =
+                new OracleCommand(sqlFindByMessageId, conn)
+                {
+                    BindByName = true
+                };
 
-            cmd.Parameters.Add("p_cid", OracleDbType.Int32).Value = casellaId;
-            cmd.Parameters.Add("p_mid", OracleDbType.Varchar2, 500).Value = mid.ToLowerInvariant();
+            cmd.Parameters.Add(
+                "p_cid",
+                OracleDbType.Int32).Value = casellaId;
 
-            await using var r = await cmd.ExecuteReaderAsync(ct);
+            cmd.Parameters.Add(
+                "p_mid",
+                OracleDbType.Varchar2,
+                500).Value = mid.ToLowerInvariant();
 
-            if (!await r.ReadAsync(ct))
+            await using var reader =
+                await cmd.ExecuteReaderAsync(ct);
+
+            if (!await reader.ReadAsync(ct))
                 return null;
 
-            var parentThreadKey = r.IsDBNull(0) ? null : r.GetString(0);
-            var parentGmailThreadId = r.IsDBNull(1) ? null : r.GetString(1);
+            var parentThreadKey =
+                reader.IsDBNull(0)
+                    ? null
+                    : reader.GetString(0);
 
             if (string.IsNullOrWhiteSpace(parentThreadKey))
                 parentThreadKey = mid;
@@ -307,21 +783,29 @@ FETCH FIRST 1 ROWS ONLY";
             return new ThreadResolveResult
             {
                 ThreadKey = parentThreadKey,
-                GmailThreadKey = parentGmailThreadId
+
+                // IMPORTANTISSIMO:
+                // mai inventare/ereditare un GmailThreadId
+                GmailThreadKey = null
             };
         }
 
-        foreach (var candidate in GetThreadCandidateMessageIds(message))
+        foreach (var candidate in
+                 GetThreadCandidateMessageIds(message))
         {
-            var found = await FindParentAsync(candidate);
+            var found =
+                await FindParentAsync(candidate);
+
             if (found != null)
                 return found;
         }
 
+        // Nessun parent trovato:
+        // il Message-ID diventa il thread fallback.
         return new ThreadResolveResult
         {
             ThreadKey = currentMessageId,
-            GmailThreadKey = providerThreadKey
+            GmailThreadKey = null
         };
     }
     private async Task FetchEmailsForAccount(
@@ -617,6 +1101,10 @@ UPDATE SGAPP.EMAIL_INVIATE
                     accountEmail, folder.FullName, (long)s.UniqueId.Id);
                 continue;
             }
+            var providerThreadKey =
+    s.GMailThreadId.HasValue
+        ? $"gmail:{s.GMailThreadId.Value}"
+        : null;
             int? forcedExistingSentId = null;
             var envMid = NormalizeMessageId(s.Envelope?.MessageId);
 
@@ -639,9 +1127,22 @@ UPDATE SGAPP.EMAIL_INVIATE
                 if (existsByEnvelope.HasValue)
                 {
                     if (isSentFolder)
-                        forcedExistingSentId = existsByEnvelope.Value;
+                    {
+                        forcedExistingSentId =
+                            existsByEnvelope.Value;
+                    }
                     else
+                    {
+                        await TouchExistingReceivedEmailAsync(
+                            dbConn,
+                            existsByEnvelope.Value,
+                            folder.FullName,
+                            (long)s.UniqueId.Id,
+                            providerThreadKey,
+                            ct);
+
                         continue;
+                    }
                 }
             }
 
@@ -683,13 +1184,26 @@ UPDATE SGAPP.EMAIL_INVIATE
             {
                 if (isSentFolder)
                 {
-                    forcedExistingSentId = existingId.Value;
+                    forcedExistingSentId =
+                        existingId.Value;
                 }
                 else
                 {
+                    await TouchExistingReceivedEmailAsync(
+                        dbConn,
+                        existingId.Value,
+                        folder.FullName,
+                        (long)s.UniqueId.Id,
+                        providerThreadKey,
+                        ct);
+
                     _logger.LogDebug(
                         "SKIP duplicata post-fetch già a DB [{Acc}] {Folder} uid={Uid} mid={Mid}",
-                        accountEmail, folder.FullName, (long)s.UniqueId.Id, mid);
+                        accountEmail,
+                        folder.FullName,
+                        (long)s.UniqueId.Id,
+                        mid);
+
                     continue;
                 }
             }
@@ -709,10 +1223,6 @@ UPDATE SGAPP.EMAIL_INVIATE
 
             int emailId;
 
-            var providerThreadKey = s.GMailThreadId.HasValue
-                 ? $"gmail:{s.GMailThreadId.Value}"
-                 : null;
-
            if (isSentFolder)
 {
     if (forcedExistingSentId.HasValue)
@@ -727,16 +1237,6 @@ UPDATE SGAPP.EMAIL_INVIATE
             providerThreadKey,
             ct);
 
-        if (!string.IsNullOrWhiteSpace(providerThreadKey))
-        {
-            await EnsureGmailThreadForConversationAsync(
-                dbConn,
-                casellaId,
-                mid,
-                full,
-                providerThreadKey,
-                ct);
-        }
     }
     else
     {
@@ -897,7 +1397,77 @@ UPDATE SGAPP.EMAIL_INVIATE
 
     await cmd.ExecuteNonQueryAsync(ct);
 }
-private sealed class HistoricalThreadSeed
+
+    private static async Task TouchExistingReceivedEmailAsync(
+    OracleConnection conn,
+    int emailId,
+    string folderPath,
+    long messageUid,
+    string? gmailThreadId,
+    CancellationToken ct)
+    {
+        const string sql = @"
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET FOLDER_PATH = NVL(FOLDER_PATH, :p_folder),
+       MESSAGE_UID = NVL(MESSAGE_UID, :p_uid),
+       LAST_EVENT_AT = SYSTIMESTAMP,
+
+       GMAIL_THREAD_ID =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN :p_gmail_thread
+               ELSE GMAIL_THREAD_ID
+           END,
+
+       THREAD_KEY =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN :p_gmail_thread
+               ELSE THREAD_KEY
+           END,
+
+       THREAD_ALIGNED =
+           CASE
+               WHEN :p_gmail_thread IS NOT NULL
+               THEN 'Y'
+               ELSE THREAD_ALIGNED
+           END
+
+ WHERE ID = :p_id";
+
+        await using var cmd =
+            new OracleCommand(sql, conn)
+            {
+                BindByName = true
+            };
+
+        cmd.Parameters.Add(
+            "p_folder",
+            OracleDbType.Varchar2,
+            512).Value =
+                NormalizeFolderPath(folderPath);
+
+        cmd.Parameters.Add(
+            "p_uid",
+            OracleDbType.Int64).Value =
+                messageUid;
+
+        cmd.Parameters.Add(
+            "p_gmail_thread",
+            OracleDbType.Varchar2,
+            128).Value =
+                string.IsNullOrWhiteSpace(gmailThreadId)
+                    ? DBNull.Value
+                    : gmailThreadId;
+
+        cmd.Parameters.Add(
+            "p_id",
+            OracleDbType.Int32).Value =
+                emailId;
+
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+    private sealed class HistoricalThreadSeed
 {
     public int CasellaId { get; init; }
 
@@ -1181,16 +1751,6 @@ RETURNING ID INTO :p_id";
         {
           await cmd.ExecuteNonQueryAsync(ct);
 
-if (!string.IsNullOrWhiteSpace(gmailThreadId))
-{
-    await EnsureGmailThreadForConversationAsync(
-        conn,
-        casellaId,
-        messageId,
-        message,
-        gmailThreadId,
-        ct);
-}
 
 if (outId.Value is
     Oracle.ManagedDataAccess.Types.OracleDecimal od)
@@ -1309,7 +1869,10 @@ UPDATE SGAPP.EMAIL_RICEVUTE
 
         // Prima provo dal BodyStructure IMAP
         if (body != null)
+        {
             CollectAttachmentParts(body, list);
+            DropDuplicateCalendarParts(list);
+        }
 
         // FALLBACK: se non trova nulla, provo dal messaggio completo
         if (list.Count == 0 && fullMessage?.Attachments != null)
@@ -1407,6 +1970,20 @@ RETURNING ID INTO :p_id";
         return res;
     }
 
+    // Gli inviti Gmail hanno sia la parte text/calendar (senza nome) sia invite.ics:
+    // se esiste già un .ics con nome, la parte senza nome è un doppione.
+    private static void DropDuplicateCalendarParts(
+        List<(string FileName, string Mime, string PartSpec)> list)
+    {
+        var hasNamedIcs = list.Any(x =>
+            x.FileName.EndsWith(".ics", StringComparison.OrdinalIgnoreCase)
+            && !x.FileName.Equals("invito.ics", StringComparison.OrdinalIgnoreCase));
+
+        if (hasNamedIcs)
+            list.RemoveAll(x => x.FileName.Equals("invito.ics", StringComparison.OrdinalIgnoreCase)
+                                && x.Mime.StartsWith("text/calendar", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void CollectAttachmentParts(
     BodyPart part,
     List<(string FileName, string Mime, string PartSpec)> acc)
@@ -1426,8 +2003,14 @@ RETURNING ID INTO :p_id";
                 mime.Equals("message/rfc822", StringComparison.OrdinalIgnoreCase) ||
                 fileName?.EndsWith(".eml", StringComparison.OrdinalIgnoreCase) == true;
 
+            // Inviti a riunione (Outlook/Exchange): la parte text/calendar
+            // spesso non ha nome file, ma contiene i dati dell'evento.
+            var isCalendar =
+                mime.StartsWith("text/calendar", StringComparison.OrdinalIgnoreCase);
+
             var isAttachment =
                 isEml ||
+                isCalendar ||
                 !string.IsNullOrWhiteSpace(fileName) ||
                 string.Equals(disp, "attachment", StringComparison.OrdinalIgnoreCase) ||
                 (!isInline && !mime.StartsWith("text/", StringComparison.OrdinalIgnoreCase));
@@ -1436,7 +2019,7 @@ RETURNING ID INTO :p_id";
             {
                 acc.Add((
                     string.IsNullOrWhiteSpace(fileName)
-                        ? isEml ? "email_allegata.eml" : "allegato"
+                        ? isEml ? "email_allegata.eml" : isCalendar ? "invito.ics" : "allegato"
                         : fileName,
                     mime,
                     basic.PartSpecifier
@@ -1469,6 +2052,7 @@ RETURNING ID INTO :p_id";
             ".txt" => "text/plain",
             ".html" or ".htm" => "text/html",
             ".eml" => "message/rfc822",
+            ".ics" => "text/calendar",
             ".doc" => "application/msword",
             ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             ".xls" => "application/vnd.ms-excel",
@@ -2971,8 +3555,52 @@ SELECT a.ID AS ALLEGATO_ID,
 
         var uid = new UniqueId((uint)info.MessageUid);
 
-        var sums = await folder.FetchAsync(new[] { uid }, MessageSummaryItems.BodyStructure, ct);
-        var body = sums.FirstOrDefault()?.Body;
+        // Verifico che all'UID ci sia davvero questo messaggio: su Gmail le mail archiviate
+        // escono dalla INBOX e GetFolderSafeAsync, se la cartella manca, ripiega sulla INBOX.
+        var dbMid = await GetEmailMessageIdAsync(conn, info.EmailId, ct);
+
+        var sums = await folder.FetchAsync(
+            new[] { uid },
+            MessageSummaryItems.BodyStructure | MessageSummaryItems.Envelope,
+            ct);
+
+        var summary = sums.FirstOrDefault();
+        var sameMessage = summary?.Body != null
+            && (dbMid == null || string.Equals(
+                    NormalizeMessageId(summary.Envelope?.MessageId), NormalizeMessageId(dbMid),
+                    StringComparison.OrdinalIgnoreCase));
+
+        if (!sameMessage && dbMid != null && (client.Capabilities & ImapCapabilities.GMailExt1) != 0)
+        {
+            // Ricerca per Message-ID in "Tutti i messaggi"; se trovato aggiorno la posizione a DB.
+            var all = client.GetFolder(SpecialFolder.All);
+            await all.OpenAsync(FolderAccess.ReadOnly, ct);
+
+            var hits = await all.SearchAsync(SearchQuery.HeaderContains("Message-ID", NormalizeMessageId(dbMid)!), ct);
+
+            if (hits.Count > 0)
+            {
+                folder = all;
+                uid = hits[0];
+                summary = (await all.FetchAsync(new[] { uid }, MessageSummaryItems.BodyStructure, ct)).FirstOrDefault();
+                sameMessage = summary?.Body != null;
+
+                if (sameMessage)
+                {
+                    await using var mv = new OracleCommand(@"
+UPDATE SGAPP.EMAIL_RICEVUTE
+   SET FOLDER_PATH = :p_fp, MESSAGE_UID = :p_uid
+ WHERE ID = :p_id", conn) { BindByName = true };
+
+                    mv.Parameters.Add("p_fp", OracleDbType.Varchar2, 512).Value = NormalizeFolderPath(all.FullName);
+                    mv.Parameters.Add("p_uid", OracleDbType.Int64).Value = (long)uid.Id;
+                    mv.Parameters.Add("p_id", OracleDbType.Int32).Value = info.EmailId;
+                    await mv.ExecuteNonQueryAsync(ct);
+                }
+            }
+        }
+
+        var body = sameMessage ? summary!.Body : null;
         if (body == null)
             throw new InvalidOperationException("BodyStructure NULL (messaggio non trovato / non accessibile).");
 
@@ -3224,16 +3852,7 @@ RETURNING ID INTO :p_id";
         {
           await cmd.ExecuteNonQueryAsync(ct);
 
-            if (!string.IsNullOrWhiteSpace(gmailThreadId))
-            {
-                await EnsureGmailThreadForConversationAsync(
-                    conn,
-                    casellaId,
-                    messageId,
-                    message,
-                    gmailThreadId,
-                    ct);
-            }
+            
 
             if (outId.Value is
                 Oracle.ManagedDataAccess.Types.OracleDecimal od)
@@ -3590,7 +4209,10 @@ private static string? ReadOracleText(
         var list = new List<(string FileName, string Mime, string PartSpec)>();
 
         if (body != null)
+        {
             CollectAttachmentParts(body, list);
+            DropDuplicateCalendarParts(list);
+        }
 
         if (list.Count == 0 && fullMessage?.Attachments != null)
         {

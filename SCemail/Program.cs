@@ -76,6 +76,7 @@ builder.Services.AddHttpClient("server", (sp, client) =>
 builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().CreateClient("server"));
 builder.Services.Configure<AttachmentsOptions>(builder.Configuration.GetSection("Attachments"));
 builder.Services.AddScoped<IEmailAttachmentsRepository, EmailAttachmentsRepository>();
+builder.Services.AddScoped<CalendarInviteService>();
 
 // ---------- Blazor / MVC ----------
 builder.Services.AddRazorPages();
