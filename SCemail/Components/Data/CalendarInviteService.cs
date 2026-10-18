@@ -21,6 +21,21 @@ public sealed class CalendarInvite
     public string? Status { get; init; }
     public List<CalendarAttendee> Attendees { get; init; } = new();
 
+    // Link della videochiamata (Google Meet, Teams, Zoom, Webex), come il pulsante "Partecipa" di Gmail.
+    public string? ConferenceUrl { get; init; }
+
+    // Ricorrenza in italiano (da RRULE), es. "Ogni settimana il lunedì, fino al 30/11/2026".
+    public string? RecurrenceText { get; init; }
+
+    // Singola occorrenza di un evento ricorrente (RECURRENCE-ID presente).
+    public bool IsSingleOccurrence { get; init; }
+
+    // Fuso originale dell'evento quando diverso dall'ora italiana (es. "America/New_York").
+    public string? OriginalTimeZone { get; init; }
+
+    public bool IsUpdate =>
+        Sequence > 0 && Method.Equals("REQUEST", StringComparison.OrdinalIgnoreCase);
+
     // Righe originali (già "unfolded") usate per costruire la REPLY.
     internal List<string> RawEventLines { get; init; } = new();
     internal List<string> RawTimezoneBlocks { get; init; } = new();
@@ -57,16 +72,19 @@ public sealed class CalendarInviteService
     private readonly AttachmentsOptions _opt;
     private readonly MailService_NEW _mail;
     private readonly ILogger<CalendarInviteService> _logger;
+    private readonly string? _connectionString;
 
     public CalendarInviteService(
         IEmailAttachmentsRepository attRepo,
         EmailFetchService fetch,
         IOptions<AttachmentsOptions> opt,
         MailService_NEW mail,
+        IConfiguration config,
         ILogger<CalendarInviteService> logger)
     {
         _attRepo = attRepo;
         _mail = mail;
+        _connectionString = config.GetConnectionString("OracleDb");
         _fetch = fetch;
         _opt = opt.Value;
         _logger = logger;
@@ -127,6 +145,66 @@ public sealed class CalendarInviteService
             _logger.LogWarning(ex, "Lettura invito .ics fallita AllegatoId={Id}", attachmentId);
             return null;
         }
+    }
+
+    // Risposta già data dalla casella a questo invito, come lo stato "Hai risposto Sì" di Gmail:
+    // 1) ultima risposta inviata dall'app (EMAIL_INVIATE con In-Reply-To = invito e oggetto "Accettato:" ecc.)
+    // 2) altrimenti il PARTSTAT della casella nell'invito stesso (gli inviti aggiornati lo riportano).
+    public async Task<CalendarReplyKind?> GetMyResponseAsync(
+        CalendarInvite invite,
+        int? casellaId,
+        string? inviteMessageId,
+        string? casellaEmail,
+        CancellationToken ct = default)
+    {
+        var mid = (inviteMessageId ?? "").Trim().Trim('<', '>');
+
+        if (casellaId.HasValue && mid.Length > 0 && !string.IsNullOrWhiteSpace(_connectionString))
+        {
+            try
+            {
+                await using var conn = new Oracle.ManagedDataAccess.Client.OracleConnection(_connectionString);
+                await conn.OpenAsync(ct);
+
+                await using var cmd = new Oracle.ManagedDataAccess.Client.OracleCommand(@"
+SELECT DBMS_LOB.SUBSTR(TO_CLOB(OGGETTO), 200, 1)
+  FROM SGAPP.EMAIL_INVIATE
+ WHERE CASELLA_ID = :p_cid
+   AND LOWER(TRIM(IN_REPLY_TO)) = LOWER(:p_mid)
+ ORDER BY DATA_INVIO DESC, ID DESC", conn) { BindByName = true };
+
+                cmd.Parameters.Add("p_cid", Oracle.ManagedDataAccess.Client.OracleDbType.Int32).Value = casellaId.Value;
+                cmd.Parameters.Add("p_mid", Oracle.ManagedDataAccess.Client.OracleDbType.Varchar2, 500).Value = mid;
+
+                await using var r = await cmd.ExecuteReaderAsync(ct);
+
+                while (await r.ReadAsync(ct))
+                {
+                    var subject = r.IsDBNull(0) ? "" : r.GetString(0);
+
+                    foreach (var kind in Enum.GetValues<CalendarReplyKind>())
+                    {
+                        if (subject.StartsWith(ReplySubjectPrefix(kind) + ":", StringComparison.OrdinalIgnoreCase))
+                            return kind;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Lettura risposta invito fallita UID={Uid}", invite.Uid);
+            }
+        }
+
+        var me = invite.Attendees.FirstOrDefault(a =>
+            a.Email.Equals((casellaEmail ?? "").Trim(), StringComparison.OrdinalIgnoreCase));
+
+        return (me?.PartStat ?? "").ToUpperInvariant() switch
+        {
+            "ACCEPTED" => CalendarReplyKind.Accepted,
+            "TENTATIVE" => CalendarReplyKind.Tentative,
+            "DECLINED" => CalendarReplyKind.Declined,
+            _ => null
+        };
     }
 
     // Invia all'organizzatore la risposta all'invito, nello stesso thread della mail ricevuta.
@@ -191,9 +269,8 @@ public sealed class CalendarInviteService
 
         var method = "";
         var timezoneBlocks = new List<string>();
-        var eventLines = new List<string>();
-        var inEvent = false;
-        var eventDone = false;
+        var events = new List<List<string>>();
+        List<string>? eventLines = null;
         var nestedDepth = 0;
         StringBuilder? tzBlock = null;
 
@@ -220,19 +297,19 @@ public sealed class CalendarInviteService
                 continue;
             }
 
-            if (!inEvent && upper.StartsWith("METHOD:"))
+            if (eventLines == null && upper.StartsWith("METHOD:"))
             {
                 method = line[7..].Trim();
                 continue;
             }
 
-            if (upper == "BEGIN:VEVENT" && !eventDone)
+            if (upper == "BEGIN:VEVENT" && eventLines == null)
             {
-                inEvent = true;
+                eventLines = new List<string>();
                 continue;
             }
 
-            if (!inEvent)
+            if (eventLines == null)
                 continue;
 
             if (upper.StartsWith("BEGIN:"))
@@ -252,8 +329,8 @@ public sealed class CalendarInviteService
 
                 if (upper == "END:VEVENT")
                 {
-                    inEvent = false;
-                    eventDone = true;
+                    events.Add(eventLines);
+                    eventLines = null;
                 }
 
                 continue;
@@ -263,8 +340,15 @@ public sealed class CalendarInviteService
                 eventLines.Add(line);
         }
 
-        if (eventLines.Count == 0)
+        if (events.Count == 0)
             return null;
+
+        // Evento ricorrente con eccezioni: più VEVENT con lo stesso UID.
+        // Come Gmail mostro l'evento principale (senza RECURRENCE-ID); se l'invito
+        // riguarda solo una singola occorrenza, mostro quella.
+        eventLines = events.FirstOrDefault(e =>
+                         !e.Any(l => l.StartsWith("RECURRENCE-ID", StringComparison.OrdinalIgnoreCase)))
+                     ?? events[0];
 
         var props = eventLines.Select(ParseProperty).ToList();
 
@@ -286,18 +370,32 @@ public sealed class CalendarInviteService
                 : allDay ? start.Value.AddDays(1) : start;
         }
 
+        var location = Unescape(Value("LOCATION"));
+        var description = CleanDescription(Unescape(Value("DESCRIPTION")));
+
+        var tzid = Unquote(dtStart?.Param("TZID"));
+        var originalTz = !string.IsNullOrWhiteSpace(tzid)
+                         && TryFindTimeZone(tzid, out var tzInfo)
+                         && tzInfo.BaseUtcOffset != RomeTz.BaseUtcOffset
+            ? tzid
+            : null;
+
         return new CalendarInvite
         {
             Method = method,
             Uid = Value("UID") ?? "",
             Sequence = int.TryParse(Value("SEQUENCE"), out var seq) ? seq : 0,
             Summary = Unescape(Value("SUMMARY")) ?? "(senza titolo)",
-            Location = Unescape(Value("LOCATION")),
-            Description = Unescape(Value("DESCRIPTION")),
+            Location = location,
+            Description = description,
             Status = Value("STATUS"),
             StartLocal = start,
             EndLocal = end,
             AllDay = allDay,
+            ConferenceUrl = FindConferenceUrl(props, location, Unescape(Value("DESCRIPTION"))),
+            RecurrenceText = DescribeRecurrence(Value("RRULE")),
+            IsSingleOccurrence = props.Any(p => p.Name == "RECURRENCE-ID"),
+            OriginalTimeZone = originalTz,
             OrganizerEmail = MailtoAddress(organizer?.Value),
             OrganizerName = Unquote(organizer?.Param("CN")),
             Attendees = props
@@ -552,17 +650,161 @@ public sealed class CalendarInviteService
     private static string? Unquote(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim().Trim('"');
 
+    // RFC 5545 3.3.11: \n \N \, \; \\ in un solo passaggio (con Replace in sequenza
+    // "\\n" letterale diventava un a capo).
     private static string? Unescape(string? value)
     {
         if (value == null)
             return null;
 
-        return value
-            .Replace("\\n", "\n")
-            .Replace("\\N", "\n")
-            .Replace("\\,", ",")
-            .Replace("\\;", ";")
-            .Replace("\\\\", "\\");
+        var sb = new StringBuilder(value.Length);
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (value[i] == '\\' && i + 1 < value.Length)
+            {
+                var next = value[++i];
+                sb.Append(next is 'n' or 'N' ? '\n' : next);
+            }
+            else
+            {
+                sb.Append(value[i]);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    // Gmail nasconde il blocco tecnico di Google Meet ("-::~:~::~ ... ::-") e
+    // le istruzioni automatiche: qui faccio lo stesso, tengo solo il testo scritto dall'organizzatore.
+    private static string? CleanDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+            return null;
+
+        // Il blocco è racchiuso tra due righe marcatore uguali "-::~:~::~:~ ... ~:~::~:~::-":
+        // tolgo dalla prima all'ultima riga marcatore compresa.
+        var text = System.Text.RegularExpressions.Regex.Replace(
+            description.Replace("\r\n", "\n"),
+            @"(?m)^-::~:~::~[^\n]*$[\s\S]*^-::~:~::~[^\n]*$\n?",
+            "");
+
+        // Marcatore rimasto senza la sua coppia (descrizione troncata).
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"(?m)^-::~:~::~[^\n]*$\n?", "");
+
+        // Descrizioni inviate in HTML (Outlook/Teams): tolgo i tag.
+        if (text.Contains('<') && text.Contains('>'))
+            text = System.Text.RegularExpressions.Regex.Replace(text, "<[^>]+>", " ");
+
+        text = System.Net.WebUtility.HtmlDecode(text);
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\n{3,}", "\n\n").Trim();
+
+        return text.Length == 0 ? null : text;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ConferenceRegex = new(
+        @"https?://(?:meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|[\w.-]*zoom\.us|[\w.-]*webex\.com)/[^\s<>""']+",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    private static string? FindConferenceUrl(List<IcsProperty> props, string? location, string? rawDescription)
+    {
+        // Proprietà dedicate di Google e Microsoft, poi link riconoscibili in luogo/descrizione.
+        foreach (var name in new[] { "X-GOOGLE-CONFERENCE", "X-MICROSOFT-ONLINEMEETINGEXTERNALLINK", "X-MICROSOFT-SKYPETEAMSMEETINGURL" })
+        {
+            var v = props.FirstOrDefault(p => p.Name == name)?.Value?.Trim();
+            if (!string.IsNullOrWhiteSpace(v) && v.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return v;
+        }
+
+        foreach (var text in new[] { location, rawDescription })
+        {
+            var m = string.IsNullOrWhiteSpace(text) ? null : ConferenceRegex.Match(text);
+            if (m is { Success: true })
+                return m.Value.TrimEnd('.', ',', ';', ')');
+        }
+
+        return null;
+    }
+
+    // Traduzione delle RRULE più comuni, come la riga "Ogni settimana il lunedì" di Gmail.
+    private static string? DescribeRecurrence(string? rrule)
+    {
+        if (string.IsNullOrWhiteSpace(rrule))
+            return null;
+
+        var parts = rrule.Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2))
+            .Where(p => p.Length == 2)
+            .GroupBy(p => p[0].Trim().ToUpperInvariant())
+            .ToDictionary(g => g.Key, g => g.First()[1].Trim());
+
+        if (!parts.TryGetValue("FREQ", out var freq))
+            return null;
+
+        var interval = parts.TryGetValue("INTERVAL", out var iv) && int.TryParse(iv, out var n) && n > 1 ? n : 1;
+
+        var text = freq.ToUpperInvariant() switch
+        {
+            "DAILY" => interval == 1 ? "Ogni giorno" : $"Ogni {interval} giorni",
+            "WEEKLY" => interval == 1 ? "Ogni settimana" : $"Ogni {interval} settimane",
+            "MONTHLY" => interval == 1 ? "Ogni mese" : $"Ogni {interval} mesi",
+            "YEARLY" => interval == 1 ? "Ogni anno" : $"Ogni {interval} anni",
+            _ => null
+        };
+
+        if (text == null)
+            return null;
+
+        if (parts.TryGetValue("BYDAY", out var byDay))
+        {
+            var names = new Dictionary<string, string>
+            {
+                ["MO"] = "lunedì", ["TU"] = "martedì", ["WE"] = "mercoledì", ["TH"] = "giovedì",
+                ["FR"] = "venerdì", ["SA"] = "sabato", ["SU"] = "domenica"
+            };
+
+            // Con l'ordinale l'articolo va per ogni giorno ("il primo lunedì", "l'ultimo venerdì").
+            var ord = new Dictionary<string, string>
+            {
+                ["1"] = "il primo", ["2"] = "il secondo", ["3"] = "il terzo", ["4"] = "il quarto", ["-1"] = "l'ultimo"
+            };
+
+            var hasOrdinal = false;
+
+            var days = byDay.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(d =>
+                {
+                    var code = d.Length >= 2 ? d[^2..].ToUpperInvariant() : d;
+                    var prefix = d.Length > 2 ? d[..^2] : "";
+                    var day = names.TryGetValue(code, out var dn) ? dn : code;
+
+                    if (prefix.Length > 0 && ord.TryGetValue(prefix, out var o))
+                    {
+                        hasOrdinal = true;
+                        return $"{o} {day}";
+                    }
+
+                    return day;
+                })
+                .ToList();
+
+            if (days.Count == 5 && byDay.Split(',').All(d => d is "MO" or "TU" or "WE" or "TH" or "FR"))
+                text += " nei giorni feriali";
+            else if (days.Count > 0)
+                text += (hasOrdinal ? " " : " il ") + string.Join(", ", days);
+        }
+        else if (parts.TryGetValue("BYMONTHDAY", out var md))
+        {
+            text += $" il giorno {md}";
+        }
+
+        if (parts.TryGetValue("COUNT", out var count))
+            text += $", {count} volte";
+        else if (parts.TryGetValue("UNTIL", out var until) && until.Length >= 8
+                 && DateTime.TryParseExact(until[..8], "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var u))
+            text += $", fino al {u:dd/MM/yyyy}";
+
+        return text;
     }
 
     // RFC 5545 3.1: righe max 75 ottetti, continuazione con spazio iniziale.

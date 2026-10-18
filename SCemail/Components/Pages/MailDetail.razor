@@ -328,7 +328,9 @@
 </div>
                        @if (_invites.TryGetValue(InviteKey(mail), out var invite) && invite != null)
 {
-    <div class="calendar-invite @(invite.IsCancelled ? "cancelled" : "")">
+    var inviteState = GetInviteState(mail, invite);
+
+    <div class="calendar-invite @(invite.IsCancelled ? "cancelled" : "") @(inviteState == InviteState.Outdated ? "outdated" : "")">
         <div class="ci-head">
             <MudIcon Icon="@(invite.IsCancelled ? Icons.Material.Filled.EventBusy : Icons.Material.Filled.Event)"
                      Size="Size.Small" />
@@ -337,11 +339,43 @@
             </span>
         </div>
 
-        <div class="ci-row"><b>Quando:</b> @FormatInviteWhen(invite)</div>
+        @if (inviteState == InviteState.Outdated)
+        {
+            <div class="ci-note">Questa versione dell'invito è stata sostituita da una più recente nella conversazione.</div>
+        }
 
-        @if (!string.IsNullOrWhiteSpace(invite.Location))
+        <div class="ci-row">
+            <b>Quando:</b> @FormatInviteWhen(invite)
+            @if (!string.IsNullOrWhiteSpace(invite.OriginalTimeZone))
+            {
+                <span class="ci-muted">&nbsp;(ora italiana; fuso dell'evento: @invite.OriginalTimeZone)</span>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(invite.RecurrenceText))
+        {
+            <div class="ci-row"><b>Ripetizione:</b> @invite.RecurrenceText</div>
+        }
+        else if (invite.IsSingleOccurrence)
+        {
+            <div class="ci-row ci-muted">Riguarda una sola occorrenza di un evento ricorrente.</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(invite.Location)
+             && !string.Equals(invite.Location?.Trim(), invite.ConferenceUrl, StringComparison.OrdinalIgnoreCase))
         {
             <div class="ci-row"><b>Dove:</b> @invite.Location</div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(invite.ConferenceUrl) && !invite.IsCancelled)
+        {
+            <div class="ci-row">
+                <a class="ci-join" href="@invite.ConferenceUrl" target="_blank" rel="noopener noreferrer">
+                    <MudIcon Icon="@Icons.Material.Filled.VideoCall" Size="Size.Small" />
+                    @ConferenceLabel(invite.ConferenceUrl)
+                </a>
+                <span class="ci-muted">&nbsp;@invite.ConferenceUrl</span>
+            </div>
         }
 
         @if (!string.IsNullOrWhiteSpace(invite.OrganizerEmail))
@@ -358,21 +392,28 @@
         @if (invite.Attendees.Count > 0)
         {
             <div class="ci-row ci-muted">
-                <b>Partecipanti:</b>
+                <b>Partecipanti (@invite.Attendees.Count):</b>
                 @(string.Join(", ", invite.Attendees.Select(FormatAttendee)))
             </div>
         }
 
-        @if (invite.CanReply && !string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase))
+        @if (!string.IsNullOrWhiteSpace(invite.Description))
+        {
+            <div class="ci-desc">@invite.Description</div>
+        }
+
+        @if (inviteState == InviteState.CanReply)
         {
             <div class="ci-actions">
+                <span class="ci-question">Partecipi?</span>
+
                 <MudButton Size="Size.Small"
                            Variant="@(IsInviteReply(mail, CalendarReplyKind.Accepted) ? Variant.Filled : Variant.Outlined)"
                            Color="Color.Success"
                            StartIcon="@Icons.Material.Filled.Check"
                            Disabled="@_inviteSending"
                            OnClick="@(() => ReplyToInviteAsync(mail, invite, CalendarReplyKind.Accepted))">
-                    Accetta
+                    Sì
                 </MudButton>
 
                 <MudButton Size="Size.Small"
@@ -390,9 +431,18 @@
                            StartIcon="@Icons.Material.Filled.Close"
                            Disabled="@_inviteSending"
                            OnClick="@(() => ReplyToInviteAsync(mail, invite, CalendarReplyKind.Declined))">
-                    Rifiuta
+                    No
                 </MudButton>
             </div>
+
+            @if (_inviteReplies.TryGetValue(InviteKey(mail), out var given))
+            {
+                <div class="ci-note">Hai risposto: <b>@ReplyLabel(given)</b>. Puoi cambiare risposta in qualsiasi momento.</div>
+            }
+        }
+        else if (inviteState == InviteState.Organizer)
+        {
+            <div class="ci-note">Sei l'organizzatore di questo evento.</div>
         }
     </div>
 }
@@ -2026,9 +2076,24 @@ private async Task LoadCalendarInvitesAsync()
             if (icsAttachment == null)
                 continue;
 
-            _invites[key] = await InviteSvc.LoadInviteAsync(
+            var loaded = await InviteSvc.LoadInviteAsync(
                 icsAttachment.Id,
                 ResolveAttachmentSource(mail));
+
+            _invites[key] = loaded;
+
+            // Risposta già data (anche in sessioni precedenti), come "Hai risposto Sì" di Gmail.
+            if (loaded != null && loaded.CanReply && !string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase))
+            {
+                var given = await InviteSvc.GetMyResponseAsync(
+                    loaded,
+                    mail.CasellaId,
+                    mail.MessageId,
+                    ExtractEmailOnly(mail.CasellaEmail));
+
+                if (given.HasValue)
+                    _inviteReplies[key] = given.Value;
+            }
 
             changed = true;
         }
@@ -2042,10 +2107,66 @@ private async Task LoadCalendarInvitesAsync()
     }
 }
 
+private enum InviteState
+{
+    ReadOnly,   // risposta di un partecipante, annullamento, mail inviata
+    CanReply,
+    Organizer,  // la casella è l'organizzatore: niente Sì/Forse/No (come Gmail)
+    Outdated    // esiste nel thread una versione più recente dello stesso evento
+}
+
+private InviteState GetInviteState(EmailDetail_NEW mail, CalendarInvite invite)
+{
+    // Stesso UID più avanti nel thread con SEQUENCE maggiore (o annullamento successivo):
+    // questa versione non è più valida, come gli inviti superati in Gmail.
+    var newer = _thread
+        .Where(m => (m.Data ?? DateTime.MinValue) > (mail.Data ?? DateTime.MinValue))
+        .Select(m => _invites.TryGetValue(InviteKey(m), out var other) ? other : null)
+        .Any(other => other != null
+                      && string.Equals(other.Uid, invite.Uid, StringComparison.OrdinalIgnoreCase)
+                      && !other.Method.Equals("REPLY", StringComparison.OrdinalIgnoreCase)
+                      && (other.Sequence > invite.Sequence || other.IsCancelled));
+
+    if (newer && !invite.IsCancelled)
+        return InviteState.Outdated;
+
+    if (!invite.CanReply || string.Equals(mail.Tipo, "I", StringComparison.OrdinalIgnoreCase))
+        return InviteState.ReadOnly;
+
+    var casella = ExtractEmailOnly(mail.CasellaEmail);
+
+    if (!string.IsNullOrWhiteSpace(casella)
+        && string.Equals(casella, invite.OrganizerEmail, StringComparison.OrdinalIgnoreCase))
+        return InviteState.Organizer;
+
+    return InviteState.CanReply;
+}
+
+private static string ConferenceLabel(string? url)
+{
+    var u = (url ?? "").ToLowerInvariant();
+
+    if (u.Contains("meet.google.com")) return "Partecipa con Google Meet";
+    if (u.Contains("teams.")) return "Partecipa con Microsoft Teams";
+    if (u.Contains("zoom.us")) return "Partecipa con Zoom";
+    if (u.Contains("webex.com")) return "Partecipa con Webex";
+    return "Partecipa alla videochiamata";
+}
+
+private static string ReplyLabel(CalendarReplyKind kind) => kind switch
+{
+    CalendarReplyKind.Accepted => "Sì",
+    CalendarReplyKind.Tentative => "Forse",
+    _ => "No"
+};
+
 private static string InviteTitle(CalendarInvite invite)
 {
     if (invite.IsCancelled)
         return "Riunione annullata";
+
+    if (invite.IsUpdate)
+        return "Invito aggiornato";
 
     return invite.Method.ToUpperInvariant() switch
     {
@@ -2078,7 +2199,7 @@ private static string FormatInviteWhen(CalendarInvite invite)
         return "-";
 
     var start = invite.StartLocal.Value;
-    var end = invite.EndLocal;
+    var end = invite.EndLocal == start ? null : invite.EndLocal; // es. annullamenti senza DTEND
 
     if (invite.AllDay)
     {
@@ -3768,8 +3889,48 @@ private string FormatRecipientsForForward(
     .calendar-invite .ci-actions {
         display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: 8px;
         margin-top: 10px;
+    }
+
+    .calendar-invite .ci-question {
+        font-weight: 600;
+        margin-right: 4px;
+    }
+
+    .calendar-invite .ci-note {
+        margin-top: 6px;
+        color: #5f6368;
+        font-size: 12px;
+    }
+
+    .calendar-invite .ci-desc {
+        margin-top: 8px;
+        padding-top: 8px;
+        border-top: 1px solid #dadce0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 180px;
+        overflow-y: auto;
+    }
+
+    .calendar-invite .ci-join {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 10px;
+        border-radius: 4px;
+        background: #1a73e8;
+        color: #fff !important;
+        font-weight: 500;
+        text-decoration: none;
+    }
+
+    .calendar-invite.outdated {
+        opacity: .7;
+        border-left-color: #9aa0a6;
+        background: #f8f9fa;
     }
 
     .c-text {
