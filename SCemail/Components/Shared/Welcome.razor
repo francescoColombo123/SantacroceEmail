@@ -408,6 +408,12 @@ string.IsNullOrWhiteSpace(_cp)
                            OnClick="@GoToBlacklist">
                     Blacklist
                 </MudButton>
+                <MudButton Variant="Variant.Outlined"
+                           Color="Color.Secondary"
+                           StartIcon="@Icons.Material.Filled.Phone"
+                           Href="@($"/chiamate?cp={Uri.EscapeDataString(_cp ?? "")}")">
+                    Chiamate
+                </MudButton>
             }
         </div>
     </div>

@@ -77,6 +77,8 @@ builder.Services.AddScoped(sp => sp.GetRequiredService<IHttpClientFactory>().Cre
 builder.Services.Configure<AttachmentsOptions>(builder.Configuration.GetSection("Attachments"));
 builder.Services.AddScoped<IEmailAttachmentsRepository, EmailAttachmentsRepository>();
 builder.Services.AddScoped<CalendarInviteService>();
+// ---------- Registro chiamate mobile (API /api/mobile/*, pagina /chiamate) ----------
+builder.Services.AddSingleton<SCemail.Mobile.MobileRepository>();
 
 // ---------- Blazor / MVC ----------
 builder.Services.AddRazorPages();

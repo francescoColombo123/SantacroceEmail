@@ -1,0 +1,354 @@
+@page "/chiamate"
+@using Microsoft.JSInterop
+@using SCemail.Mobile
+@inject MobileRepository Repo
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject SCemail.Components.Data.AccessiService AccessiSrv
+@inject IJSRuntime JS
+
+@* Consultazione delle chiamate rilevate dai telefoni aziendali + gestione dispositivi. Solo admin. *@
+
+<div class="container-fluid my-4" style="max-width:1400px">
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">📞 Chiamate telefoni aziendali</h5>
+            <button class="btn btn-light btn-sm" @onclick="TornaHome">⬅️ Home</button>
+        </div>
+
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-sm-6 col-md-2">
+                    <label class="form-label small mb-1">Periodo</label>
+                    <select class="form-select form-select-sm" @bind="_periodo">
+                        <option value="oggi">Oggi</option>
+                        <option value="ieri">Ieri</option>
+                        <option value="7">Ultimi 7 giorni</option>
+                        <option value="30">Ultimi 30 giorni</option>
+                        <option value="90">Ultimi 90 giorni</option>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label small mb-1">Dispositivo</label>
+                    <select class="form-select form-select-sm" @bind="_dispositivoId">
+                        <option value="">Tutti</option>
+                        @foreach (var d in _dispositivi)
+                        {
+                            <option value="@d.Id">@d.Nome – @d.Proprietario</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-2">
+                    <label class="form-label small mb-1">Tipo</label>
+                    <select class="form-select form-select-sm" @bind="_tipo">
+                        <option value="perse">Perse</option>
+                        <option value="risposte">Risposte</option>
+                        <option value="rifiutate">Rifiutate</option>
+                        <option value="uscita">In uscita</option>
+                        <option value="tutte">Tutte</option>
+                    </select>
+                </div>
+                <div class="col-sm-6 col-md-3">
+                    <label class="form-label small mb-1">Numero contiene</label>
+                    <input class="form-control form-control-sm" placeholder="es. 333123" @bind="_numero" />
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-primary btn-sm w-100" @onclick="CaricaTutto" disabled="@_loading">
+                        @(_loading ? "Caricamento…" : "🔄 Aggiorna")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @* ------------------------------------------------------------ riepilogo dispositivi *@
+    <div class="card shadow-sm mt-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <b>Dispositivi (conteggi nel periodo)</b>
+            <div class="d-flex gap-2">
+                <input class="form-control form-control-sm" style="width:220px" placeholder="Nota per il nuovo codice"
+                       @bind="_notaCodice" />
+                <button class="btn btn-success btn-sm" @onclick="() => GeneraCodice(null)">➕ Nuovo dispositivo</button>
+            </div>
+        </div>
+
+        @if (_codiceGenerato is not null)
+        {
+            <div class="alert alert-success m-3 mb-0">
+                <div>Codice di attivazione @(_codicePer is null ? "per un nuovo telefono" : $"per riassociare «{_codicePer}»"):</div>
+                <div class="fs-3 fw-bold font-monospace my-1">@_codiceGenerato</div>
+                <small>Valido fino al @_codiceScadenza.ToString("dd/MM/yyyy HH:mm"), utilizzabile una sola volta.
+                    Inseriscilo nell'app al primo avvio. Non verrà mostrato di nuovo.</small>
+                <button class="btn btn-sm btn-outline-secondary float-end" @onclick="() => _codiceGenerato = null">Chiudi</button>
+            </div>
+        }
+
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Dispositivo</th>
+                        <th>Proprietario</th>
+                        <th class="text-center">Risposte</th>
+                        <th class="text-center">Perse</th>
+                        <th class="text-center">Rifiutate</th>
+                        <th class="text-center">In uscita</th>
+                        <th>Ultimo contatto</th>
+                        <th>Stato</th>
+                        <th class="text-center">Azioni</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!_dispositivi.Any())
+                    {
+                        <tr><td colspan="9" class="text-center py-3 text-muted">
+                            @(_loading ? "Caricamento…" : "Nessun dispositivo registrato. Genera un codice con «Nuovo dispositivo».")
+                        </td></tr>
+                    }
+                    @foreach (var d in _dispositivi)
+                    {
+                        <tr class="@(d.IsActive ? "" : "table-secondary")">
+                            <td>
+                                <b>@d.Nome</b>
+                                <div class="small text-muted">@d.Modello @(d.AndroidVersion is null ? "" : $"· Android {d.AndroidVersion}") @(d.NumeroSim is null ? "" : $"· {d.NumeroSim}")</div>
+                            </td>
+                            <td>@d.Proprietario</td>
+                            <td class="text-center">@d.Risposte</td>
+                            <td class="text-center">
+                                @if (d.Perse > 0) { <span class="badge bg-danger">@d.Perse</span> } else { <span>0</span> }
+                            </td>
+                            <td class="text-center">@d.Rifiutate</td>
+                            <td class="text-center">@d.Uscita</td>
+                            <td>
+                                @if (d.UltimoContatto is { } uc)
+                                {
+                                    var locale = MobileTime.ToLocal(uc);
+                                    <span>@locale.ToString("dd/MM HH:mm")</span>
+                                    @if (d.IsActive && DateTime.UtcNow - uc > TimeSpan.FromHours(24))
+                                    {
+                                        <span class="badge bg-warning text-dark ms-1" title="Il telefono non contatta il server da oltre 24 ore">silenzioso</span>
+                                    }
+                                }
+                                else { <span class="text-muted">mai</span> }
+                            </td>
+                            <td>
+                                @if (d.IsActive) { <span class="badge bg-success">Attivo</span> }
+                                else { <span class="badge bg-secondary">Disattivato</span> }
+                            </td>
+                            <td class="text-center text-nowrap">
+                                <button class="btn btn-sm btn-outline-primary" title="Genera un codice per riassociare il dispositivo (es. app reinstallata)"
+                                        @onclick="() => GeneraCodice(d)">🔁 Riassocia</button>
+                                @if (d.IsActive)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CambiaStato(d, false)">⛔ Disattiva</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-success" @onclick="() => CambiaStato(d, true)">✅ Riattiva</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    @* ------------------------------------------------------------ elenco chiamate *@
+    <div class="card shadow-sm mt-3">
+        <div class="card-header d-flex justify-content-between">
+            <b>Chiamate</b>
+            <small class="text-muted">@_chiamate.Count risultati@(_chiamate.Count >= Limite ? $" (mostrate le prime {Limite})" : "") · orari in ora italiana</small>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Data e ora</th>
+                        <th>Dispositivo</th>
+                        <th>Numero</th>
+                        <th>Direzione</th>
+                        <th>Esito</th>
+                        <th class="text-end">Durata</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (!_chiamate.Any())
+                    {
+                        <tr><td colspan="6" class="text-center py-3 text-muted">@(_loading ? "Caricamento…" : "Nessuna chiamata nel periodo selezionato.")</td></tr>
+                    }
+                    @foreach (var c in _chiamate)
+                    {
+                        <tr>
+                            <td class="text-nowrap">@MobileTime.ToLocal(c.DataInizio).ToString("dd/MM/yyyy HH:mm:ss")</td>
+                            <td>@c.Nome <span class="small text-muted">(@c.Proprietario)</span></td>
+                            <td class="font-monospace">
+                                @if (c.NumeroChiamante is null) { <i class="text-muted">@EtichettaPresentazione(c.Presentazione)</i> }
+                                else { <a href="tel:@c.NumeroChiamante">@c.NumeroChiamante</a> }
+                            </td>
+                            <td>@(c.Direzione switch { "INCOMING" => "↙ In entrata", "OUTGOING" => "↗ In uscita", _ => "?" })</td>
+                            <td><span class="badge @ClasseEsito(c.Esito)">@EtichettaEsito(c)</span></td>
+                            <td class="text-end font-monospace">@FormatDurata(c.DurataSecondi)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const int Limite = 1000;
+
+    private string? _cp;
+    private string? _utente;
+    private bool _loading = true;
+
+    private string _periodo = "7";
+    private string _dispositivoId = "";
+    private string _tipo = "perse";
+    private string? _numero;
+
+    private List<MobileDeviceStats> _dispositivi = new();
+    private List<MobileCallRow> _chiamate = new();
+
+    private string? _notaCodice;
+    private string? _codiceGenerato;
+    private string? _codicePer;
+    private DateTime _codiceScadenza;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var uri = Nav.ToAbsoluteUri(Nav.Uri);
+        var q = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(uri.Query);
+        _cp = q.TryGetValue("cp", out var c) ? c.ToString() : null;
+
+        _utente = await AccessiSrv.GetUtenteFromCpAsync(_cp);
+        if (string.IsNullOrWhiteSpace(_utente) || !await AccessiSrv.IsAdminAsync(_utente))
+        {
+            Snackbar.Add("Accesso consentito solo agli admin.", Severity.Warning);
+            Nav.NavigateTo(string.IsNullOrWhiteSpace(_cp) ? "/" : $"/?cp={Uri.EscapeDataString(_cp)}");
+            return;
+        }
+
+        await CaricaTutto();
+    }
+
+    private (DateTime FromUtc, DateTime ToUtc) Intervallo()
+    {
+        var oggi = MobileTime.TodayLocal;
+        var (da, a) = _periodo switch
+        {
+            "oggi" => (oggi, oggi.AddDays(1)),
+            "ieri" => (oggi.AddDays(-1), oggi),
+            _ => (oggi.AddDays(-int.Parse(_periodo) + 1), oggi.AddDays(1)),
+        };
+        return (MobileTime.ToUtc(da), MobileTime.ToUtc(a));
+    }
+
+    private async Task CaricaTutto()
+    {
+        _loading = true;
+        try
+        {
+            var (from, to) = Intervallo();
+            _dispositivi = await Repo.ListDevicesWithStatsAsync(from, to, CancellationToken.None);
+
+            var (status, direction) = _tipo switch
+            {
+                "perse" => ("MISSED", (string?)null),
+                "risposte" => ("ANSWERED", "INCOMING"),
+                "rifiutate" => ("REJECTED", null),
+                "uscita" => (null, "OUTGOING"),
+                _ => ((string?)null, (string?)null),
+            };
+            long? deviceId = long.TryParse(_dispositivoId, out var id) ? id : null;
+            _chiamate = await Repo.SearchCallsAsync(
+                new CallSearch(from, to, deviceId, status, direction, _numero, Limite), CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore nel caricamento: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task GeneraCodice(MobileDeviceStats? dispositivo)
+    {
+        if (dispositivo is not null)
+        {
+            var ok = await JS.InvokeAsync<bool>("confirm",
+                $"Generare un codice per riassociare «{dispositivo.Nome}»? Usalo sul telefono dopo una reinstallazione: " +
+                "lo storico delle chiamate resterà sullo stesso dispositivo e il vecchio token smetterà di funzionare.");
+            if (!ok) return;
+        }
+
+        try
+        {
+            var (code, expires) = await Repo.CreateActivationAsync(
+                _utente ?? "?", dispositivo is null ? _notaCodice : $"Riassociazione {dispositivo.Nome}",
+                dispositivo?.Id, TimeSpan.FromDays(3), CancellationToken.None);
+            _codiceGenerato = code;
+            _codicePer = dispositivo?.Nome;
+            _codiceScadenza = MobileTime.ToLocal(expires);
+            _notaCodice = null;
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore nella generazione del codice: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task CambiaStato(MobileDeviceStats d, bool attivo)
+    {
+        var msg = attivo
+            ? $"Riattivare «{d.Nome}»? Il telefono potrà di nuovo inviare chiamate."
+            : $"Disattivare «{d.Nome}»? Il telefono non potrà più inviare chiamate finché non viene riattivato.";
+        if (!await JS.InvokeAsync<bool>("confirm", msg)) return;
+
+        try
+        {
+            await Repo.SetDeviceActiveAsync(d.Id, attivo, CancellationToken.None);
+            Snackbar.Add(attivo ? "Dispositivo riattivato ✅" : "Dispositivo disattivato", Severity.Success);
+            await CaricaTutto();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string EtichettaEsito(MobileCallRow c) => (c.Direzione, c.Esito) switch
+    {
+        ("OUTGOING", "ANSWERED") => "Risposta",
+        ("OUTGOING", _) => "Non determinato",
+        (_, "ANSWERED") => "Risposta",
+        (_, "MISSED") => "Persa",
+        (_, "REJECTED") => "Rifiutata",
+        _ => "Non determinato",
+    };
+
+    private static string ClasseEsito(string esito) => esito switch
+    {
+        "ANSWERED" => "bg-success",
+        "MISSED" => "bg-danger",
+        "REJECTED" => "bg-warning text-dark",
+        _ => "bg-secondary",
+    };
+
+    private static string EtichettaPresentazione(string p) => p switch
+    {
+        "PRIVATO" => "Numero privato",
+        "PUBBLICO" => "Telefono pubblico",
+        _ => "Sconosciuto",
+    };
+
+    private static string FormatDurata(long s) => s <= 0 ? "—" : $"{s / 60}:{s % 60:00}";
+
+    private void TornaHome() =>
+        Nav.NavigateTo(string.IsNullOrWhiteSpace(_cp) ? "/" : $"/?cp={Uri.EscapeDataString(_cp)}");
+}
