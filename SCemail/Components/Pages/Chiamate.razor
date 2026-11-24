@@ -1,4 +1,5 @@
 @page "/chiamate"
+@implements IDisposable
 @using Microsoft.JSInterop
 @using SCemail.Mobile
 @inject MobileRepository Repo
@@ -9,19 +10,66 @@
 
 @* Consultazione delle chiamate rilevate dai telefoni aziendali + gestione dispositivi. Solo admin. *@
 
-<div class="container-fluid my-4" style="max-width:1400px">
+<PageTitle>Chiamate – SCemail</PageTitle>
 
-    <div class="card shadow-sm">
-        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-            <h5 class="mb-0">📞 Chiamate telefoni aziendali</h5>
-            <button class="btn btn-light btn-sm" @onclick="TornaHome">⬅️ Home</button>
-        </div>
+<div class="ch-page">
+    <div class="ch-wrap">
 
-        <div class="card-body">
-            <div class="row g-2 align-items-end">
-                <div class="col-sm-6 col-md-2">
-                    <label class="form-label small mb-1">Periodo</label>
-                    <select class="form-select form-select-sm" @bind="_periodo">
+        @* ------------------------------------------------------------ intestazione *@
+        <header class="ch-hero">
+            <div class="ch-hero-icon">📞</div>
+            <div class="flex-grow-1">
+                <div class="ch-hero-kicker">SCemail</div>
+                <h1 class="ch-hero-title">Chiamate telefoni aziendali</h1>
+                <div class="ch-hero-sub">
+                    Chiamate rilevate dai telefoni, orari in ora italiana
+                    @if (_ultimoAggiornamento is { } ua)
+                    {
+                        <span class="ch-dot-live"></span><span>aggiornato alle @ua.ToString("HH:mm:ss")</span>
+                    }
+                </div>
+            </div>
+            <button class="btn ch-btn-ghost" @onclick="TornaHome">← Home</button>
+        </header>
+
+        @* ------------------------------------------------------------ indicatori *@
+        <section class="ch-kpis">
+            <button class="ch-kpi ch-kpi-red @(_tipo == "perse" ? "is-active" : "")" @onclick='() => CambiaTipo("perse")'>
+                <span class="ch-kpi-icon">↙</span>
+                <span class="ch-kpi-value">@_dispositivi.Sum(d => d.Perse)</span>
+                <span class="ch-kpi-label">Perse · @EtichettaPeriodo</span>
+            </button>
+            <button class="ch-kpi ch-kpi-green @(_tipo == "risposte" ? "is-active" : "")" @onclick='() => CambiaTipo("risposte")'>
+                <span class="ch-kpi-icon">✓</span>
+                <span class="ch-kpi-value">@_dispositivi.Sum(d => d.Risposte)</span>
+                <span class="ch-kpi-label">Risposte · @EtichettaPeriodo</span>
+            </button>
+            <button class="ch-kpi ch-kpi-blue @(_tipo == "uscita" ? "is-active" : "")" @onclick='() => CambiaTipo("uscita")'>
+                <span class="ch-kpi-icon">↗</span>
+                <span class="ch-kpi-value">@_dispositivi.Sum(d => d.Uscita)</span>
+                <span class="ch-kpi-label">In uscita · @EtichettaPeriodo</span>
+            </button>
+            <div class="ch-kpi @(Silenziosi > 0 ? "ch-kpi-amber" : "ch-kpi-gray") ch-kpi-static">
+                <span class="ch-kpi-icon">📱</span>
+                <span class="ch-kpi-value">@_dispositivi.Count(d => d.IsActive)<small> / @_dispositivi.Count</small></span>
+                <span class="ch-kpi-label">
+                    Telefoni attivi@(Silenziosi > 0 ? $" · {Silenziosi} silenziosi" : "")
+                </span>
+            </div>
+        </section>
+
+        @* ------------------------------------------------------------ filtri *@
+        <section class="ch-card ch-filters">
+            <div class="ch-chips" role="tablist">
+                @foreach (var (val, lbl) in Tipi)
+                {
+                    <button class="ch-chip @(_tipo == val ? "is-active" : "") ch-chip-@val" @onclick="() => CambiaTipo(val)">@lbl</button>
+                }
+            </div>
+            <div class="ch-filter-row">
+                <div class="ch-field">
+                    <label>Periodo</label>
+                    <select class="form-select" @bind="_periodo" @bind:after="CaricaTutto">
                         <option value="oggi">Oggi</option>
                         <option value="ieri">Ieri</option>
                         <option value="7">Ultimi 7 giorni</option>
@@ -29,181 +77,183 @@
                         <option value="90">Ultimi 90 giorni</option>
                     </select>
                 </div>
-                <div class="col-sm-6 col-md-3">
-                    <label class="form-label small mb-1">Dispositivo</label>
-                    <select class="form-select form-select-sm" @bind="_dispositivoId">
-                        <option value="">Tutti</option>
+                <div class="ch-field ch-field-wide">
+                    <label>Telefono</label>
+                    <select class="form-select" @bind="_dispositivoId" @bind:after="CaricaTutto">
+                        <option value="">Tutti i telefoni</option>
                         @foreach (var d in _dispositivi)
                         {
                             <option value="@d.Id">@d.Nome – @d.Proprietario</option>
                         }
                     </select>
                 </div>
-                <div class="col-sm-6 col-md-2">
-                    <label class="form-label small mb-1">Tipo</label>
-                    <select class="form-select form-select-sm" @bind="_tipo">
-                        <option value="perse">Perse</option>
-                        <option value="risposte">Risposte</option>
-                        <option value="rifiutate">Rifiutate</option>
-                        <option value="uscita">In uscita</option>
-                        <option value="tutte">Tutte</option>
-                    </select>
+                <div class="ch-field ch-field-wide">
+                    <label>Numero</label>
+                    <input class="form-control" placeholder="Cerca un numero, es. 333123" @bind="_numero" @bind:after="CaricaTutto" />
                 </div>
-                <div class="col-sm-6 col-md-3">
-                    <label class="form-label small mb-1">Numero contiene</label>
-                    <input class="form-control form-control-sm" placeholder="es. 333123" @bind="_numero" />
-                </div>
-                <div class="col-md-2">
-                    <button class="btn btn-primary btn-sm w-100" @onclick="CaricaTutto" disabled="@_loading">
-                        @(_loading ? "Caricamento…" : "🔄 Aggiorna")
+                <div class="ch-field ch-field-btn">
+                    <button class="btn btn-primary w-100" @onclick="CaricaTutto" disabled="@_loading">
+                        @(_loading ? "Caricamento…" : "↻ Aggiorna")
                     </button>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
 
-    @* ------------------------------------------------------------ riepilogo dispositivi *@
-    <div class="card shadow-sm mt-3">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <b>Dispositivi (conteggi nel periodo)</b>
-            <div class="d-flex gap-2">
-                <input class="form-control form-control-sm" style="width:220px" placeholder="Nota per il nuovo codice"
-                       @bind="_notaCodice" />
-                <button class="btn btn-success btn-sm" @onclick="() => GeneraCodice(null)">➕ Nuovo dispositivo</button>
-            </div>
-        </div>
-
+        @* ------------------------------------------------------------ codice di attivazione *@
         @if (_codiceGenerato is not null)
         {
-            <div class="alert alert-success m-3 mb-0">
-                <div>Codice di attivazione @(_codicePer is null ? "per un nuovo telefono" : $"per riassociare «{_codicePer}»"):</div>
-                <div class="fs-3 fw-bold font-monospace my-1">@_codiceGenerato</div>
-                <small>Valido fino al @_codiceScadenza.ToString("dd/MM/yyyy HH:mm"), utilizzabile una sola volta.
-                    Inseriscilo nell'app al primo avvio. Non verrà mostrato di nuovo.</small>
-                <button class="btn btn-sm btn-outline-secondary float-end" @onclick="() => _codiceGenerato = null">Chiudi</button>
-            </div>
+            <section class="ch-code">
+                <div class="flex-grow-1">
+                    <div class="ch-code-title">
+                        Codice di attivazione @(_codicePer is null ? "per un nuovo telefono" : $"per riassociare «{_codicePer}»")
+                    </div>
+                    <div class="ch-code-value">@_codiceGenerato</div>
+                    <div class="ch-code-note">
+                        Valido fino al @_codiceScadenza.ToString("dd/MM/yyyy HH:mm"), una sola volta.
+                        Inseriscilo nell'app del telefono. Dopo la chiusura non sarà più visibile.
+                    </div>
+                </div>
+                <div class="d-flex flex-column gap-2">
+                    <button class="btn btn-success" @onclick="CopiaCodice">⧉ Copia</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _codiceGenerato = null">Chiudi</button>
+                </div>
+            </section>
         }
 
-        <div class="card-body p-0">
-            <table class="table table-sm table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Dispositivo</th>
-                        <th>Proprietario</th>
-                        <th class="text-center">Risposte</th>
-                        <th class="text-center">Perse</th>
-                        <th class="text-center">Rifiutate</th>
-                        <th class="text-center">In uscita</th>
-                        <th>Ultimo contatto</th>
-                        <th>Stato</th>
-                        <th class="text-center">Azioni</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (!_dispositivi.Any())
-                    {
-                        <tr><td colspan="9" class="text-center py-3 text-muted">
-                            @(_loading ? "Caricamento…" : "Nessun dispositivo registrato. Genera un codice con «Nuovo dispositivo».")
-                        </td></tr>
-                    }
-                    @foreach (var d in _dispositivi)
-                    {
-                        <tr class="@(d.IsActive ? "" : "table-secondary")">
-                            <td>
-                                <b>@d.Nome</b>
-                                <div class="small text-muted">@d.Modello @(d.AndroidVersion is null ? "" : $"· Android {d.AndroidVersion}") @(d.NumeroSim is null ? "" : $"· {d.NumeroSim}")</div>
-                            </td>
-                            <td>@d.Proprietario</td>
-                            <td class="text-center">@d.Risposte</td>
-                            <td class="text-center">
-                                @if (d.Perse > 0) { <span class="badge bg-danger">@d.Perse</span> } else { <span>0</span> }
-                            </td>
-                            <td class="text-center">@d.Rifiutate</td>
-                            <td class="text-center">@d.Uscita</td>
-                            <td>
-                                @if (d.UltimoContatto is { } uc)
-                                {
-                                    var locale = MobileTime.ToLocal(uc);
-                                    <span>@locale.ToString("dd/MM HH:mm")</span>
-                                    @if (d.IsActive && DateTime.UtcNow - uc > TimeSpan.FromHours(24))
-                                    {
-                                        <span class="badge bg-warning text-dark ms-1" title="Il telefono non contatta il server da oltre 24 ore">silenzioso</span>
-                                    }
-                                }
-                                else { <span class="text-muted">mai</span> }
-                            </td>
-                            <td>
-                                @if (d.IsActive) { <span class="badge bg-success">Attivo</span> }
-                                else { <span class="badge bg-secondary">Disattivato</span> }
-                            </td>
-                            <td class="text-center text-nowrap">
-                                <button class="btn btn-sm btn-outline-primary" title="Genera un codice per riassociare il dispositivo (es. app reinstallata)"
-                                        @onclick="() => GeneraCodice(d)">🔁 Riassocia</button>
-                                @if (d.IsActive)
-                                {
-                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CambiaStato(d, false)">⛔ Disattiva</button>
-                                }
-                                else
-                                {
-                                    <button class="btn btn-sm btn-outline-success" @onclick="() => CambiaStato(d, true)">✅ Riattiva</button>
-                                }
-                            </td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    </div>
+        @* ------------------------------------------------------------ telefoni *@
+        <section>
+            <div class="ch-section-head">
+                <h2>Telefoni</h2>
+                <div class="d-flex gap-2 align-items-center">
+                    <input class="form-control form-control-sm ch-note-input" placeholder="Nota (es. Magazzino)" @bind="_notaCodice" />
+                    <button class="btn btn-success btn-sm text-nowrap" @onclick="() => GeneraCodice(null)">＋ Nuovo telefono</button>
+                </div>
+            </div>
 
-    @* ------------------------------------------------------------ elenco chiamate *@
-    <div class="card shadow-sm mt-3">
-        <div class="card-header d-flex justify-content-between">
-            <b>Chiamate</b>
-            <small class="text-muted">@_chiamate.Count risultati@(_chiamate.Count >= Limite ? $" (mostrate le prime {Limite})" : "") · orari in ora italiana</small>
-        </div>
-        <div class="card-body p-0">
-            <table class="table table-sm table-hover align-middle mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Data e ora</th>
-                        <th>Dispositivo</th>
-                        <th>Numero</th>
-                        <th>Direzione</th>
-                        <th>Esito</th>
-                        <th class="text-end">Durata</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    @if (!_chiamate.Any())
+            @if (!_dispositivi.Any())
+            {
+                <div class="ch-card ch-empty">
+                    @(_loading ? "Caricamento…" : "Nessun telefono registrato. Usa «Nuovo telefono» per generare il codice di attivazione.")
+                </div>
+            }
+            <div class="ch-devices">
+                @foreach (var d in _dispositivi)
+                {
+                    var silenzioso = d.IsActive && d.UltimoContatto is { } u0 && DateTime.UtcNow - u0 > TimeSpan.FromHours(24);
+                    var selezionato = _dispositivoId == d.Id.ToString();
+                    <article class="ch-device @(d.IsActive ? "" : "is-off") @(selezionato ? "is-selected" : "")">
+                        <div class="ch-device-head">
+                            <div class="ch-device-avatar">@Iniziali(d.Nome)</div>
+                            <div class="flex-grow-1 min-w-0">
+                                <div class="ch-device-name">@d.Nome</div>
+                                <div class="ch-device-owner">@d.Proprietario@(d.NumeroSim is null ? "" : $" · {d.NumeroSim}")</div>
+                            </div>
+                            @if (!d.IsActive) { <span class="ch-badge ch-badge-gray">Disattivato</span> }
+                            else if (silenzioso) { <span class="ch-badge ch-badge-amber" title="Nessun contatto da oltre 24 ore: controllare telefono, rete o VPN">Silenzioso</span> }
+                            else { <span class="ch-badge ch-badge-green">Attivo</span> }
+                        </div>
+
+                        <div class="ch-device-stats">
+                            <div class="@(d.Perse > 0 ? "is-red" : "")"><b>@d.Perse</b><span>perse</span></div>
+                            <div><b>@d.Risposte</b><span>risposte</span></div>
+                            <div><b>@d.Rifiutate</b><span>rifiutate</span></div>
+                            <div><b>@d.Uscita</b><span>uscita</span></div>
+                        </div>
+
+                        <div class="ch-device-meta">
+                            <span>@(d.Modello ?? "Modello n.d.")@(d.AndroidVersion is null ? "" : $" · Android {d.AndroidVersion}")</span>
+                            <span>Ultimo contatto: <b>@(d.UltimoContatto is { } uc ? Relativo(uc) : "mai")</b></span>
+                        </div>
+
+                        <div class="ch-device-actions">
+                            <button class="btn btn-sm @(selezionato ? "btn-primary" : "btn-outline-primary")" @onclick="() => FiltraDispositivo(d)">
+                                @(selezionato ? "✓ Filtrato" : "Vedi chiamate")
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" title="Codice per riassociare il telefono (es. app reinstallata)"
+                                    @onclick="() => GeneraCodice(d)">Riassocia</button>
+                            @if (d.IsActive)
+                            {
+                                <button class="btn btn-sm btn-outline-danger ms-auto" @onclick="() => CambiaStato(d, false)">Disattiva</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-outline-success ms-auto" @onclick="() => CambiaStato(d, true)">Riattiva</button>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        </section>
+
+        @* ------------------------------------------------------------ chiamate *@
+        <section>
+            <div class="ch-section-head">
+                <h2>@TitoloElenco</h2>
+                <span class="ch-muted">
+                    @_chiamate.Count risultati@(_chiamate.Count >= Limite ? $" (mostrate le prime {Limite})" : "")
+                    @if (!string.IsNullOrWhiteSpace(_numero) || !string.IsNullOrEmpty(_dispositivoId))
                     {
-                        <tr><td colspan="6" class="text-center py-3 text-muted">@(_loading ? "Caricamento…" : "Nessuna chiamata nel periodo selezionato.")</td></tr>
+                        <button class="btn btn-link btn-sm p-0 ms-2" @onclick="AzzeraFiltri">azzera filtri</button>
                     }
-                    @foreach (var c in _chiamate)
+                </span>
+            </div>
+
+            <div class="ch-card p-0 overflow-hidden">
+                @if (!_chiamate.Any())
+                {
+                    <div class="ch-empty">
+                        @(_loading ? "Caricamento…" : _tipo == "perse" ? "Nessuna chiamata persa nel periodo. 🎉" : "Nessuna chiamata nel periodo selezionato.")
+                    </div>
+                }
+                @foreach (var gruppo in _chiamate.GroupBy(c => MobileTime.ToLocal(c.DataInizio).Date))
+                {
+                    <div class="ch-day">@EtichettaGiorno(gruppo.Key) <span>@gruppo.Count()</span></div>
+                    @foreach (var c in gruppo)
                     {
-                        <tr>
-                            <td class="text-nowrap">@MobileTime.ToLocal(c.DataInizio).ToString("dd/MM/yyyy HH:mm:ss")</td>
-                            <td>@c.Nome <span class="small text-muted">(@c.Proprietario)</span></td>
-                            <td class="font-monospace">
-                                @if (c.NumeroChiamante is null) { <i class="text-muted">@EtichettaPresentazione(c.Presentazione)</i> }
-                                else { <a href="tel:@c.NumeroChiamante">@c.NumeroChiamante</a> }
-                            </td>
-                            <td>@(c.Direzione switch { "INCOMING" => "↙ In entrata", "OUTGOING" => "↗ In uscita", _ => "?" })</td>
-                            <td><span class="badge @ClasseEsito(c.Esito)">@EtichettaEsito(c)</span></td>
-                            <td class="text-end font-monospace">@FormatDurata(c.DurataSecondi)</td>
-                        </tr>
+                        var (icona, classe, etichetta) = Aspetto(c);
+                        <div class="ch-call">
+                            <div class="ch-call-icon @classe">@icona</div>
+                            <div class="ch-call-main">
+                                <div class="ch-call-number">
+                                    @if (c.NumeroChiamante is null)
+                                    {
+                                        <i class="ch-muted">@EtichettaPresentazione(c.Presentazione)</i>
+                                    }
+                                    else
+                                    {
+                                        <a href="tel:@c.NumeroChiamante">@c.NumeroChiamante</a>
+                                        <button class="ch-link" title="Mostra tutte le chiamate di questo numero" @onclick="() => FiltraNumero(c.NumeroChiamante)">filtra</button>
+                                    }
+                                </div>
+                                <div class="ch-call-sub">
+                                    <span class="ch-tag @classe">@etichetta</span>
+                                    <span>📱 @c.Nome <span class="ch-muted">(@c.Proprietario)</span></span>
+                                </div>
+                            </div>
+                            <div class="ch-call-right">
+                                <div class="ch-call-time">@MobileTime.ToLocal(c.DataInizio).ToString("HH:mm")</div>
+                                <div class="ch-muted small">@FormatDurata(c.DurataSecondi)</div>
+                            </div>
+                        </div>
                     }
-                </tbody>
-            </table>
-        </div>
+                }
+            </div>
+        </section>
     </div>
 </div>
 
 @code {
     private const int Limite = 1000;
 
+    private static readonly (string Val, string Lbl)[] Tipi =
+    {
+        ("perse", "Perse"), ("risposte", "Risposte"), ("rifiutate", "Rifiutate"), ("uscita", "In uscita"), ("tutte", "Tutte"),
+    };
+
     private string? _cp;
     private string? _utente;
     private bool _loading = true;
+    private DateTime? _ultimoAggiornamento;
 
     private string _periodo = "7";
     private string _dispositivoId = "";
@@ -217,6 +267,25 @@
     private string? _codiceGenerato;
     private string? _codicePer;
     private DateTime _codiceScadenza;
+
+    private readonly CancellationTokenSource _cts = new();
+
+    private int Silenziosi => _dispositivi.Count(d =>
+        d.IsActive && d.UltimoContatto is { } u && DateTime.UtcNow - u > TimeSpan.FromHours(24));
+
+    private string EtichettaPeriodo => _periodo switch
+    {
+        "oggi" => "oggi", "ieri" => "ieri", _ => $"{_periodo} gg",
+    };
+
+    private string TitoloElenco => _tipo switch
+    {
+        "perse" => "Chiamate perse",
+        "risposte" => "Chiamate risposte",
+        "rifiutate" => "Chiamate rifiutate",
+        "uscita" => "Chiamate in uscita",
+        _ => "Tutte le chiamate",
+    };
 
     protected override async Task OnInitializedAsync()
     {
@@ -233,6 +302,33 @@
         }
 
         await CaricaTutto();
+        _ = AggiornamentoAutomatico(_cts.Token);
+    }
+
+    /** Ricarica ogni minuto finché la pagina è aperta: le nuove chiamate perse compaiono da sole. */
+    private async Task AggiornamentoAutomatico(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (_loading) continue;
+                await InvokeAsync(async () =>
+                {
+                    await CaricaTutto();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void Dispose()
+    {
+        _cts.Cancel();
+        _cts.Dispose();
     }
 
     private (DateTime FromUtc, DateTime ToUtc) Intervallo()
@@ -266,6 +362,7 @@
             long? deviceId = long.TryParse(_dispositivoId, out var id) ? id : null;
             _chiamate = await Repo.SearchCallsAsync(
                 new CallSearch(from, to, deviceId, status, direction, _numero, Limite), CancellationToken.None);
+            _ultimoAggiornamento = MobileTime.ToLocal(DateTime.UtcNow);
         }
         catch (Exception ex)
         {
@@ -275,6 +372,32 @@
         {
             _loading = false;
         }
+    }
+
+    private async Task CambiaTipo(string tipo)
+    {
+        _tipo = tipo;
+        await CaricaTutto();
+    }
+
+    private async Task FiltraDispositivo(MobileDeviceStats d)
+    {
+        _dispositivoId = _dispositivoId == d.Id.ToString() ? "" : d.Id.ToString();
+        await CaricaTutto();
+    }
+
+    private async Task FiltraNumero(string numero)
+    {
+        _numero = numero;
+        _tipo = "tutte";
+        await CaricaTutto();
+    }
+
+    private async Task AzzeraFiltri()
+    {
+        _numero = null;
+        _dispositivoId = "";
+        await CaricaTutto();
     }
 
     private async Task GeneraCodice(MobileDeviceStats? dispositivo)
@@ -303,6 +426,21 @@
         }
     }
 
+    private async Task CopiaCodice()
+    {
+        if (_codiceGenerato is null) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _codiceGenerato);
+            Snackbar.Add("Codice copiato", Severity.Success);
+        }
+        catch
+        {
+            // Gli appunti richiedono HTTPS o localhost: su http://IP il browser può rifiutare.
+            Snackbar.Add("Copia non consentita dal browser: selezionare il codice e copiarlo a mano.", Severity.Info);
+        }
+    }
+
     private async Task CambiaStato(MobileDeviceStats d, bool attivo)
     {
         var msg = attivo
@@ -313,7 +451,7 @@
         try
         {
             await Repo.SetDeviceActiveAsync(d.Id, attivo, CancellationToken.None);
-            Snackbar.Add(attivo ? "Dispositivo riattivato ✅" : "Dispositivo disattivato", Severity.Success);
+            Snackbar.Add(attivo ? "Telefono riattivato" : "Telefono disattivato", Severity.Success);
             await CaricaTutto();
         }
         catch (Exception ex)
@@ -322,30 +460,51 @@
         }
     }
 
-    private static string EtichettaEsito(MobileCallRow c) => (c.Direzione, c.Esito) switch
+    private static (string Icona, string Classe, string Etichetta) Aspetto(MobileCallRow c) => (c.Direzione, c.Esito) switch
     {
-        ("OUTGOING", "ANSWERED") => "Risposta",
-        ("OUTGOING", _) => "Non determinato",
-        (_, "ANSWERED") => "Risposta",
-        (_, "MISSED") => "Persa",
-        (_, "REJECTED") => "Rifiutata",
-        _ => "Non determinato",
-    };
-
-    private static string ClasseEsito(string esito) => esito switch
-    {
-        "ANSWERED" => "bg-success",
-        "MISSED" => "bg-danger",
-        "REJECTED" => "bg-warning text-dark",
-        _ => "bg-secondary",
+        ("OUTGOING", "ANSWERED") => ("↗", "is-blue", "In uscita"),
+        ("OUTGOING", _) => ("↗", "is-gray", "In uscita, senza risposta"),
+        (_, "ANSWERED") => ("↙", "is-green", "Risposta"),
+        (_, "MISSED") => ("↙", "is-red", "Persa"),
+        (_, "REJECTED") => ("⦸", "is-amber", "Rifiutata"),
+        _ => ("?", "is-gray", "Esito non determinato"),
     };
 
     private static string EtichettaPresentazione(string p) => p switch
     {
         "PRIVATO" => "Numero privato",
         "PUBBLICO" => "Telefono pubblico",
-        _ => "Sconosciuto",
+        _ => "Numero sconosciuto",
     };
+
+    private static string EtichettaGiorno(DateTime giorno)
+    {
+        var oggi = MobileTime.TodayLocal;
+        if (giorno == oggi) return "Oggi";
+        if (giorno == oggi.AddDays(-1)) return "Ieri";
+        var s = giorno.ToString("dddd d MMMM", new System.Globalization.CultureInfo("it-IT"));
+        return char.ToUpper(s[0]) + s[1..];
+    }
+
+    private static string Relativo(DateTime utc)
+    {
+        var diff = DateTime.UtcNow - utc;
+        if (diff < TimeSpan.FromMinutes(1)) return "adesso";
+        if (diff < TimeSpan.FromHours(1)) return $"{(int)diff.TotalMinutes} min fa";
+        if (diff < TimeSpan.FromHours(24)) return $"{(int)diff.TotalHours} h fa";
+        return MobileTime.ToLocal(utc).ToString("dd/MM HH:mm");
+    }
+
+    private static string Iniziali(string nome)
+    {
+        var parti = nome.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parti.Length switch
+        {
+            0 => "?",
+            1 => parti[0][..Math.Min(2, parti[0].Length)].ToUpperInvariant(),
+            _ => $"{char.ToUpperInvariant(parti[0][0])}{char.ToUpperInvariant(parti[1][0])}",
+        };
+    }
 
     private static string FormatDurata(long s) => s <= 0 ? "—" : $"{s / 60}:{s % 60:00}";
 

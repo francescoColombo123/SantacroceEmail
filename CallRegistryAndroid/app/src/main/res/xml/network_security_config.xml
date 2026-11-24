@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Release: HTTPS obbligatorio con certificati di sistema, tranne verso il server SCemail
+  interno, raggiunto tramite la VPN aziendale (il traffico è già cifrato dalla VPN).
+  Se si cambia server, aggiornare anche HTTP_ALLOWED_HOSTS in app/build.gradle.kts.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">192.168.200.12</domain>
+    </domain-config>
+</network-security-config>

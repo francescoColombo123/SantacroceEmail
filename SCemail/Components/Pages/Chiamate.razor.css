@@ -1,0 +1,307 @@
+/* Pagina Chiamate – stile isolato (CSS isolation di Blazor). Stessi colori dell'app Android. */
+
+.ch-page {
+    --ch-blue-900: #0b2e63;
+    --ch-blue-600: #1a5dc8;
+    --ch-blue-400: #2f7fe6;
+    --ch-red: #d9363e;
+    --ch-green: #2e9e4f;
+    --ch-amber: #e08a00;
+    --ch-gray: #7a8394;
+    --ch-bg: #f2f5fa;
+    --ch-card: #ffffff;
+    --ch-border: #e3e8f0;
+    --ch-text: #151a22;
+    --ch-muted: #5b6475;
+    background: var(--ch-bg);
+    min-height: 100vh;
+    padding: 24px 16px 48px;
+    color: var(--ch-text);
+}
+
+.ch-wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.ch-muted { color: var(--ch-muted); }
+.min-w-0 { min-width: 0; }
+
+/* ------------------------------------------------------------------ intestazione */
+.ch-hero {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 24px 28px;
+    border-radius: 22px;
+    color: #fff;
+    background: linear-gradient(120deg, var(--ch-blue-900), var(--ch-blue-600) 60%, var(--ch-blue-400));
+    box-shadow: 0 10px 30px rgba(11, 46, 99, .25);
+}
+.ch-hero-icon {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 26px;
+    background: rgba(255, 255, 255, .16);
+    flex-shrink: 0;
+}
+.ch-hero-kicker { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; opacity: .75; }
+.ch-hero-title { font-size: 26px; font-weight: 700; margin: 2px 0 4px; }
+.ch-hero-sub { font-size: 14px; opacity: .85; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ch-dot-live {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #6be38f;
+    box-shadow: 0 0 0 0 rgba(107, 227, 143, .7);
+    animation: ch-pulse 2s infinite;
+    margin-left: 6px;
+}
+@keyframes ch-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(107, 227, 143, .7); }
+    70% { box-shadow: 0 0 0 8px rgba(107, 227, 143, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(107, 227, 143, 0); }
+}
+.ch-btn-ghost {
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, .45);
+    background: rgba(255, 255, 255, .08);
+    border-radius: 12px;
+}
+.ch-btn-ghost:hover { background: rgba(255, 255, 255, .2); color: #fff; }
+
+/* ------------------------------------------------------------------ indicatori */
+.ch-kpis {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 14px;
+}
+.ch-kpi {
+    --c: var(--ch-gray);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-rows: auto auto;
+    column-gap: 14px;
+    align-items: center;
+    text-align: left;
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: var(--ch-card);
+    border: 2px solid transparent;
+    box-shadow: 0 1px 3px rgba(21, 26, 34, .08);
+    transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+button.ch-kpi { cursor: pointer; }
+button.ch-kpi:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(21, 26, 34, .10); }
+.ch-kpi.is-active { border-color: var(--c); }
+.ch-kpi-icon {
+    grid-row: span 2;
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 22px; font-weight: 700;
+    color: var(--c);
+    background: color-mix(in srgb, var(--c) 13%, transparent);
+}
+.ch-kpi-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.ch-kpi-value small { font-size: 16px; color: var(--ch-muted); font-weight: 600; }
+.ch-kpi-label { font-size: 13px; color: var(--ch-muted); }
+.ch-kpi-red { --c: var(--ch-red); }
+.ch-kpi-green { --c: var(--ch-green); }
+.ch-kpi-blue { --c: var(--ch-blue-600); }
+.ch-kpi-amber { --c: var(--ch-amber); }
+.ch-kpi-gray { --c: var(--ch-gray); }
+
+/* ------------------------------------------------------------------ card generiche */
+.ch-card {
+    background: var(--ch-card);
+    border-radius: 18px;
+    box-shadow: 0 1px 3px rgba(21, 26, 34, .08);
+    padding: 18px;
+}
+.ch-empty { padding: 28px; text-align: center; color: var(--ch-muted); }
+
+.ch-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    margin: 4px 4px 10px;
+    flex-wrap: wrap;
+}
+.ch-section-head h2 { font-size: 19px; font-weight: 700; margin: 0; }
+.ch-note-input { width: 200px; border-radius: 10px; }
+
+/* ------------------------------------------------------------------ filtri */
+.ch-filters { display: flex; flex-direction: column; gap: 14px; }
+.ch-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.ch-chip {
+    --c: var(--ch-blue-600);
+    border: 1px solid var(--ch-border);
+    background: #fff;
+    color: var(--ch-muted);
+    border-radius: 999px;
+    padding: 6px 16px;
+    font-weight: 600;
+    font-size: 14px;
+    transition: all .12s ease;
+}
+.ch-chip:hover { border-color: var(--c); color: var(--c); }
+.ch-chip.is-active { background: var(--c); border-color: var(--c); color: #fff; }
+.ch-chip-perse { --c: var(--ch-red); }
+.ch-chip-risposte { --c: var(--ch-green); }
+.ch-chip-rifiutate { --c: var(--ch-amber); }
+.ch-chip-uscita { --c: var(--ch-blue-600); }
+.ch-chip-tutte { --c: var(--ch-blue-900); }
+
+.ch-filter-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+.ch-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 160px; }
+.ch-field-wide { flex: 2 1 240px; }
+.ch-field-btn { flex: 0 0 150px; }
+.ch-field label { font-size: 12px; font-weight: 600; color: var(--ch-muted); text-transform: uppercase; letter-spacing: .05em; }
+.ch-field .form-select, .ch-field .form-control, .ch-field .btn { border-radius: 12px; height: 42px; }
+
+/* ------------------------------------------------------------------ codice attivazione */
+.ch-code {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    padding: 20px 24px;
+    border-radius: 18px;
+    background: #eaf7ee;
+    border: 2px dashed var(--ch-green);
+}
+.ch-code-title { font-weight: 600; color: #1d5a31; }
+.ch-code-value {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    color: #123d21;
+    user-select: all;
+    margin: 4px 0;
+}
+.ch-code-note { font-size: 13px; color: #2c6a40; }
+
+/* ------------------------------------------------------------------ telefoni */
+.ch-devices {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+    gap: 14px;
+}
+.ch-device {
+    background: var(--ch-card);
+    border-radius: 18px;
+    box-shadow: 0 1px 3px rgba(21, 26, 34, .08);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    border: 2px solid transparent;
+}
+.ch-device.is-selected { border-color: var(--ch-blue-600); }
+.ch-device.is-off { opacity: .65; }
+.ch-device-head { display: flex; align-items: center; gap: 12px; }
+.ch-device-avatar {
+    width: 44px; height: 44px; border-radius: 14px;
+    display: grid; place-items: center;
+    font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, var(--ch-blue-600), var(--ch-blue-400));
+    flex-shrink: 0;
+}
+.ch-device-name { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ch-device-owner { font-size: 13px; color: var(--ch-muted); }
+
+.ch-device-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    background: var(--ch-bg);
+    border-radius: 14px;
+    padding: 10px 4px;
+    text-align: center;
+}
+.ch-device-stats b { display: block; font-size: 20px; }
+.ch-device-stats span { font-size: 12px; color: var(--ch-muted); }
+.ch-device-stats .is-red b, .ch-device-stats .is-red span { color: var(--ch-red); }
+
+.ch-device-meta { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--ch-muted); }
+.ch-device-actions { display: flex; gap: 8px; align-items: center; }
+.ch-device-actions .btn { border-radius: 10px; }
+
+.ch-badge {
+    font-size: 12px; font-weight: 700;
+    padding: 4px 10px; border-radius: 999px;
+    white-space: nowrap;
+}
+.ch-badge-green { color: #1f7a3b; background: #e3f5e8; }
+.ch-badge-amber { color: #9a5d00; background: #fff1d6; }
+.ch-badge-gray { color: #5b6475; background: #eceff4; }
+
+/* ------------------------------------------------------------------ elenco chiamate */
+.ch-day {
+    display: flex; justify-content: space-between;
+    padding: 10px 20px;
+    font-size: 13px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .05em;
+    color: var(--ch-muted);
+    background: var(--ch-bg);
+    border-top: 1px solid var(--ch-border);
+}
+.ch-day:first-child { border-top: none; }
+.ch-day span { font-weight: 600; }
+
+.ch-call {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--ch-border);
+}
+.ch-call:hover { background: #f8faff; }
+.ch-call-icon {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 19px; font-weight: 700;
+    flex-shrink: 0;
+}
+.ch-call-main { flex: 1; min-width: 0; }
+.ch-call-number { font-size: 16px; font-weight: 700; display: flex; align-items: baseline; gap: 10px; }
+.ch-call-number a { color: var(--ch-text); text-decoration: none; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.ch-call-number a:hover { color: var(--ch-blue-600); text-decoration: underline; }
+.ch-call-sub { display: flex; gap: 12px; align-items: center; font-size: 13px; flex-wrap: wrap; margin-top: 2px; }
+.ch-call-right { text-align: right; }
+.ch-call-time { font-weight: 700; font-size: 15px; }
+
+.ch-link {
+    border: none; background: none; padding: 0;
+    font-size: 12px; font-weight: 600;
+    color: var(--ch-blue-600);
+    opacity: 0; transition: opacity .12s;
+}
+.ch-call:hover .ch-link { opacity: 1; }
+
+.ch-tag { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; }
+
+.is-red   { color: var(--ch-red);      background: #fde4e3; }
+.is-green { color: #1f7a3b;            background: #e3f5e8; }
+.is-amber { color: #9a5d00;            background: #fff1d6; }
+.is-blue  { color: var(--ch-blue-600); background: #dce7ff; }
+.is-gray  { color: var(--ch-gray);     background: #eceff4; }
+
+/* ------------------------------------------------------------------ schermi piccoli */
+@media (max-width: 992px) {
+    .ch-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 576px) {
+    .ch-page { padding: 12px 10px 32px; }
+    .ch-hero { padding: 18px; border-radius: 18px; }
+    .ch-hero-title { font-size: 20px; }
+    .ch-hero-icon { display: none; }
+    .ch-kpi-value { font-size: 22px; }
+    .ch-code { flex-direction: column; align-items: stretch; }
+    .ch-code-value { font-size: 26px; }
+    .ch-devices { grid-template-columns: 1fr; }
+    .ch-call { padding: 12px 14px; }
+}
